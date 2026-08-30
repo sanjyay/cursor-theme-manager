@@ -22,9 +22,9 @@ A native Omarchy Quattro / `omarchy-shell` panel for discovering, previewing, ap
 This repository is already usable as a local plugin. From its root:
 
 ```bash
-ln -s "$PWD" ~/.config/omarchy/plugins/goblin.cursor-switcher
+ln -s "$PWD" ~/.config/omarchy/plugins/sanjyay.cursor-switcher
 omarchy-shell shell rescanPlugins
-omarchy plugin enable goblin.cursor-switcher
+omarchy plugin enable sanjyay.cursor-switcher
 ```
 
 For a normal published Git checkout, Omarchy's standard `omarchy plugin add <git-url> --enable` flow may be used instead. No install hook or sudo command is required. The service installs/updates the bundled cursor package on first load.
@@ -32,14 +32,14 @@ For a normal published Git checkout, Omarchy's standard `omarchy plugin add <git
 Open or toggle the selector:
 
 ```bash
-omarchy-shell shell toggle goblin.cursor-switcher '{}'
+omarchy-shell shell toggle sanjyay.cursor-switcher '{}'
 ```
 
 A Hyprland shortcut can run that exact command. The panel also supports `summon` and `hide`:
 
 ```bash
-omarchy-shell shell summon goblin.cursor-switcher '{}'
-omarchy-shell shell hide goblin.cursor-switcher
+omarchy-shell shell summon sanjyay.cursor-switcher '{}'
+omarchy-shell shell hide sanjyay.cursor-switcher
 ```
 
 Arrow keys (or `h/j/k/l`) navigate, Tab switches between the theme grid and size row, Enter/Space commits, `r` refreshes, and Escape cancels any preview and closes the panel.
@@ -63,13 +63,13 @@ The desktop entry invokes `omarchy-cursor-switcher`, which sends an IPC `summon`
 Through the loaded plugin service:
 
 ```bash
-omarchy-shell shell call goblin.cursor-switcher applyTheme '{"theme":"Banana","size":24}'
+omarchy-shell shell call sanjyay.cursor-switcher applyTheme '{"theme":"Banana","size":24}'
 ```
 
 Or directly through the backend helper:
 
 ```bash
-~/.config/omarchy/plugins/goblin.cursor-switcher/scripts/cursorctl apply \
+~/.config/omarchy/plugins/sanjyay.cursor-switcher/scripts/cursorctl apply \
   --hyprcursor Banana --xcursor Banana --size 24 --commit
 ```
 
@@ -144,14 +144,14 @@ Coverage includes cursor directory/format detection, normalization and deduplica
 Disable/remove the plugin with Omarchy's normal command, or remove the local development symlink:
 
 ```bash
-omarchy plugin disable goblin.cursor-switcher
-rm ~/.config/omarchy/plugins/goblin.cursor-switcher
+omarchy plugin disable sanjyay.cursor-switcher
+rm ~/.config/omarchy/plugins/sanjyay.cursor-switcher
 ```
 
 To clean up the application launcher entries:
 
 ```bash
-~/.config/omarchy/plugins/goblin.cursor-switcher/scripts/cursorctl unregister-app
+~/.config/omarchy/plugins/sanjyay.cursor-switcher/scripts/cursorctl unregister-app
 ```
 
 Or remove only these plugin-owned paths manually:

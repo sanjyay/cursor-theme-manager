@@ -276,7 +276,8 @@ PY
 unregister_app() {
   rm -f -- "$BIN_DIR/omarchy-cursor-switcher"
   rm -f -- "$APP_DIR/omarchy-cursor-switcher.desktop"
-  rm -f -- "$APP_ICON_DIR/omarchy-cursor-switcher.svg"
+  rm -f -- "$DATA_HOME"/icons/hicolor/*/apps/omarchy-cursor-switcher.*
+  rm -f -- "$DATA_HOME"/pixmaps/omarchy-cursor-switcher.*
 
   if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database -q "$APP_DIR" 2>/dev/null || true

@@ -1,13 +1,54 @@
-<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="256" height="256" viewBox="0 0 256 256">
   <defs>
-    <filter id="shadow" x="12" y="12" width="232" height="232" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="2" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.35"/>
-    </filter>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2a2b3d"/>
+      <stop offset="100%" stop-color="#181825"/>
+    </linearGradient>
+    <linearGradient id="pointerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e2e8f0"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#89b4fa"/>
+      <stop offset="100%" stop-color="#cba6f7"/>
+    </linearGradient>
+    <linearGradient id="swatch1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f9e2af"/>
+      <stop offset="100%" stop-color="#fab387"/>
+    </linearGradient>
+    <linearGradient id="swatch2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a6e3a1"/>
+      <stop offset="100%" stop-color="#94e2d5"/>
+    </linearGradient>
   </defs>
-  <!-- Main Adwaita Cursor Outline & Shape -->
-  <g filter="url(#shadow)">
-    <!-- Scaled & Centered 96px Adwaita Default Cursor Asset -->
-    <image href="data:image/png;base64,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"
-           x="32" y="24" width="192" height="192" preserveAspectRatio="xMidYMid meet"/>
-  </g>
+
+  <!-- Background Squircle -->
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#bgGrad)"/>
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="none" stroke="#45475a" stroke-width="2"/>
+
+  <!-- Theme Swatch Circles (Indicating Theme Switching) -->
+  <circle cx="188" cy="72" r="18" fill="url(#swatch1)"/>
+  <circle cx="188" cy="72" r="18" fill="none" stroke="#181825" stroke-width="3"/>
+
+  <circle cx="198" cy="116" r="14" fill="url(#accentGrad)"/>
+  <circle cx="198" cy="116" r="14" fill="none" stroke="#181825" stroke-width="2.5"/>
+
+  <circle cx="184" cy="156" r="11" fill="url(#swatch2)"/>
+  <circle cx="184" cy="156" r="11" fill="none" stroke="#181825" stroke-width="2"/>
+
+  <!-- Sparkle / Star on top left -->
+  <path d="M 68 52 Q 68 64 56 64 Q 68 64 68 76 Q 68 64 80 64 Q 68 64 68 52 Z" fill="#f9e2af"/>
+
+  <!-- Main Adwaita-style Cursor Shadow -->
+  <path d="M 66 58 L 66 186 L 98 154 L 126 216 L 148 206 L 120 144 L 166 144 Z" fill="#11111b" opacity="0.45"/>
+
+  <!-- Main Adwaita-style Cursor Outline -->
+  <path d="M 60 50 L 60 180 L 92 148 L 120 210 L 142 200 L 114 138 L 160 138 Z" fill="#11111b" stroke="#11111b" stroke-width="8" stroke-linejoin="round" stroke-linecap="round"/>
+
+  <!-- Main Adwaita-style Cursor Body -->
+  <path d="M 60 50 L 60 180 L 92 148 L 120 210 L 142 200 L 114 138 L 160 138 Z" fill="url(#pointerGrad)"/>
+
+  <!-- Inner accent line on the cursor -->
+  <path d="M 68 68 L 68 155 L 90 133 L 116 191" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
 </svg>

@@ -38,7 +38,7 @@ Item {
 
   function requestClose() {
     if (service) service.cancelPreview()
-    if (shell && typeof shell.hide === "function") shell.hide("goblin.cursor-switcher")
+    if (shell && typeof shell.hide === "function") shell.hide("sanjyay.cursor-switcher")
     else window.visible = false
   }
 
@@ -124,7 +124,7 @@ Item {
     onVisibleChanged: {
       if (!visible && !root.closingFromHost) {
         if (root.service) root.service.cancelPreview()
-        if (root.shell && typeof root.shell.hide === "function") root.shell.hide("goblin.cursor-switcher")
+        if (root.shell && typeof root.shell.hide === "function") root.shell.hide("sanjyay.cursor-switcher")
       }
     }
 

@@ -402,12 +402,12 @@ apply_theme() {
     common_tmp=$(mktemp --tmpdir="$common_dir" .cursor-switcher.XXXXXX)
     hypr_tmp=$(mktemp --tmpdir="$hypr_dir" .cursor-switcher.XXXXXX)
     {
-      printf '# Managed by goblin.cursor-switcher.\n'
+      printf '# Managed by sanjyay.cursor-switcher.\n'
       [[ $xcursor == - ]] || printf "export XCURSOR_THEME='%s'\n" "$xcursor"
       printf "export XCURSOR_SIZE='%s'\n" "$size"
     } > "$common_tmp"
     {
-      printf '# Managed by goblin.cursor-switcher.\n'
+      printf '# Managed by sanjyay.cursor-switcher.\n'
       if [[ $effective_hypr == - ]]; then printf 'unset HYPRCURSOR_THEME\n'; else printf "export HYPRCURSOR_THEME='%s'\n" "$effective_hypr"; fi
       printf "export HYPRCURSOR_SIZE='%s'\n" "$size"
     } > "$hypr_tmp"
@@ -423,67 +423,55 @@ install_single_theme() {
   local target_base=${target##*/}
   valid_name "$target_base" || die "refusing invalid theme target: $target"
 
-  local link link_target
-  while IFS= read -r -d '' link; do
-    link_target=$(readlink -- "$link") || die "cannot inspect bundled alias"
-    [[ $link_target != */* && $link_target != .* && -f ${link%/*}/$link_target ]] || die "bundled theme contains an unsafe alias"
-  done < <(find "$source" -type l -print0)
-
-  local parent=${target%/*} marker=.omarchy-cursor-switcher-theme temp
-  mkdir -p -- "$parent"
-
-  # Clean up old Omarchy-Banana if migrating to Banana
-  if [[ $target_base == Banana && -d $parent/Omarchy-Banana && -f $parent/Omarchy-Banana/$marker ]]; then
-    rm -rf -- "$parent/Omarchy-Banana"
-  fi
-
-  if [[ -e $target && ! -f $target/$marker ]]; then
-    if [[ $force_error == true ]]; then
-      die "the target exists and is not owned by this plugin: $target"
-    else
-      log "target exists and is not owned by this plugin; preserving external theme: $target"
+  mkdir -p -- "${target%/*}"
+  if [[ -e $target ]]; then
+    if [[ ! -f $target/.omarchy-cursor-switcher-theme ]]; then
+      if [[ $force_error == true ]]; then
+        die "target exists and is not managed by cursor-switcher: $target"
+      else
+        return 0
+      fi
+    fi
+    local current_ver
+    current_ver=$(<"$target/.omarchy-cursor-switcher-theme")
+    if [[ $current_ver == "$version" ]]; then
       return 0
     fi
   fi
 
-  if [[ -f $target/$marker ]] && [[ $(<"$target/$marker") == "$version" ]]; then return 0; fi
-  temp=$(mktemp -d --tmpdir="$parent" .install.XXXXXX)
-  cp -a -- "$source"/. "$temp"/
-  printf '%s\n' "$version" > "$temp/$marker"
+  local target_parent=${target%/*}
+  local tmp
+  tmp=$(mktemp -d --tmpdir="$target_parent" .theme.XXXXXX)
+  cp -a -- "$source"/* "$tmp"/
+  printf '%s\n' "$version" > "$tmp/.omarchy-cursor-switcher-theme"
+
   if [[ -e $target ]]; then
-    local old="$parent/.old.$target_base.$$"
-    mv -- "$target" "$old"
-    if mv -- "$temp" "$target"; then rm -rf -- "$old"; else mv -- "$old" "$target"; die "atomic theme replacement failed: $target"; fi
-  else
-    mv -- "$temp" "$target"
+    rm -rf -- "$target"
   fi
+  mv -f -- "$tmp" "$target"
 }
 
 install_bundled() {
-  local source="" target="" version="" catalog="" themes_dir="" home=${HOME:?HOME is not set}
+  local source="" target="" version="" themes_dir=""
   while (($#)); do
     case $1 in
       --source) source=${2:-}; shift 2 ;;
       --target) target=${2:-}; shift 2 ;;
       --version) version=${2:-}; shift 2 ;;
-      --catalog) catalog=${2:-}; shift 2 ;;
       --themes-dir) themes_dir=${2:-}; shift 2 ;;
-      *) die "unknown install argument: $1" ;;
+      *) die "unknown install-bundled argument: $1" ;;
     esac
   done
 
-  local script_dir
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  [[ -n $themes_dir ]] || themes_dir="$script_dir/../themes"
-  local icons_parent="${XDG_DATA_HOME:-$home/.local/share}/icons"
-
   if [[ -n $source && -n $target ]]; then
     install_single_theme "$source" "$target" "${version:-1.0}" true
-    return 0
-  fi
+  elif [[ -n $themes_dir ]]; then
+    [[ -d $themes_dir ]] || die "themes directory not found: $themes_dir"
+    local home=${HOME:?HOME is not set}
+    local data_home=${XDG_DATA_HOME:-$home/.local/share}
+    local icons_parent="$data_home/icons"
+    mkdir -p -- "$icons_parent"
 
-  # Install all bundled themes found in themes/
-  if [[ -d $themes_dir ]]; then
     local tdir gdir sdir sbase
     for tdir in "$themes_dir"/*; do
       [[ -d $tdir ]] || continue
@@ -511,7 +499,8 @@ register_app() {
   local data_home=${XDG_DATA_HOME:-$home/.local/share}
   local bin_dir="$home/.local/bin"
   local app_dir="$data_home/applications"
-  local icon_dir="$data_home/icons/hicolor/scalable/apps"
+  local scalable_dir="$data_home/icons/hicolor/scalable/apps"
+  local pixmaps_dir="$data_home/pixmaps"
 
   local launcher_src="$source_dir/scripts/omarchy-cursor-switcher"
   local desktop_src="$source_dir/desktop/omarchy-cursor-switcher.desktop"
@@ -521,7 +510,7 @@ register_app() {
   [[ -f $desktop_src ]] || die "desktop entry not found: $desktop_src"
   [[ -f $icon_src ]] || die "icon not found: $icon_src"
 
-  mkdir -p -- "$bin_dir" "$app_dir" "$icon_dir"
+  mkdir -p -- "$bin_dir" "$app_dir" "$scalable_dir" "$pixmaps_dir"
 
   # Install launcher script (atomic)
   local tmp
@@ -536,11 +525,28 @@ register_app() {
   chmod 644 -- "$tmp"
   mv -f -- "$tmp" "$app_dir/omarchy-cursor-switcher.desktop"
 
-  # Install icon (atomic)
-  tmp=$(mktemp --tmpdir="$icon_dir" .omarchy-cursor-switcher.XXXXXX)
+  # Install scalable SVG icon (atomic)
+  tmp=$(mktemp --tmpdir="$scalable_dir" .omarchy-cursor-switcher.XXXXXX)
   cp -- "$icon_src" "$tmp"
   chmod 644 -- "$tmp"
-  mv -f -- "$tmp" "$icon_dir/omarchy-cursor-switcher.svg"
+  mv -f -- "$tmp" "$scalable_dir/omarchy-cursor-switcher.svg"
+
+  # Install pixmaps SVG and PNG copies
+  cp -- "$icon_src" "$pixmaps_dir/omarchy-cursor-switcher.svg"
+
+  # Install raster PNG icons if present
+  local sz png_src png_dir
+  for sz in 48 64 128 256; do
+    png_src="$source_dir/icons/omarchy-cursor-switcher-$sz.png"
+    if [[ -f $png_src ]]; then
+      png_dir="$data_home/icons/hicolor/${sz}x${sz}/apps"
+      mkdir -p -- "$png_dir"
+      cp -- "$png_src" "$png_dir/omarchy-cursor-switcher.png"
+      if [[ $sz == 48 || $sz == 256 ]]; then
+        cp -- "$png_src" "$pixmaps_dir/omarchy-cursor-switcher.png"
+      fi
+    fi
+  done
 
   # Refresh icon cache and desktop database if available (best effort)
   if command -v update-desktop-database >/dev/null 2>&1; then

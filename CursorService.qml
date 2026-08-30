@@ -68,7 +68,7 @@ Item {
   Component.onDestruction: {
     var isEnabled = false
     if (shell && shell.pluginRegistry && typeof shell.pluginRegistry.isEnabled === "function") {
-      isEnabled = shell.pluginRegistry.isEnabled("goblin.cursor-switcher")
+      isEnabled = shell.pluginRegistry.isEnabled("sanjyay.cursor-switcher")
     } else if (manifest && manifest.id && shell && shell.pluginRegistry) {
       isEnabled = shell.pluginRegistry.isEnabled(manifest.id)
     }
@@ -107,7 +107,7 @@ Item {
       initialize(parsed.currentXcursor || "")
     } catch (error) {
       lastError = "Cursor discovery returned invalid data"
-      console.warn("goblin.cursor-switcher: discovery parse failed:", error)
+      console.warn("sanjyay.cursor-switcher: discovery parse failed:", error)
     }
   }
 
@@ -259,7 +259,7 @@ Item {
       if (exitCode !== 0) {
         root._installError = root.elide(installStderr.text || "Bundled theme installation failed")
         root.lastError = root._installError
-        console.warn("goblin.cursor-switcher:", root._installError)
+        console.warn("sanjyay.cursor-switcher:", root._installError)
       }
       registerAppProcess.command = [root.helperPath, "register-app",
         "--source", root.pluginRoot]
@@ -274,7 +274,7 @@ Item {
     stderr: StdioCollector { id: registerAppStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        console.warn("goblin.cursor-switcher: app registration failed:",
+        console.warn("sanjyay.cursor-switcher: app registration failed:",
           root.elide(registerAppStderr.text || "unknown error"))
       }
       root.refresh(true)
@@ -292,7 +292,7 @@ Item {
       if (exitCode === 0) root.parseDiscovery(discoverStdout.text || root._discoverOutput)
       else {
         root.lastError = root.elide(discoverStderr.text || root._discoverError || "Cursor discovery failed")
-        console.warn("goblin.cursor-switcher:", root.lastError)
+        console.warn("sanjyay.cursor-switcher:", root.lastError)
       }
     }
   }
@@ -319,7 +319,7 @@ Item {
       root.applying = false
       if (exitCode !== 0) {
         root.lastError = root.elide(applyStderr.text || root._applyStderr || applyStdout.text || root._applyStdout || "Cursor could not be applied")
-        console.warn("goblin.cursor-switcher: apply failed:", root.lastError)
+        console.warn("sanjyay.cursor-switcher: apply failed:", root.lastError)
         if (request && request.kind === "commit") {
           root.statusText = "Failed to switch to " + request.theme.displayName
         } else if (request && request.kind === "preview") {
