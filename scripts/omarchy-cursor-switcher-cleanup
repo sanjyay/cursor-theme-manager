@@ -1,0 +1,416 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROGRAM=${0##*/}
+HOME_DIR=${HOME:?HOME is not set}
+CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME_DIR/.config}
+DATA_HOME=${XDG_DATA_HOME:-$HOME_DIR/.local/share}
+CACHE_HOME=${XDG_CACHE_HOME:-$HOME_DIR/.cache}
+STATE_DIR="$CONFIG_HOME/omarchy"
+SNAPSHOT_FILE="$STATE_DIR/cursor-switcher-original-state.json"
+STATE_FILE="$STATE_DIR/cursor-switcher.json"
+ICONS_DIR="$DATA_HOME/icons"
+APP_DIR="$DATA_HOME/applications"
+BIN_DIR="$HOME_DIR/.local/bin"
+APP_ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
+CLEANUP_DIR="$DATA_HOME/omarchy/cursor-switcher"
+
+die() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; exit 1; }
+log() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; }
+
+snapshot_original_state() {
+  mkdir -p "$STATE_DIR"
+  if [[ -f $SNAPSHOT_FILE ]]; then
+    if python3 -c 'import sys, json; d = json.load(open(sys.argv[1])); assert d.get("version") == 1' "$SNAPSHOT_FILE" 2>/dev/null; then
+      return 0
+    fi
+  fi
+
+  python3 - <<'PY' "$SNAPSHOT_FILE" "$CONFIG_HOME"
+import sys, os, json, subprocess, datetime
+
+snapshot_path = sys.argv[1]
+config_home = sys.argv[2]
+
+gtk_theme_present = False
+gtk_theme_val = ""
+try:
+    res = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "cursor-theme"],
+                         capture_output=True, text=True, timeout=2)
+    if res.returncode == 0 and res.stdout.strip():
+        val = res.stdout.strip().strip("'").strip('"')
+        if val:
+            gtk_theme_present = True
+            gtk_theme_val = val
+except Exception:
+    pass
+
+gtk_size_present = False
+gtk_size_val = 24
+try:
+    res = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "cursor-size"],
+                         capture_output=True, text=True, timeout=2)
+    if res.returncode == 0 and res.stdout.strip():
+        val = res.stdout.strip()
+        if val.isdigit():
+            gtk_size_present = True
+            gtk_size_val = int(val)
+except Exception:
+    pass
+
+sysd_env = {}
+try:
+    res = subprocess.run(["systemctl", "--user", "show-environment"],
+                         capture_output=True, text=True, timeout=2)
+    if res.returncode == 0:
+        for line in res.stdout.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                sysd_env[k] = v
+except Exception:
+    pass
+
+def probe_var(var_name):
+    if sysd_env:
+        if var_name in sysd_env and sysd_env[var_name]:
+            return True, sysd_env[var_name]
+        return False, ""
+    if var_name in os.environ and os.environ[var_name]:
+        return True, os.environ[var_name]
+    return False, ""
+
+hypr_theme_present, hypr_theme_val = probe_var("HYPRCURSOR_THEME")
+hypr_size_present, hypr_size_val = probe_var("HYPRCURSOR_SIZE")
+xcur_theme_present, xcur_theme_val = probe_var("XCURSOR_THEME")
+xcur_size_present, xcur_size_val = probe_var("XCURSOR_SIZE")
+
+uwsm_common = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
+uwsm_hypr = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
+
+data = {
+    "version": 1,
+    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "gtkTheme": {
+        "present": gtk_theme_present,
+        "value": gtk_theme_val
+    },
+    "gtkSize": {
+        "present": gtk_size_present,
+        "value": gtk_size_val
+    },
+    "hyprcursorTheme": {
+        "present": hypr_theme_present,
+        "value": hypr_theme_val
+    },
+    "hyprcursorSize": {
+        "present": hypr_size_present,
+        "value": hypr_size_val
+    },
+    "xcursorTheme": {
+        "present": xcur_theme_present,
+        "value": xcur_theme_val
+    },
+    "xcursorSize": {
+        "present": xcur_size_present,
+        "value": xcur_size_val
+    },
+    "uwsmEnvCommonExisted": os.path.exists(uwsm_common),
+    "uwsmEnvHyprlandExisted": os.path.exists(uwsm_hypr)
+}
+
+tmp_path = snapshot_path + f".tmp.{os.getpid()}"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.chmod(tmp_path, 0o600)
+os.replace(tmp_path, snapshot_path)
+PY
+}
+
+restore_original_state() {
+  python3 - <<'PY' "$SNAPSHOT_FILE" "$CONFIG_HOME" "$HOME_DIR"
+import sys, os, json, subprocess
+
+snapshot_path = sys.argv[1]
+config_home = sys.argv[2]
+home = sys.argv[3]
+
+snap = None
+if os.path.isfile(snapshot_path):
+    try:
+        with open(snapshot_path, "r", encoding="utf-8") as f:
+            snap = json.load(f)
+    except Exception as e:
+        print(f"Warning: failed to read snapshot {snapshot_path}: {e}", file=sys.stderr)
+
+def_theme = "Adwaita"
+def_size = 24
+
+if os.path.isfile("/usr/share/icons/default/index.theme"):
+    try:
+        with open("/usr/share/icons/default/index.theme") as f:
+            for line in f:
+                if line.strip().startswith("Inherits="):
+                    val = line.strip().split("=", 1)[1].strip()
+                    if val:
+                        def_theme = val
+    except Exception:
+        pass
+
+if snap and isinstance(snap, dict) and snap.get("version") == 1:
+    gtk_theme = snap.get("gtkTheme", {})
+    gtk_size = snap.get("gtkSize", {})
+    hypr_theme = snap.get("hyprcursorTheme", {})
+    hypr_size = snap.get("hyprcursorSize", {})
+    xcur_theme = snap.get("xcursorTheme", {})
+    xcur_size = snap.get("xcursorSize", {})
+else:
+    gtk_theme = {"present": True, "value": def_theme}
+    gtk_size = {"present": True, "value": def_size}
+    hypr_theme = {"present": False, "value": ""}
+    hypr_size = {"present": False, "value": ""}
+    xcur_theme = {"present": True, "value": def_theme}
+    xcur_size = {"present": True, "value": str(def_size)}
+
+# 1. Restore GTK / GSettings
+try:
+    if gtk_theme.get("present") and gtk_theme.get("value"):
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", str(gtk_theme["value"])],
+                       capture_output=True, timeout=2)
+    else:
+        subprocess.run(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-theme"],
+                       capture_output=True, timeout=2)
+    if gtk_size.get("present") and gtk_size.get("value"):
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(gtk_size["value"])],
+                       capture_output=True, timeout=2)
+    else:
+        subprocess.run(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-size"],
+                       capture_output=True, timeout=2)
+except Exception:
+    pass
+
+# 2. Restore systemd user environment & DBus activation environment
+set_assignments = []
+unset_names = []
+
+for key, obj in [
+    ("HYPRCURSOR_THEME", hypr_theme),
+    ("HYPRCURSOR_SIZE", hypr_size),
+    ("XCURSOR_THEME", xcur_theme),
+    ("XCURSOR_SIZE", xcur_size),
+]:
+    if obj.get("present") and obj.get("value") is not None and str(obj.get("value")) != "":
+        set_assignments.append(f"{key}={obj['value']}")
+    else:
+        unset_names.append(key)
+
+if set_assignments:
+    try:
+        subprocess.run(["systemctl", "--user", "set-environment"] + set_assignments,
+                       capture_output=True, timeout=2)
+        subprocess.run(["dbus-update-activation-environment", "--systemd"] + set_assignments,
+                       capture_output=True, timeout=2)
+    except Exception:
+        pass
+
+if unset_names:
+    try:
+        subprocess.run(["systemctl", "--user", "unset-environment"] + unset_names,
+                       capture_output=True, timeout=2)
+    except Exception:
+        pass
+
+# 3. Restore live compositor cursor via hyprctl
+effective_hypr = ""
+if hypr_theme.get("present") and hypr_theme.get("value"):
+    effective_hypr = str(hypr_theme["value"])
+elif xcur_theme.get("present") and xcur_theme.get("value"):
+    effective_hypr = str(xcur_theme["value"])
+elif gtk_theme.get("present") and gtk_theme.get("value"):
+    effective_hypr = str(gtk_theme["value"])
+else:
+    effective_hypr = def_theme
+
+effective_size = 24
+if hypr_size.get("present") and str(hypr_size.get("value")).isdigit():
+    effective_size = int(hypr_size["value"])
+elif xcur_size.get("present") and str(xcur_size.get("value")).isdigit():
+    effective_size = int(xcur_size["value"])
+elif gtk_size.get("present") and str(gtk_size.get("value")).isdigit():
+    effective_size = int(gtk_size["value"])
+
+try:
+    subprocess.run(["hyprctl", "setcursor", effective_hypr, str(effective_size)],
+                   capture_output=True, timeout=2)
+    
+    hypr_env_val = hypr_theme.get("value", "") if hypr_theme.get("present") else ""
+    hypr_size_val = str(hypr_size.get("value", "")) if hypr_size.get("present") else ""
+    xcur_env_val = xcur_theme.get("value", "") if xcur_theme.get("present") else ""
+    xcur_size_val = str(xcur_size.get("value", "")) if xcur_size.get("present") else ""
+    
+    subprocess.run(["hyprctl", "eval", f'hl.env("HYPRCURSOR_THEME", "{hypr_env_val}")'],
+                   capture_output=True, timeout=2)
+    subprocess.run(["hyprctl", "eval", f'hl.env("HYPRCURSOR_SIZE", "{hypr_size_val}")'],
+                   capture_output=True, timeout=2)
+    subprocess.run(["hyprctl", "eval", f'hl.env("XCURSOR_THEME", "{xcur_env_val}")'],
+                   capture_output=True, timeout=2)
+    subprocess.run(["hyprctl", "eval", f'hl.env("XCURSOR_SIZE", "{xcur_size_val}")'],
+                   capture_output=True, timeout=2)
+except Exception:
+    pass
+
+# 4. Remove UWSM env override files created by cursor-switcher
+uwsm_common = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
+uwsm_hypr = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
+try:
+    if os.path.exists(uwsm_common): os.unlink(uwsm_common)
+except Exception:
+    pass
+try:
+    if os.path.exists(uwsm_hypr): os.unlink(uwsm_hypr)
+except Exception:
+    pass
+PY
+}
+
+unregister_app() {
+  rm -f -- "$BIN_DIR/omarchy-cursor-switcher"
+  rm -f -- "$APP_DIR/omarchy-cursor-switcher.desktop"
+  rm -f -- "$APP_ICON_DIR/omarchy-cursor-switcher.svg"
+
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q "$APP_DIR" 2>/dev/null || true
+  fi
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q "$DATA_HOME/icons/hicolor" 2>/dev/null || true
+  fi
+}
+
+deactivate() {
+  restore_original_state
+  unregister_app
+}
+
+purge() {
+  deactivate
+
+  # Remove plugin-owned bundled themes (verify marker .omarchy-cursor-switcher-theme)
+  if [[ -d $ICONS_DIR ]]; then
+    local d
+    for d in "$ICONS_DIR"/*; do
+      [[ -d $d ]] || continue
+      if [[ -f $d/.omarchy-cursor-switcher-theme ]]; then
+        rm -rf -- "$d"
+      fi
+    done
+  fi
+
+  # Remove plugin-owned converted XCursor->Hyprcursor themes (verify marker .omarchy-cursor-switcher-converted)
+  if [[ -d $ICONS_DIR ]]; then
+    local c
+    for c in "$ICONS_DIR"/CursorSwitcher-XCursor-*; do
+      [[ -d $c ]] || continue
+      if [[ -f $c/.omarchy-cursor-switcher-converted ]]; then
+        rm -rf -- "$c"
+      fi
+    done
+  fi
+
+  # Remove preview cache
+  rm -rf -- "$CACHE_HOME/omarchy-cursor-switcher"
+
+  # Remove state and snapshot files
+  rm -f -- "$STATE_FILE"
+  rm -f -- "$SNAPSHOT_FILE"
+
+  # Remove cleanup helper directory and self
+  rm -rf -- "$CLEANUP_DIR"
+}
+
+on_destroy() {
+  local plugin_dir=""
+  while (($#)); do
+    case $1 in
+      --plugin-dir) plugin_dir=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  # 1. Immediately deactivate: restores cursor & unregisters app
+  deactivate
+
+  # 2. Check if plugin directory still exists or is being deleted/unlinked
+  # Wait up to 1.5s checking every 50ms (30 iterations)
+  local is_removed=false
+  if [[ -z $plugin_dir || ! -e $plugin_dir ]]; then
+    is_removed=true
+  else
+    local i
+    for ((i = 0; i < 30; i++)); do
+      if [[ ! -e $plugin_dir ]]; then
+        is_removed=true
+        break
+      fi
+      sleep 0.05
+    done
+  fi
+
+  if [[ $is_removed == true ]]; then
+    purge
+  fi
+}
+
+audit_installation() {
+  python3 - <<'PY' "$CONFIG_HOME" "$DATA_HOME" "$CACHE_HOME" "$HOME_DIR"
+import sys, os, json, glob
+
+config_home, data_home, cache_home, home = sys.argv[1:5]
+
+icons_dir = os.path.join(data_home, "icons")
+bundled_themes = []
+converted_themes = []
+
+if os.path.isdir(icons_dir):
+    for d in glob.glob(os.path.join(icons_dir, "*")):
+        if os.path.isfile(os.path.join(d, ".omarchy-cursor-switcher-theme")):
+            bundled_themes.append(os.path.basename(d))
+        elif os.path.isfile(os.path.join(d, ".omarchy-cursor-switcher-converted")):
+            converted_themes.append(os.path.basename(d))
+
+report = {
+    "snapshot": os.path.isfile(os.path.join(config_home, "omarchy", "cursor-switcher-original-state.json")),
+    "state": os.path.isfile(os.path.join(config_home, "omarchy", "cursor-switcher.json")),
+    "desktop_entry": os.path.isfile(os.path.join(data_home, "applications", "omarchy-cursor-switcher.desktop")),
+    "launcher": os.path.isfile(os.path.join(home, ".local", "bin", "omarchy-cursor-switcher")),
+    "icon": os.path.isfile(os.path.join(data_home, "icons", "hicolor", "scalable", "apps", "omarchy-cursor-switcher.svg")),
+    "uwsm_env_common": os.path.isfile(os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")),
+    "uwsm_env_hyprland": os.path.isfile(os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")),
+    "bundled_themes": bundled_themes,
+    "converted_themes": converted_themes,
+    "cache_previews": os.path.isdir(os.path.join(cache_home, "omarchy-cursor-switcher")),
+    "cleanup_helper": os.path.isfile(os.path.join(data_home, "omarchy", "cursor-switcher", "omarchy-cursor-switcher-cleanup"))
+}
+
+is_clean = not (
+    report["snapshot"] or report["state"] or report["desktop_entry"] or
+    report["launcher"] or report["icon"] or report["uwsm_env_common"] or
+    report["uwsm_env_hyprland"] or bool(report["bundled_themes"]) or
+    bool(report["converted_themes"]) or report["cache_previews"] or
+    report["cleanup_helper"]
+)
+report["is_clean"] = is_clean
+
+print(json.dumps(report, indent=2))
+PY
+}
+
+case ${1:-} in
+  snapshot-original-state) shift; snapshot_original_state "$@" ;;
+  restore-original-state) shift; restore_original_state "$@" ;;
+  unregister-app) shift; unregister_app "$@" ;;
+  deactivate) shift; deactivate "$@" ;;
+  purge) shift; purge "$@" ;;
+  on-destroy) shift; on_destroy "$@" ;;
+  audit-installation) shift; audit_installation "$@" ;;
+  *) die "usage: $PROGRAM {snapshot-original-state|restore-original-state|unregister-app|deactivate|purge|on-destroy|audit-installation} ..." ;;
+esac

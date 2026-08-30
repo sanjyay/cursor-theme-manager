@@ -551,72 +551,82 @@ register_app() {
   fi
 }
 
-reset_defaults() {
-  local home=${HOME:?HOME is not set}
-  local config_home=${XDG_CONFIG_HOME:-$home/.config}
-  local default_theme="Adwaita"
-  local default_size="24"
+install_cleanup_helper() {
+  local source_dir="" home=${HOME:?HOME is not set}
+  while (($#)); do
+    case $1 in
+      --source) source_dir=${2:-}; shift 2 ;;
+      *) die "unknown install-cleanup-helper argument: $1" ;;
+    esac
+  done
+  [[ -n $source_dir && -d $source_dir ]] || die "missing --source directory"
 
-  # 1. Look up Omarchy / system default cursor theme if available
-  if [[ -f /usr/share/icons/default/index.theme ]]; then
-    local inherited
-    inherited=$(read_key /usr/share/icons/default/index.theme Inherits)
-    if valid_name "${inherited:-}"; then default_theme=$inherited; fi
-  fi
+  local data_home=${XDG_DATA_HOME:-$home/.local/share}
+  local target_dir="$data_home/omarchy/cursor-switcher"
+  local target_file="$target_dir/omarchy-cursor-switcher-cleanup"
+  local src_file="$source_dir/scripts/omarchy-cursor-switcher-cleanup"
 
-  # 2. Reset live compositor cursor via hyprctl
-  if command -v hyprctl >/dev/null 2>&1; then
-    hyprctl setcursor "$default_theme" "$default_size" >/dev/null 2>&1 || true
-    hyprctl eval "hl.env(\"HYPRCURSOR_THEME\", \"$default_theme\")" >/dev/null 2>&1 || true
-    hyprctl eval "hl.env(\"HYPRCURSOR_SIZE\", \"$default_size\")" >/dev/null 2>&1 || true
-    hyprctl eval "hl.env(\"XCURSOR_THEME\", \"$default_theme\")" >/dev/null 2>&1 || true
-    hyprctl eval "hl.env(\"XCURSOR_SIZE\", \"$default_size\")" >/dev/null 2>&1 || true
-  fi
+  [[ -f $src_file ]] || die "cleanup helper source not found: $src_file"
 
-  # 3. Reset GTK / GSettings cursor theme and size
-  if command -v gsettings >/dev/null 2>&1; then
-    gsettings set org.gnome.desktop.interface cursor-theme "$default_theme" 2>/dev/null || true
-    gsettings set org.gnome.desktop.interface cursor-size "$default_size" 2>/dev/null || true
-  fi
-
-  # 4. Reset systemd and dbus user environment
-  local -a assignments=(
-    "HYPRCURSOR_THEME=$default_theme"
-    "HYPRCURSOR_SIZE=$default_size"
-    "XCURSOR_THEME=$default_theme"
-    "XCURSOR_SIZE=$default_size"
-  )
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user set-environment "${assignments[@]}" >/dev/null 2>&1 || true
-  fi
-  if command -v dbus-update-activation-environment >/dev/null 2>&1; then
-    dbus-update-activation-environment --systemd "${assignments[@]}" >/dev/null 2>&1 || true
-  fi
-
-  # 5. Clean up uwsm environment files created by cursor-switcher
-  rm -f -- "$config_home/uwsm/env.d/90-omarchy-cursor-switcher"
-  rm -f -- "$config_home/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
-
-  # 6. Clean up saved state
-  rm -f -- "$config_home/omarchy/cursor-switcher.json"
+  mkdir -p -- "$target_dir"
+  local tmp
+  tmp=$(mktemp --tmpdir="$target_dir" .cleanup.XXXXXX)
+  cp -- "$src_file" "$tmp"
+  chmod 755 -- "$tmp"
+  mv -f -- "$tmp" "$target_file"
 }
 
 unregister_app() {
-  local home=${HOME:?HOME is not set}
-  local data_home=${XDG_DATA_HOME:-$home/.local/share}
-  local bin_dir="$home/.local/bin"
-  local app_dir="$data_home/applications"
-  local icon_dir="$data_home/icons/hicolor/scalable/apps"
-
-  rm -f -- "$bin_dir/omarchy-cursor-switcher"
-  rm -f -- "$app_dir/omarchy-cursor-switcher.desktop"
-  rm -f -- "$icon_dir/omarchy-cursor-switcher.svg"
-
-  if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database -q "$app_dir" 2>/dev/null || true
+  local script_dir
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
+  if [[ -f $helper ]]; then
+    "$helper" unregister-app "$@"
   fi
-  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    gtk-update-icon-cache -q "$data_home/icons/hicolor" 2>/dev/null || true
+}
+
+snapshot_original_state() {
+  local script_dir
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
+  if [[ -f $helper ]]; then
+    "$helper" snapshot-original-state "$@"
+  fi
+}
+
+restore_original_state() {
+  local script_dir
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
+  if [[ -f $helper ]]; then
+    "$helper" restore-original-state "$@"
+  fi
+}
+
+deactivate() {
+  local script_dir
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
+  if [[ -f $helper ]]; then
+    "$helper" deactivate "$@"
+  fi
+}
+
+purge() {
+  local script_dir
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
+  if [[ -f $helper ]]; then
+    "$helper" purge "$@"
+  fi
+}
+
+audit_installation() {
+  local script_dir
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
+  if [[ -f $helper ]]; then
+    "$helper" audit-installation "$@"
   fi
 }
 
@@ -624,8 +634,14 @@ case ${1:-} in
   discover) shift; discover "$@" ;;
   apply) shift; apply_theme "$@" ;;
   install-bundled) shift; install_bundled "$@" ;;
+  install-cleanup-helper) shift; install_cleanup_helper "$@" ;;
   register-app) shift; register_app "$@" ;;
   unregister-app) shift; unregister_app "$@" ;;
-  reset-defaults) shift; reset_defaults "$@" ;;
-  *) die "usage: $PROGRAM {discover|apply|install-bundled|register-app|unregister-app|reset-defaults} ..." ;;
+  snapshot-original-state) shift; snapshot_original_state "$@" ;;
+  restore-original-state) shift; restore_original_state "$@" ;;
+  deactivate) shift; deactivate "$@" ;;
+  purge) shift; purge "$@" ;;
+  audit-installation) shift; audit_installation "$@" ;;
+  *) die "usage: $PROGRAM {discover|apply|install-bundled|install-cleanup-helper|register-app|unregister-app|snapshot-original-state|restore-original-state|deactivate|purge|audit-installation} ..." ;;
 esac
+

@@ -59,19 +59,28 @@ Item {
     if (sourceRoot === "") { startupTimer.restart(); return }
     _started = true
     stateDirProcess.running = true
-    installProcess.command = [sourceRoot + "/scripts/cursorctl", "install-bundled",
-      "--themes-dir", sourceRoot + "/themes", "--version", String(manifest.version || "1")]
-    installProcess.running = true
+    snapshotProcess.command = [sourceRoot + "/scripts/cursorctl", "snapshot-original-state"]
+    snapshotProcess.running = true
   }
 
   onManifestChanged: startupTimer.restart()
   Component.onCompleted: startupTimer.restart()
   Component.onDestruction: {
-    var sourceRoot = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : (root.pluginRoot || "")
-    if (sourceRoot !== "") {
-      Util.execDetached(Util.shellQuote(sourceRoot + "/scripts/cursorctl") + " unregister-app")
-      Util.execDetached(Util.shellQuote(sourceRoot + "/scripts/cursorctl") + " reset-defaults")
+    var isEnabled = false
+    if (shell && shell.pluginRegistry && typeof shell.pluginRegistry.isEnabled === "function") {
+      isEnabled = shell.pluginRegistry.isEnabled("goblin.cursor-switcher")
+    } else if (manifest && manifest.id && shell && shell.pluginRegistry) {
+      isEnabled = shell.pluginRegistry.isEnabled(manifest.id)
     }
+    if (isEnabled) {
+      // Plugin is still enabled in shell.json -> this is only a shell reload / theme switch.
+      return
+    }
+    // Plugin disabled or removed -> execute standalone cleanup helper
+    var dataHome = Quickshell.env("XDG_DATA_HOME") || ((Quickshell.env("HOME") || "") + "/.local/share")
+    var cleanupPath = dataHome + "/omarchy/cursor-switcher/omarchy-cursor-switcher-cleanup"
+    var sourceRoot = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : (root.pluginRoot || "")
+    Util.execDetached(Util.shellQuote(cleanupPath) + " on-destroy --plugin-dir " + Util.shellQuote(sourceRoot))
   }
 
   Timer { id: startupTimer; interval: 25; repeat: false; onTriggered: root.start() }
@@ -216,6 +225,28 @@ Item {
       root._loadedState = Model.parseState("")
       root._stateLoaded = true
       root.initialize("")
+    }
+  }
+
+  Process {
+    id: snapshotProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      cleanupHelperProcess.command = [root.helperPath, "install-cleanup-helper",
+        "--source", root.pluginRoot]
+      cleanupHelperProcess.running = true
+    }
+  }
+
+  Process {
+    id: cleanupHelperProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      installProcess.command = [root.helperPath, "install-bundled",
+        "--themes-dir", root.pluginRoot + "/themes", "--version", String((root.manifest && root.manifest.version) || "1")]
+      installProcess.running = true
     }
   }
 

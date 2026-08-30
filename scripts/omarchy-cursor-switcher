@@ -1,18 +1,5 @@
 #!/bin/bash
 # Managed by goblin.cursor-switcher — do not edit.
 # Opens the Cursor Switcher panel via the running Omarchy shell.
-
-PLUGINS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
-if [[ ! -d "$PLUGINS_DIR/goblin.cursor-switcher" && ! -L "$PLUGINS_DIR/goblin.cursor-switcher" ]]; then
-  # Plugin was removed; clean up desktop launcher entries
-  rm -f "$HOME/.local/bin/omarchy-cursor-switcher"
-  rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/omarchy-cursor-switcher.desktop"
-  rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg"
-  if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database -q "${XDG_DATA_HOME:-$HOME/.local/share}/applications" 2>/dev/null || true
-  fi
-  exit 0
-fi
-
 exec omarchy-shell -q shell summon goblin.cursor-switcher '{}'
 
