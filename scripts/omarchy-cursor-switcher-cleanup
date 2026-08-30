@@ -317,6 +317,17 @@ purge() {
     done
   fi
 
+  # Remove plugin-owned imported themes (verify marker .omarchy-cursor-switcher-imported)
+  if [[ -d $ICONS_DIR ]]; then
+    local imp
+    for imp in "$ICONS_DIR"/CursorSwitcher-Imported-*; do
+      [[ -d $imp ]] || continue
+      if [[ -f $imp/.omarchy-cursor-switcher-imported ]]; then
+        rm -rf -- "$imp"
+      fi
+    done
+  fi
+
   # Remove preview cache
   rm -rf -- "$CACHE_HOME/omarchy-cursor-switcher"
 
@@ -333,27 +344,27 @@ on_destroy() {
   while (($#)); do
     case $1 in
       --plugin-dir) plugin_dir=${2:-}; shift 2 ;;
-      *) shift ;;
+      *) die "unknown on-destroy argument: $1" ;;
     esac
   done
 
-  # 1. Immediately deactivate: restores cursor & unregisters app
+  # 1. Immediately deactivate live environment & unregister app
   deactivate
 
-  # 2. Check if plugin directory still exists or is being deleted/unlinked
-  # Wait up to 1.5s checking every 50ms (30 iterations)
+  # 2. Check if the plugin checkout directory still exists or has been unlinked/removed
   local is_removed=false
-  if [[ -z $plugin_dir || ! -e $plugin_dir ]]; then
-    is_removed=true
-  else
+  if [[ -n $plugin_dir ]]; then
+    local check_path=$plugin_dir
     local i
-    for ((i = 0; i < 30; i++)); do
-      if [[ ! -e $plugin_dir ]]; then
+    for i in {1..30}; do
+      if [[ ! -d $check_path ]]; then
         is_removed=true
         break
       fi
       sleep 0.05
     done
+  else
+    is_removed=true
   fi
 
   if [[ $is_removed == true ]]; then
@@ -370,6 +381,7 @@ config_home, data_home, cache_home, home = sys.argv[1:5]
 icons_dir = os.path.join(data_home, "icons")
 bundled_themes = []
 converted_themes = []
+imported_themes = []
 
 if os.path.isdir(icons_dir):
     for d in glob.glob(os.path.join(icons_dir, "*")):
@@ -377,6 +389,8 @@ if os.path.isdir(icons_dir):
             bundled_themes.append(os.path.basename(d))
         elif os.path.isfile(os.path.join(d, ".omarchy-cursor-switcher-converted")):
             converted_themes.append(os.path.basename(d))
+        elif os.path.isfile(os.path.join(d, ".omarchy-cursor-switcher-imported")):
+            imported_themes.append(os.path.basename(d))
 
 report = {
     "snapshot": os.path.isfile(os.path.join(config_home, "omarchy", "cursor-switcher-original-state.json")),
@@ -388,6 +402,7 @@ report = {
     "uwsm_env_hyprland": os.path.isfile(os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")),
     "bundled_themes": bundled_themes,
     "converted_themes": converted_themes,
+    "imported_themes": imported_themes,
     "cache_previews": os.path.isdir(os.path.join(cache_home, "omarchy-cursor-switcher")),
     "cleanup_helper": os.path.isfile(os.path.join(data_home, "omarchy-cursor-switcher", "omarchy-cursor-switcher-cleanup"))
 }
@@ -396,8 +411,8 @@ is_clean = not (
     report["snapshot"] or report["state"] or report["desktop_entry"] or
     report["launcher"] or report["icon"] or report["uwsm_env_common"] or
     report["uwsm_env_hyprland"] or bool(report["bundled_themes"]) or
-    bool(report["converted_themes"]) or report["cache_previews"] or
-    report["cleanup_helper"]
+    bool(report["converted_themes"]) or bool(report["imported_themes"]) or
+    report["cache_previews"] or report["cleanup_helper"]
 )
 report["is_clean"] = is_clean
 

@@ -149,9 +149,17 @@ discover() {
 
       local script_dir
       script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-      local bundled_preview=""
-
-      if [[ $base == Banana || $base == Omarchy-Banana ]]; then
+      local is_imported=false import_license="Unknown"
+      if [[ -f $dir/.omarchy-cursor-switcher-imported ]]; then
+        is_imported=true
+        is_bundled=false
+        local imp_name imp_lic
+        imp_name=$(python3 -c "import json, sys; m=json.load(open(sys.argv[1])); print(m.get('displayName',''))" "$dir/.omarchy-cursor-switcher-imported" 2>/dev/null || true)
+        imp_lic=$(python3 -c "import json, sys; m=json.load(open(sys.argv[1])); print(m.get('license','Unknown'))" "$dir/.omarchy-cursor-switcher-imported" 2>/dev/null || true)
+        [[ -n $imp_name ]] && display="$imp_name"
+        import_license="${imp_lic:-Unknown}"
+        subtitle="Imported • $import_license"
+      elif [[ $base == Banana || $base == Omarchy-Banana ]]; then
         is_bundled=true; display="Banana"; subtitle="ful1e5"
         bundled_preview="$script_dir/../themes/banana/preview.svg"
       elif [[ $base == Banana-Catppuccin-Mocha ]]; then
@@ -185,7 +193,9 @@ discover() {
       printf ',"hyprcursor":'; json_string "$hypr"
       printf ',"xcursor":'; json_string "$xcursor"
       printf ',"path":'; json_string "$path"
-      printf ',"formats":[%s],"bundled":%s,"previewPath":' "$formats" "$is_bundled"
+      printf ',"formats":[%s],"bundled":%s,"imported":%s,"license":' "$formats" "$is_bundled" "$is_imported"
+      json_string "$import_license"
+      printf ',"previewPath":'
       json_string "$theme_preview"
       printf '}'
     done
@@ -639,6 +649,30 @@ audit_installation() {
 case ${1:-} in
   discover) shift; discover "$@" ;;
   apply) shift; apply_theme "$@" ;;
+  ensure-hyprcursor) shift; ensure_hyprcursor "$@" ;;
+  import)
+    shift
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    if [[ $# -eq 1 && $1 != --* ]]; then
+      exec python3 "$script_dir/cursor-import.py" import --source "$1"
+    else
+      exec python3 "$script_dir/cursor-import.py" import "$@"
+    fi
+    ;;
+  remove-imported)
+    shift
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    if [[ $# -eq 1 && $1 != --* ]]; then
+      exec python3 "$script_dir/cursor-import.py" remove --id "$1"
+    else
+      exec python3 "$script_dir/cursor-import.py" remove "$@"
+    fi
+    ;;
+  choose-file)
+    shift
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    exec python3 "$script_dir/choose-file.py" "$@"
+    ;;
   install-bundled) shift; install_bundled "$@" ;;
   install-cleanup-helper) shift; install_cleanup_helper "$@" ;;
   register-app) shift; register_app "$@" ;;
@@ -648,6 +682,6 @@ case ${1:-} in
   deactivate) shift; deactivate "$@" ;;
   purge) shift; purge "$@" ;;
   audit-installation) shift; audit_installation "$@" ;;
-  *) die "usage: $PROGRAM {discover|apply|install-bundled|install-cleanup-helper|register-app|unregister-app|snapshot-original-state|restore-original-state|deactivate|purge|audit-installation} ..." ;;
+  *) die "usage: $PROGRAM {discover|apply|ensure-hyprcursor|import|remove-imported|choose-file|install-bundled|install-cleanup-helper|register-app|unregister-app|snapshot-original-state|restore-original-state|deactivate|purge|audit-installation} ..." ;;
 esac
 

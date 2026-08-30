@@ -27,6 +27,29 @@ Rectangle {
       width: parent.width
       height: Style.space(60)
 
+      Rectangle {
+        visible: root.theme.imported === true || root.theme.sourceType === "imported"
+        anchors.left: parent.left
+        anchors.top: parent.top
+        radius: Style.space(4)
+        color: Style.alpha(Color.popups.text, 0.14)
+        border.color: Style.alpha(Color.popups.text, 0.25)
+        border.width: 1
+        implicitWidth: badgeText.implicitWidth + Style.space(8)
+        implicitHeight: badgeText.implicitHeight + Style.space(4)
+        z: 2
+
+        Text {
+          id: badgeText
+          anchors.centerIn: parent
+          text: "Imported"
+          color: Color.popups.text
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption - 2
+          font.bold: true
+        }
+      }
+
       Image {
         visible: root.theme.previewPath !== ""
         anchors.centerIn: parent
@@ -56,6 +79,7 @@ Rectangle {
         font.family: Style.font.family
         font.pixelSize: Style.font.body
         font.bold: true
+        z: 2
       }
     }
 
@@ -76,6 +100,7 @@ Rectangle {
       color: Color.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
+      elide: Text.ElideRight
       horizontalAlignment: Text.AlignHCenter
     }
   }

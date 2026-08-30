@@ -141,16 +141,52 @@ assert.strictEqual(stepGrid(9, -1, 0), 8) // left from 9 -> 8 (Nordzy)
 assert.strictEqual(stepGrid(8, 0, -1), 5) // up from 8 -> 5 (Phinger)
 assert.strictEqual(stepGrid(9, 0, -1), 6) // up from 9 -> 6 (Oreo)
 
-// State parsing and persistence
+// State parsing and persistence (v1 compatibility)
 const bananaTheme = filtered[0]
 const stateText = Model.stateDocument(bananaTheme, 128)
 const parsed = Model.parseState(stateText)
 assert.strictEqual(parsed.ok, true)
+assert.strictEqual(parsed.mode, "manual")
 assert.strictEqual(parsed.theme.displayName, "Banana")
 assert.strictEqual(parsed.size, 128)
+assert.strictEqual(parsed.manualSize, 128)
+assert.strictEqual(parsed.followSize, 128)
 assert.strictEqual(Model.parseState("{oops").reason, "corrupt")
 assert.strictEqual(Model.parseState("{oops").size, 16)
 assert.strictEqual(Model.parseState("").reason, "missing")
 assert.strictEqual(Model.parseState("").size, 16)
+
+// Schema v2 stateDocument & parseState tests
+const phingerTheme = filtered[5]
+const v2Doc = Model.stateDocument(
+  "follow-omarchy",
+  phingerTheme, // manualTheme
+  32,           // manualSize
+  24,           // followSize
+  { "tokyo-night": "Nordzy", "catppuccin": "Bibata-Catppuccin-Mocha" }, // followMappings
+  [{ id: "Custom-Imported", displayName: "Custom (Imported)", sourceType: "imported", formats: ["xcursor"] }],
+  bananaTheme   // active theme in follow mode
+)
+
+const parsedV2 = Model.parseState(v2Doc)
+assert.strictEqual(parsedV2.ok, true)
+assert.strictEqual(parsedV2.mode, "follow-omarchy")
+assert.strictEqual(parsedV2.manualTheme.displayName, "Phinger")
+assert.strictEqual(parsedV2.manualSize, 32)
+assert.strictEqual(parsedV2.followSize, 24)
+assert.strictEqual(parsedV2.size, 24)
+assert.strictEqual(parsedV2.follow.mappings["tokyo-night"], "Nordzy")
+assert.strictEqual(parsedV2.importedThemes.length, 1)
+
+// Imported themes visibility and ordering test
+const rawWithImported = mockDiscovered.concat([
+  { id: "MyCustom", displayName: "My Custom Cursor", sourceType: "imported", formats: ["xcursor"], path: "/tmp/custom" }
+])
+const normalizedWithImported = Model.normalizeThemes(rawWithImported)
+assert.strictEqual(normalizedWithImported.some(t => t.displayName === "My Custom Cursor"), true)
+const customTheme = normalizedWithImported.find(t => t.displayName === "My Custom Cursor")
+assert.strictEqual(customTheme.imported, true)
+assert.strictEqual(customTheme.sourceType, "imported")
+assert.strictEqual(normalizedWithImported.indexOf(customTheme) >= filtered.length, true)
 
 console.log("model tests: ok")

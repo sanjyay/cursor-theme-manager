@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import "CursorModel.js" as Model
+import "ThemeCursorMappings.js" as Mappings
 
 Item {
   id: root
@@ -16,11 +17,26 @@ Item {
   readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || ((Quickshell.env("HOME") || "") + "/.config")
   readonly property string stateDir: configHome + "/omarchy"
   readonly property string statePath: stateDir + "/cursor-switcher.json"
-  readonly property string installTarget: (Quickshell.env("XDG_DATA_HOME") || ((Quickshell.env("HOME") || "") + "/.local/share")) + "/icons/Banana"
 
+  // Mode: "manual" | "follow-omarchy"
+  property string mode: "manual"
   property var themes: []
   property var committedTheme: null
   property int committedSize: 16
+
+  // Independent manual and follow states
+  property var manualTheme: null
+  property int manualSize: 16
+  property int followSize: 16
+  property var followMappings: ({})
+  property var importedThemes: []
+
+  // Active Omarchy Theme tracking
+  property string currentOmarchyTheme: ""
+  property string currentOmarchyThemeDisplay: ""
+  property var activeMappingInfo: null
+
+  // Preview & Operation State
   property var previewTheme: null
   property int previewSize: 0
   property bool ready: false
@@ -33,7 +49,7 @@ Item {
   property bool _started: false
   property bool _stateLoaded: false
   property bool _scanLoaded: false
-  property var _loadedState: ({ ok: false, reason: "missing", theme: null, size: 16 })
+  property var _loadedState: ({ ok: false, reason: "missing", mode: "manual", theme: null, size: 16 })
   property string _installError: ""
   property var _queuedApply: null
   property var _activeApply: null
@@ -73,10 +89,8 @@ Item {
       isEnabled = shell.pluginRegistry.isEnabled(manifest.id)
     }
     if (isEnabled) {
-      // Plugin is still enabled in shell.json -> this is only a shell reload / theme switch.
       return
     }
-    // Plugin disabled or removed -> execute standalone cleanup helper
     var dataHome = Quickshell.env("XDG_DATA_HOME") || ((Quickshell.env("HOME") || "") + "/.local/share")
     var cleanupPath = dataHome + "/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup"
     var sourceRoot = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : (root.pluginRoot || "")
@@ -111,20 +125,80 @@ Item {
     }
   }
 
+  function onOmarchyThemeChanged(rawThemeName) {
+    var raw = String(rawThemeName || "").trim()
+    root.currentOmarchyTheme = raw
+    root.currentOmarchyThemeDisplay = Mappings.formatOmarchyThemeName(raw)
+    var res = Mappings.resolveMappedTheme(raw, root.followMappings, root.themes, "Adwaita")
+    root.activeMappingInfo = res
+
+    if (root.mode === "follow-omarchy" && root.ready && res && res.theme) {
+      if (root.committedTheme !== res.theme || root.committedSize !== root.followSize) {
+        root.enqueueApply(res.theme, root.followSize, "commit")
+      }
+    }
+  }
+
   function initialize(currentXcursor) {
     if (ready || !_stateLoaded || !_scanLoaded) return
-    var selected = _loadedState.ok ? Model.findTheme(themes, _loadedState.theme) : null
-    if (!selected) selected = Model.fallbackTheme(themes, currentXcursor)
-    committedTheme = selected
-    committedSize = Model.validSize(_loadedState.size)
+
+    mode = _loadedState.mode || "manual"
+    manualSize = Model.validSize(_loadedState.manualSize)
+    followSize = Model.validSize(_loadedState.followSize)
+    followMappings = _loadedState.follow && _loadedState.follow.mappings ? _loadedState.follow.mappings : ({})
+    importedThemes = _loadedState.importedThemes || []
+
+    var manual = _loadedState.ok ? Model.findTheme(themes, _loadedState.manualTheme || _loadedState.theme) : null
+    if (!manual) manual = Model.fallbackTheme(themes, currentXcursor)
+    manualTheme = manual
+
+    // Read current Omarchy theme
+    var res = Mappings.resolveMappedTheme(currentOmarchyTheme, followMappings, themes, "Adwaita")
+    activeMappingInfo = res
+
+    if (mode === "follow-omarchy") {
+      var mapped = res && res.theme ? res.theme : manual
+      committedTheme = mapped
+      committedSize = followSize
+    } else {
+      committedTheme = manual
+      committedSize = manualSize
+    }
+
     ready = true
     statusText = themes.length ? themes.length + " cursor themes" : "No cursor themes found"
-    if (_loadedState.ok && !Model.findTheme(themes, _loadedState.theme)) {
+
+    if (_loadedState.ok && !manual) {
       lastError = "The saved cursor theme is no longer installed"
     } else if (_loadedState.reason === "corrupt" || _loadedState.reason === "invalid") {
       lastError = "The saved cursor settings were invalid; using a safe fallback"
     }
-    if (_loadedState.ok && selected) enqueueApply(selected, committedSize, "restore")
+
+    if (committedTheme) {
+      enqueueApply(committedTheme, committedSize, "restore")
+    }
+  }
+
+  function setMode(newMode) {
+    if (newMode !== "manual" && newMode !== "follow-omarchy") return
+    if (newMode === mode) return
+    mode = newMode
+
+    if (mode === "follow-omarchy") {
+      var res = Mappings.resolveMappedTheme(currentOmarchyTheme, followMappings, themes, "Adwaita")
+      activeMappingInfo = res
+      var targetTheme = (res && res.theme) ? res.theme : (manualTheme || committedTheme)
+      if (targetTheme) {
+        enqueueApply(targetTheme, followSize, "commit")
+      }
+    } else {
+      // Switching back to manual mode: restore manualTheme at manualSize
+      var targetTheme = manualTheme || committedTheme
+      if (targetTheme) {
+        enqueueApply(targetTheme, manualSize, "commit")
+      }
+    }
+    persistState()
   }
 
   function requestPreview(theme, size) {
@@ -144,14 +218,35 @@ Item {
     if (!theme) return
     previewTimer.stop()
     _debouncedPreview = null
-    enqueueApply(theme, committedSize, "commit")
+
+    if (mode === "manual") {
+      manualTheme = theme
+      enqueueApply(theme, manualSize, "commit")
+    } else {
+      // In follow mode: clicking a theme card sets mapping for active Omarchy theme
+      var normId = Mappings.normalizeOmarchyThemeId(currentOmarchyTheme)
+      var nextMappings = Object.assign({}, followMappings)
+      nextMappings[normId] = theme.displayName
+      followMappings = nextMappings
+      var res = Mappings.resolveMappedTheme(currentOmarchyTheme, followMappings, themes, "Adwaita")
+      activeMappingInfo = res
+      enqueueApply(theme, followSize, "commit")
+    }
   }
 
   function commitSize(size) {
     if (!committedTheme) return
     previewTimer.stop()
     _debouncedPreview = null
-    enqueueApply(committedTheme, Model.validSize(size), "commit")
+    var valid = Model.validSize(size)
+
+    if (mode === "manual") {
+      manualSize = valid
+      enqueueApply(committedTheme, manualSize, "commit")
+    } else {
+      followSize = valid
+      enqueueApply(committedTheme, followSize, "commit")
+    }
   }
 
   function enqueueApply(theme, size, kind) {
@@ -172,11 +267,19 @@ Item {
     applyProcess.running = true
   }
 
-  function persistCommitted() {
-    if (!committedTheme) return
+  function persistState() {
     if (!stateDirReady) { _savePending = true; return }
     _savePending = false
-    stateFile.setText(Model.stateDocument(committedTheme, committedSize))
+    var doc = Model.stateDocument(
+      mode,
+      manualTheme || committedTheme,
+      manualSize,
+      followSize,
+      followMappings,
+      importedThemes,
+      committedTheme
+    )
+    stateFile.setText(doc)
   }
 
   function indexOfCommitted() {
@@ -197,6 +300,40 @@ Item {
     if (committedTheme) enqueueApply(committedTheme, committedSize, "restore")
   }
 
+  // File Chooser & Import API
+  function chooseAndImportFile() {
+    if (chooseFileProcess.running || importProcess.running) return
+    chooseFileStdout.text = ""
+    chooseFileProcess.running = true
+  }
+
+  function importTheme(sourcePath, optionalName) {
+    if (!sourcePath || importProcess.running) return
+    lastError = ""
+    importStdout.text = ""
+    importStderr.text = ""
+    statusText = "Importing theme…"
+    var args = [helperPath, "import", "--source", sourcePath]
+    if (optionalName) {
+      args.push("--name", String(optionalName))
+    }
+    importProcess.command = args
+    importProcess.running = true
+  }
+
+  function removeImportedTheme(theme) {
+    if (!theme || !theme.id || removeImportProcess.running) return
+    if (!theme.imported && theme.sourceType !== "imported") return
+    lastError = ""
+    // If active, switch safely to fallback first
+    if (committedTheme && (committedTheme.id === theme.id || committedTheme.displayName === theme.displayName)) {
+      var fb = Model.fallbackTheme(themes, "Adwaita")
+      if (fb) enqueueApply(fb, committedSize, "commit")
+    }
+    removeImportProcess.command = [helperPath, "remove-imported", "--id", theme.id]
+    removeImportProcess.running = true
+  }
+
   Process {
     id: stateDirProcess
     command: ["mkdir", "-p", root.stateDir]
@@ -205,10 +342,19 @@ Item {
       complete = true
       root.stateDirReady = exitCode === 0
       if (!root.stateDirReady) root.lastError = "Could not create the cursor settings directory"
-      else if (root._savePending) root.persistCommitted()
+      else if (root._savePending) root.persistState()
     }
   }
   property bool stateDirReady: false
+
+  FileView {
+    id: omarchyThemeFile
+    path: (Quickshell.env("HOME") || "") + "/.local/state/omarchy/current/theme.name"
+    watchChanges: true
+    printErrors: false
+    onLoaded: function(t) { root.onOmarchyThemeChanged(t) }
+    onFileChanged: function(t) { root.onOmarchyThemeChanged(t) }
+  }
 
   FileView {
     id: stateFile
@@ -297,6 +443,62 @@ Item {
     }
   }
 
+  Process {
+    id: chooseFileProcess
+    running: false
+    command: [root.helperPath, "choose-file"]
+    stdout: StdioCollector { id: chooseFileStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      var selected = String(chooseFileStdout.text || "").trim()
+      if (exitCode === 0 && selected.length > 0) {
+        root.importTheme(selected)
+      }
+    }
+  }
+
+  Process {
+    id: importProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: importStdout; waitForEnd: true }
+    stderr: StdioCollector { id: importStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var raw = String(importStdout.text || "").trim()
+      try {
+        var parsed = JSON.parse(raw)
+        if (parsed.ok && parsed.theme) {
+          root.statusText = parsed.alreadyImported ? "Already imported: " + parsed.theme.displayName : "Successfully imported " + parsed.theme.displayName
+          root.refresh(true)
+          // Automatically select/commit imported theme
+          var importedObj = Model.normalizedTheme(parsed.theme)
+          if (importedObj) {
+            root.commitTheme(importedObj)
+          }
+        } else {
+          root.lastError = parsed.error || "Failed to import cursor theme"
+          root.statusText = "Import failed"
+        }
+      } catch (e) {
+        root.lastError = root.elide(importStderr.text || raw || "Import failed")
+        root.statusText = "Import failed"
+      }
+    }
+  }
+
+  Process {
+    id: removeImportProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.statusText = "Imported theme removed"
+        root.refresh(true)
+      } else {
+        root.lastError = "Could not remove imported theme"
+      }
+    }
+  }
+
   Timer {
     id: previewTimer
     interval: 120
@@ -338,7 +540,7 @@ Item {
           root.committedSize = request.size
           root.previewTheme = null
           root.previewSize = 0
-          root.persistCommitted()
+          root.persistState()
           root.statusText = request.theme.displayName + " · " + request.size + " px"
         } else {
           root.previewTheme = null
