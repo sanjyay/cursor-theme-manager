@@ -65,6 +65,27 @@ Item {
 
   onManifestChanged: startupTimer.restart()
   Component.onCompleted: startupTimer.restart()
+  Component.onDestruction: {
+    var sourceRoot = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : (root.pluginRoot || "")
+    if (sourceRoot !== "") {
+      cleanupProcess.command = [sourceRoot + "/scripts/cursorctl", "unregister-app"]
+      cleanupProcess.running = true
+      resetDefaultsProcess.command = [sourceRoot + "/scripts/cursorctl", "reset-defaults"]
+      resetDefaultsProcess.running = true
+    }
+  }
+
+  Process {
+    id: cleanupProcess
+    running: false
+    command: []
+  }
+
+  Process {
+    id: resetDefaultsProcess
+    running: false
+    command: []
+  }
 
   Timer { id: startupTimer; interval: 25; repeat: false; onTriggered: root.start() }
 

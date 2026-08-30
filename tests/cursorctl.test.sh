@@ -95,4 +95,12 @@ fi
 [[ ! -e "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
 [[ ! -e "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg" ]]
 
+# Test reset-defaults
+PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" \
+  "$ROOT/scripts/cursorctl" reset-defaults
+[[ ! -e "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher" ]]
+[[ ! -e "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher" ]]
+[[ ! -e "$TEST_DIR/config/omarchy/cursor-switcher.json" ]]
+
 echo "cursorctl tests: ok"
+

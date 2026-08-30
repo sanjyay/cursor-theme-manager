@@ -43,8 +43,8 @@ for role, entry in spec["roles"].items():
     assert "Xcursor data" in output, (cursor, output)
     for alias in entry["aliases"]:
         alias_path = generated / "cursors" / alias
-        assert alias_path.is_symlink(), alias_path
-        assert alias_path.readlink() == Path(role)
+        assert alias_path.is_file(), alias_path
+        assert alias_path.read_bytes() == cursor.read_bytes()
 
 def decode(role, expected_hotspot, size=24):
     with tempfile.TemporaryDirectory() as temp:

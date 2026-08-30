@@ -96,7 +96,7 @@ def main():
             alias_path = cursors / alias
             if alias_path.exists() or alias_path.is_symlink():
                 continue
-            alias_path.symlink_to(role)
+            shutil.copy2(cursors / role, alias_path)
 
     (GENERATED / "index.theme").write_text(
         f"[Icon Theme]\nName={spec['displayName']}\nComment={spec.get('comment', 'The Banana Cursor by ful1e5')}\nInherits=Adwaita\n",

@@ -115,7 +115,7 @@ Item {
   FloatingWindow {
     id: window
     visible: false
-    title: "Cursor"
+    title: "Cursor Theme Switcher"
     color: Color.popups.background
     implicitWidth: Math.min(Style.space(620), 760)
     implicitHeight: Math.min(Style.space(540), 680)
@@ -146,7 +146,7 @@ Item {
 
         Text {
           id: title
-          text: "Cursor"
+          text: "Cursor Theme Switcher"
           color: Color.popups.text
           font.family: Style.font.family
           font.pixelSize: Style.font.title

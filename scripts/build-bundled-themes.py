@@ -160,7 +160,7 @@ def build_phinger():
             # XCursor alias symlink
             alias_path = gen_dir / "cursors" / alias
             if not alias_path.exists():
-                alias_path.symlink_to(name)
+                shutil.copy2(gen_dir / "cursors" / name, alias_path)
             # Hyprcursor alias copy/link
             alias_hlc = gen_dir / "hyprcursors" / f"{alias}.hlc"
             if not alias_hlc.exists():
@@ -192,7 +192,7 @@ def build_phinger():
     ]
     for src, dst in alias_pairs:
         if (gen_dir / "cursors" / dst).exists() and not (gen_dir / "cursors" / src).exists():
-            (gen_dir / "cursors" / src).symlink_to(dst)
+            shutil.copy2(gen_dir / "cursors" / dst, gen_dir / "cursors" / src)
         if (gen_dir / "hyprcursors" / f"{dst}.hlc").exists() and not (gen_dir / "hyprcursors" / f"{src}.hlc").exists():
             shutil.copy2(gen_dir / "hyprcursors" / f"{dst}.hlc", gen_dir / "hyprcursors" / f"{src}.hlc")
 
@@ -270,7 +270,7 @@ def build_oreo():
             if len(parts) == 2:
                 src, dst = parts[0], parts[1]
                 if (gen_dir / "cursors" / src).exists() and not (gen_dir / "cursors" / dst).exists():
-                    (gen_dir / "cursors" / dst).symlink_to(src)
+                    shutil.copy2(gen_dir / "cursors" / src, gen_dir / "cursors" / dst)
                 if (gen_dir / "hyprcursors" / f"{src}.hlc").exists() and not (gen_dir / "hyprcursors" / f"{dst}.hlc").exists():
                     shutil.copy2(gen_dir / "hyprcursors" / f"{src}.hlc", gen_dir / "hyprcursors" / f"{dst}.hlc")
 
@@ -289,7 +289,7 @@ def build_oreo():
     ]
     for src, dst in alias_pairs:
         if (gen_dir / "cursors" / dst).exists() and not (gen_dir / "cursors" / src).exists():
-            (gen_dir / "cursors" / src).symlink_to(dst)
+            shutil.copy2(gen_dir / "cursors" / dst, gen_dir / "cursors" / src)
         if (gen_dir / "hyprcursors" / f"{dst}.hlc").exists() and not (gen_dir / "hyprcursors" / f"{src}.hlc").exists():
             shutil.copy2(gen_dir / "hyprcursors" / f"{dst}.hlc", gen_dir / "hyprcursors" / f"{src}.hlc")
 
@@ -362,7 +362,7 @@ def build_volantes():
             if len(parts) == 2:
                 src, dst = parts[0], parts[1]
                 if (gen_dir / "cursors" / src).exists() and not (gen_dir / "cursors" / dst).exists():
-                    (gen_dir / "cursors" / dst).symlink_to(src)
+                    shutil.copy2(gen_dir / "cursors" / src, gen_dir / "cursors" / dst)
                 if (gen_dir / "hyprcursors" / f"{src}.hlc").exists() and not (gen_dir / "hyprcursors" / f"{dst}.hlc").exists():
                     shutil.copy2(gen_dir / "hyprcursors" / f"{src}.hlc", gen_dir / "hyprcursors" / f"{dst}.hlc")
 
@@ -381,7 +381,7 @@ def build_volantes():
     ]
     for src, dst in alias_pairs:
         if (gen_dir / "cursors" / dst).exists() and not (gen_dir / "cursors" / src).exists():
-            (gen_dir / "cursors" / src).symlink_to(dst)
+            shutil.copy2(gen_dir / "cursors" / dst, gen_dir / "cursors" / src)
         if (gen_dir / "hyprcursors" / f"{dst}.hlc").exists() and not (gen_dir / "hyprcursors" / f"{src}.hlc").exists():
             shutil.copy2(gen_dir / "hyprcursors" / f"{dst}.hlc", gen_dir / "hyprcursors" / f"{src}.hlc")
 
@@ -471,7 +471,7 @@ def build_capitaine():
             if len(parts) == 2:
                 dst, src = parts[0], parts[1]
                 if (gen_dir / "cursors" / src).exists() and not (gen_dir / "cursors" / dst).exists():
-                    (gen_dir / "cursors" / dst).symlink_to(src)
+                    shutil.copy2(gen_dir / "cursors" / src, gen_dir / "cursors" / dst)
                 if (gen_dir / "hyprcursors" / f"{src}.hlc").exists() and not (gen_dir / "hyprcursors" / f"{dst}.hlc").exists():
                     shutil.copy2(gen_dir / "hyprcursors" / f"{src}.hlc", gen_dir / "hyprcursors" / f"{dst}.hlc")
 
@@ -489,7 +489,7 @@ def build_capitaine():
     ]
     for src, dst in alias_pairs:
         if (gen_dir / "cursors" / dst).exists() and not (gen_dir / "cursors" / src).exists():
-            (gen_dir / "cursors" / src).symlink_to(dst)
+                shutil.copy2(gen_dir / "cursors" / dst, gen_dir / "cursors" / src)
         if (gen_dir / "hyprcursors" / f"{dst}.hlc").exists() and not (gen_dir / "hyprcursors" / f"{src}.hlc").exists():
             shutil.copy2(gen_dir / "hyprcursors" / f"{dst}.hlc", gen_dir / "hyprcursors" / f"{src}.hlc")
 

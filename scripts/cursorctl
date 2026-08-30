@@ -551,6 +551,56 @@ register_app() {
   fi
 }
 
+reset_defaults() {
+  local home=${HOME:?HOME is not set}
+  local config_home=${XDG_CONFIG_HOME:-$home/.config}
+  local default_theme="Adwaita"
+  local default_size="24"
+
+  # 1. Look up Omarchy / system default cursor theme if available
+  if [[ -f /usr/share/icons/default/index.theme ]]; then
+    local inherited
+    inherited=$(read_key /usr/share/icons/default/index.theme Inherits)
+    if valid_name "${inherited:-}"; then default_theme=$inherited; fi
+  fi
+
+  # 2. Reset live compositor cursor via hyprctl
+  if command -v hyprctl >/dev/null 2>&1; then
+    hyprctl setcursor "$default_theme" "$default_size" >/dev/null 2>&1 || true
+    hyprctl eval "hl.env(\"HYPRCURSOR_THEME\", \"$default_theme\")" >/dev/null 2>&1 || true
+    hyprctl eval "hl.env(\"HYPRCURSOR_SIZE\", \"$default_size\")" >/dev/null 2>&1 || true
+    hyprctl eval "hl.env(\"XCURSOR_THEME\", \"$default_theme\")" >/dev/null 2>&1 || true
+    hyprctl eval "hl.env(\"XCURSOR_SIZE\", \"$default_size\")" >/dev/null 2>&1 || true
+  fi
+
+  # 3. Reset GTK / GSettings cursor theme and size
+  if command -v gsettings >/dev/null 2>&1; then
+    gsettings set org.gnome.desktop.interface cursor-theme "$default_theme" 2>/dev/null || true
+    gsettings set org.gnome.desktop.interface cursor-size "$default_size" 2>/dev/null || true
+  fi
+
+  # 4. Reset systemd and dbus user environment
+  local -a assignments=(
+    "HYPRCURSOR_THEME=$default_theme"
+    "HYPRCURSOR_SIZE=$default_size"
+    "XCURSOR_THEME=$default_theme"
+    "XCURSOR_SIZE=$default_size"
+  )
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user set-environment "${assignments[@]}" >/dev/null 2>&1 || true
+  fi
+  if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment --systemd "${assignments[@]}" >/dev/null 2>&1 || true
+  fi
+
+  # 5. Clean up uwsm environment files created by cursor-switcher
+  rm -f -- "$config_home/uwsm/env.d/90-omarchy-cursor-switcher"
+  rm -f -- "$config_home/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
+
+  # 6. Clean up saved state
+  rm -f -- "$config_home/omarchy/cursor-switcher.json"
+}
+
 unregister_app() {
   local home=${HOME:?HOME is not set}
   local data_home=${XDG_DATA_HOME:-$home/.local/share}
@@ -565,6 +615,9 @@ unregister_app() {
   if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database -q "$app_dir" 2>/dev/null || true
   fi
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q "$data_home/icons/hicolor" 2>/dev/null || true
+  fi
 }
 
 case ${1:-} in
@@ -573,5 +626,6 @@ case ${1:-} in
   install-bundled) shift; install_bundled "$@" ;;
   register-app) shift; register_app "$@" ;;
   unregister-app) shift; unregister_app "$@" ;;
-  *) die "usage: $PROGRAM {discover|apply|install-bundled|register-app|unregister-app} ..." ;;
+  reset-defaults) shift; reset_defaults "$@" ;;
+  *) die "usage: $PROGRAM {discover|apply|install-bundled|register-app|unregister-app|reset-defaults} ..." ;;
 esac
