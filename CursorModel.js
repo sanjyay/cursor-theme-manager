@@ -5,13 +5,15 @@ var DefaultSize = 16
 
 var VisibleThemes = [
   "Banana",
-  "Adwaita",
   "Banana-Catppuccin-Mocha",
   "Banana-Green",
-  "Bibata-Catppuccin-Frappe",
-  "Bibata-Catppuccin-Latte",
+  "Adwaita",
   "Bibata-Catppuccin-Mocha",
-  "Yaru"
+  "Phinger",
+  "Oreo",
+  "Volantes",
+  "Nordzy",
+  "Capitaine"
 ]
 
 function safeString(value) {
@@ -60,6 +62,11 @@ function visibleThemeIndex(theme) {
   for (var i = 0; i < VisibleThemes.length; i++) {
     var target = VisibleThemes[i].toLowerCase()
     if (hypr === target || xcur === target || name === target) return i
+    if (target === "nordzy" && (hypr === "nordzy-cursors" || xcur === "nordzy-cursors" || name === "nordzy-cursors")) return i
+    if (target === "capitaine" && (hypr === "capitaine-cursors" || xcur === "capitaine-cursors" || name === "capitaine-cursors")) return i
+    if (target === "phinger" && (hypr === "phinger-cursors-dark" || xcur === "phinger-cursors-dark")) return i
+    if (target === "oreo" && (hypr === "oreo_black_cursors" || xcur === "oreo_black_cursors")) return i
+    if (target === "volantes" && (hypr === "volantes_cursors" || xcur === "volantes_cursors")) return i
   }
   return -1
 }
@@ -162,11 +169,14 @@ function stateDocument(theme, size) {
 }
 
 function findTheme(themes, wanted) {
-  if (!wanted) return null
-  var wantedHypr = safeString(wanted.hyprcursor).toLowerCase()
-  var wantedX = safeString(wanted.xcursor).toLowerCase()
+  if (!wanted || !Array.isArray(themes)) return null
+  var isStr = typeof wanted === "string"
+  var wantedName = (isStr ? wanted : safeString(wanted.displayName)).toLowerCase()
+  var wantedHypr = (isStr ? wanted : safeString(wanted.hyprcursor)).toLowerCase()
+  var wantedX = (isStr ? wanted : safeString(wanted.xcursor)).toLowerCase()
   for (var i = 0; i < themes.length; i++) {
     var theme = themes[i]
+    if (wantedName && theme.displayName.toLowerCase() === wantedName) return theme
     if (wantedHypr && theme.hyprcursor.toLowerCase() === wantedHypr) return theme
     if (wantedX && theme.xcursor.toLowerCase() === wantedX) return theme
   }

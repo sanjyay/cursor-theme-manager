@@ -1,4 +1,5 @@
-themes/omarchy-banana/.build/
+themes/*/.build/
+.build/
 __pycache__/
 *.pyc
 *.bak

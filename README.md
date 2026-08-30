@@ -87,22 +87,31 @@ Many applications cache their cursor theme. New applications inherit the updated
 
 UWSM sources these fragments at the next graphical login. It also updates the current systemd/D-Bus activation environment and the Quattro Lua environment immediately.
 
+## Bundled cursor themes
+
+Cursor Switcher serves as a native integration and selector layer for Hyprland and Linux desktop environments. The plugin bundles curated cursor families from independent open-source projects. Each cursor theme is distributed as an independent data component and retains its original license, copyright notices, and corresponding source material.
+
+Cursor Switcher does not claim ownership, original authorship, or endorsement of any third-party designs.
+
+| Theme | Upstream Project | Author / Creator | License | Local Directory |
+| :--- | :--- | :--- | :--- | :--- |
+| **Banana** | [ful1e5/banana-cursor](https://github.com/ful1e5/banana-cursor) | Abdulkaiz Khatri (`ful1e5`) | GPL-3.0 | [`themes/banana/`](themes/banana/) |
+| **Phinger** | [phisch/phinger-cursors](https://github.com/phisch/phinger-cursors) | Philipp Schaffrath (`phisch`) | CC BY-SA 4.0 | [`themes/phinger/`](themes/phinger/) |
+| **Oreo** | [varlesh/oreo-cursors](https://github.com/varlesh/oreo-cursors) | Alexey Varfolomeev (`varlesh`) | GPL-2.0 | [`themes/oreo/`](themes/oreo/) |
+| **Volantes** | [varlesh/volantes-cursors](https://github.com/varlesh/volantes-cursors) | Alexey Varfolomeev (`varlesh`) | GPL-2.0 | [`themes/volantes/`](themes/volantes/) |
+| **Nordzy** | [guillaumeboehm/Nordzy-cursors](https://github.com/guillaumeboehm/Nordzy-cursors) | Guillaume Boehm (`gboehm`) | GPL-3.0 | [`themes/nordzy/`](themes/nordzy/) |
+| **Capitaine** | [keeferrourke/capitaine-cursors](https://github.com/keeferrourke/capitaine-cursors) | Keefer Rourke (`keeferrourke`) | LGPL-3.0 | [`themes/capitaine/`](themes/capitaine/) |
+
+See [`THIRD_PARTY.md`](THIRD_PARTY.md) for full licensing architecture, audit records, and upstream commit provenance.
+
 ## Banana Cursor
 
 ![Banana cursor roles](docs/banana-preview.png)
 
 Banana contains 45 canonical roles and all standard Linux aliases: default/arrow, pointing hand (peeled banana), text, crosshair, cell, open hand / closed hand, move, wait, progress, not-allowed, copy, alias, help, context menu, zoom controls, and cardinal/diagonal resize directions.
 
-![Normal intact banana changing to its clickable peeled role](docs/banana-intact-to-peeled.png)
-
-The default pointer is an intact banana (`left_ptr`) with hotspot `(5, 5)` at 24 px (`[52, 50]` / 256).
-The clickable/pointer role is the peeled banana (`hand2`) with hotspot `(4, 4)` at 24 px (`[39, 45]` / 256).
-
-The intact/peeled change is native role switching: it uses no polling, timer, animation, mouse hook, or application integration.
-
-### Upstream Attribution & License
-
-The Banana cursor artwork is from the [banana-cursor](https://github.com/ful1e5/banana-cursor) project by Abdulkaiz Khatri ([ful1e5](https://github.com/ful1e5)) and is distributed under the GNU General Public License v3.0 (GPL-3.0). See [`themes/banana/upstream/LICENSE`](themes/banana/upstream/LICENSE) and [`ATTRIBUTION.md`](ATTRIBUTION.md) for full licensing information.
+The default pointer is an intact banana (`left_ptr`) with hotspot `(5, 5)` at 24 px.
+The clickable/pointer role is the peeled banana (`hand2`) with hotspot `(4, 4)` at 24 px.
 
 ## Building the assets
 

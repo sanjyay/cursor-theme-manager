@@ -4,6 +4,7 @@ ROOT=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd)
 cd "$ROOT"
 node tests/model.test.js
 tests/cursorctl.test.sh
+python3 tests/third_party_registry.test.py
 python3 tests/assets.test.py
 qmllint -I /usr/share/omarchy/shell Panel.qml CursorService.qml components/*.qml
 qmllint tests/manual-cursor-roles.qml

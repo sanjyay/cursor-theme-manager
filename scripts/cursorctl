@@ -147,10 +147,32 @@ discover() {
       [[ -n $formats ]] || continue
       path=$(readlink -f -- "$dir")
 
+      local script_dir
+      script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+      local bundled_preview=""
+
       if [[ $base == Banana || $base == Omarchy-Banana ]]; then
-        is_bundled=true
-        display="Banana"
-        subtitle="ful1e5"
+        is_bundled=true; display="Banana"; subtitle="ful1e5"
+        bundled_preview="$script_dir/../themes/banana/preview.svg"
+      elif [[ $base == Banana-Catppuccin-Mocha ]]; then
+        display="Banana-Catppuccin-Mocha"; subtitle="ful1e5"
+      elif [[ $base == Banana-Green ]]; then
+        display="Banana-Green"; subtitle="ful1e5"
+      elif [[ $base == Phinger || $base == phinger-cursors-dark || $base == phinger ]]; then
+        is_bundled=true; display="Phinger"; subtitle="phisch"
+        bundled_preview="$script_dir/../themes/phinger/preview.svg"
+      elif [[ $base == Oreo || $base == oreo_black_cursors || $base == oreo ]]; then
+        is_bundled=true; display="Oreo"; subtitle="varlesh"
+        bundled_preview="$script_dir/../themes/oreo/preview.svg"
+      elif [[ $base == Volantes || $base == volantes_cursors || $base == volantes ]]; then
+        is_bundled=true; display="Volantes"; subtitle="varlesh"
+        bundled_preview="$script_dir/../themes/volantes/preview.svg"
+      elif [[ $base == Nordzy || $base == Nordzy-cursors || $base == nordzy ]]; then
+        is_bundled=true; display="Nordzy"; subtitle="gboehm"
+        bundled_preview="$script_dir/../themes/nordzy/preview.svg"
+      elif [[ $base == Capitaine || $base == capitaine-cursors || $base == capitaine ]]; then
+        is_bundled=true; display="Capitaine"; subtitle="Keefer Rourke"
+        bundled_preview="$script_dir/../themes/capitaine/preview.svg"
       fi
 
       local theme_preview
@@ -395,19 +417,11 @@ apply_theme() {
   fi
 }
 
-install_bundled() {
-  local source="" target="" version=""
-  while (($#)); do
-    case $1 in
-      --source) source=${2:-}; shift 2 ;;
-      --target) target=${2:-}; shift 2 ;;
-      --version) version=${2:-}; shift 2 ;;
-      *) die "unknown install argument: $1" ;;
-    esac
-  done
-  [[ -d $source && -f $source/manifest.hl && -f $source/index.theme ]] || die "bundled theme is incomplete"
+install_single_theme() {
+  local source=$1 target=$2 version=$3 force_error=${4:-true}
+  [[ -d $source && -f $source/manifest.hl && -f $source/index.theme ]] || die "bundled theme is incomplete: $source"
   local target_base=${target##*/}
-  [[ $target_base == Banana || $target_base == Omarchy-Banana ]] || die "refusing unexpected bundled theme target: $target"
+  valid_name "$target_base" || die "refusing invalid theme target: $target"
 
   local link link_target
   while IFS= read -r -d '' link; do
@@ -424,22 +438,64 @@ install_bundled() {
   fi
 
   if [[ -e $target && ! -f $target/$marker ]]; then
-    die "the target exists and is not owned by this plugin: $target"
+    if [[ $force_error == true ]]; then
+      die "the target exists and is not owned by this plugin: $target"
+    else
+      log "target exists and is not owned by this plugin; preserving external theme: $target"
+      return 0
+    fi
   fi
 
   if [[ -f $target/$marker ]] && [[ $(<"$target/$marker") == "$version" ]]; then return 0; fi
-  temp=$(mktemp -d --tmpdir="$parent" .Banana.install.XXXXXX)
-  trap 'rm -rf -- "$temp"' EXIT
+  temp=$(mktemp -d --tmpdir="$parent" .install.XXXXXX)
   cp -a -- "$source"/. "$temp"/
   printf '%s\n' "$version" > "$temp/$marker"
   if [[ -e $target ]]; then
-    local old="$parent/.Banana.old.$$"
+    local old="$parent/.old.$target_base.$$"
     mv -- "$target" "$old"
-    if mv -- "$temp" "$target"; then rm -rf -- "$old"; else mv -- "$old" "$target"; die "atomic theme replacement failed"; fi
+    if mv -- "$temp" "$target"; then rm -rf -- "$old"; else mv -- "$old" "$target"; die "atomic theme replacement failed: $target"; fi
   else
     mv -- "$temp" "$target"
   fi
-  trap - EXIT
+}
+
+install_bundled() {
+  local source="" target="" version="" catalog="" themes_dir="" home=${HOME:?HOME is not set}
+  while (($#)); do
+    case $1 in
+      --source) source=${2:-}; shift 2 ;;
+      --target) target=${2:-}; shift 2 ;;
+      --version) version=${2:-}; shift 2 ;;
+      --catalog) catalog=${2:-}; shift 2 ;;
+      --themes-dir) themes_dir=${2:-}; shift 2 ;;
+      *) die "unknown install argument: $1" ;;
+    esac
+  done
+
+  local script_dir
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  [[ -n $themes_dir ]] || themes_dir="$script_dir/../themes"
+  local icons_parent="${XDG_DATA_HOME:-$home/.local/share}/icons"
+
+  if [[ -n $source && -n $target ]]; then
+    install_single_theme "$source" "$target" "${version:-1.0}" true
+    return 0
+  fi
+
+  # Install all bundled themes found in themes/
+  if [[ -d $themes_dir ]]; then
+    local tdir gdir sdir sbase
+    for tdir in "$themes_dir"/*; do
+      [[ -d $tdir ]] || continue
+      gdir="$tdir/generated"
+      [[ -d $gdir ]] || continue
+      for sdir in "$gdir"/*; do
+        [[ -d $sdir ]] || continue
+        sbase=${sdir##*/}
+        install_single_theme "$sdir" "$icons_parent/$sbase" "${version:-1.0}" false
+      done
+    done
+  fi
 }
 
 register_app() {

@@ -1,0 +1,18 @@
+{
+  "id": "nordzy",
+  "displayName": "Nordzy",
+  "author": "gboehm",
+  "fullName": "Guillaume Boehm",
+  "email": "guillaumeboehm.dev@gmail.com",
+  "license": "GPL-3.0-only",
+  "source": "https://github.com/guillaumeboehm/Nordzy-cursors",
+  "canonicalGitLab": "https://gitlab.com/gboehm/Nordzy-cursors",
+  "commit": "c7fc485e9e4fd974c4f4ff9f5f14610fa7835e7b",
+  "xcursor": "Nordzy-cursors",
+  "hyprcursor": "Nordzy-cursors",
+  "version": "1.0",
+  "preview": "preview.svg",
+  "bundled": true,
+  "variant": "Nordzy-cursors (Dark Nord Palette)",
+  "modifications": "Integrated native upstream Hyprcursor and XCursor packages directly without modification."
+}

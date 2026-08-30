@@ -59,8 +59,7 @@ Item {
     _started = true
     stateDirProcess.running = true
     installProcess.command = [sourceRoot + "/scripts/cursorctl", "install-bundled",
-      "--source", bananaPackage,
-      "--target", installTarget, "--version", String(manifest.version || "1")]
+      "--themes-dir", sourceRoot + "/themes", "--version", String(manifest.version || "1")]
     installProcess.running = true
   }
 
@@ -75,7 +74,7 @@ Item {
     scanning = true
     _discoverOutput = ""
     _discoverError = ""
-    discoverProcess.command = [helperPath, "discover", bananaPreview]
+    discoverProcess.command = [helperPath, "discover"]
     discoverProcess.running = true
   }
 

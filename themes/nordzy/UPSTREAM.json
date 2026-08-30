@@ -1,0 +1,8 @@
+{
+  "name": "Nordzy",
+  "upstream": "https://github.com/guillaumeboehm/Nordzy-cursors",
+  "commit": "c7fc485e9e4fd974c4f4ff9f5f14610fa7835e7b",
+  "license": "GPL-3.0-only",
+  "author": "Guillaume Boehm <guillaumeboehm.dev@gmail.com>",
+  "modifiedByCursorSwitcher": true
+}

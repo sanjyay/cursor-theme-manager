@@ -72,52 +72,55 @@ assert.strictEqual(Model.canDecreaseSize(256), true)
 // VisibleThemes allowlist validation
 const expectedVisible = [
   "Banana",
-  "Adwaita",
   "Banana-Catppuccin-Mocha",
   "Banana-Green",
-  "Bibata-Catppuccin-Frappe",
-  "Bibata-Catppuccin-Latte",
+  "Adwaita",
   "Bibata-Catppuccin-Mocha",
-  "Yaru"
+  "Phinger",
+  "Oreo",
+  "Volantes",
+  "Nordzy",
+  "Capitaine"
 ]
 assert.deepStrictEqual(Array.from(Model.VisibleThemes), expectedVisible)
 
 const mockDiscovered = [
   { displayName: "Banana", hyprcursor: "Banana", xcursor: "Banana", formats: ["hyprcursor", "xcursor"], bundled: true, subtitle: "ful1e5" },
   { displayName: "Banana-Blue", hyprcursor: "", xcursor: "Banana-Blue", formats: ["xcursor"] },
-  { displayName: "Banana-Catppuccin-Mocha", hyprcursor: "", xcursor: "Banana-Catppuccin-Mocha", formats: ["xcursor"] },
-  { displayName: "Banana-Dracula", hyprcursor: "", xcursor: "Banana-Dracula", formats: ["xcursor"] },
-  { displayName: "Banana-Green", hyprcursor: "", xcursor: "Banana-Green", formats: ["xcursor"] },
-  { displayName: "Banana-GruvBox", hyprcursor: "", xcursor: "Banana-GruvBox", formats: ["xcursor"] },
-  { displayName: "Banana-Hacker", hyprcursor: "", xcursor: "Banana-Hacker", formats: ["xcursor"] },
-  { displayName: "Banana-Red", hyprcursor: "", xcursor: "Banana-Red", formats: ["xcursor"] },
-  { displayName: "Banana-Tokyo-Night-Storm", hyprcursor: "", xcursor: "Banana-Tokyo-Night-Storm", formats: ["xcursor"] },
+  { displayName: "Banana-Catppuccin-Mocha", hyprcursor: "", xcursor: "Banana-Catppuccin-Mocha", formats: ["xcursor"], subtitle: "ful1e5" },
+  { displayName: "Banana-Green", hyprcursor: "", xcursor: "Banana-Green", formats: ["xcursor"], subtitle: "ful1e5" },
   { displayName: "Adwaita", hyprcursor: "", xcursor: "Adwaita", formats: ["xcursor"] },
   { displayName: "Bibata-Catppuccin-Frappe", hyprcursor: "", xcursor: "Bibata-Catppuccin-Frappe", formats: ["xcursor"] },
   { displayName: "Bibata-Catppuccin-Latte", hyprcursor: "", xcursor: "Bibata-Catppuccin-Latte", formats: ["xcursor"] },
-  { displayName: "Bibata-Catppuccin-Macchiato", hyprcursor: "", xcursor: "Bibata-Catppuccin-Macchiato", formats: ["xcursor"] },
   { displayName: "Bibata-Catppuccin-Mocha", hyprcursor: "", xcursor: "Bibata-Catppuccin-Mocha", formats: ["xcursor"] },
+  { displayName: "Phinger", hyprcursor: "Phinger", xcursor: "Phinger", formats: ["hyprcursor", "xcursor"], bundled: true, subtitle: "phisch" },
+  { displayName: "Oreo", hyprcursor: "Oreo", xcursor: "Oreo", formats: ["hyprcursor", "xcursor"], bundled: true, subtitle: "varlesh" },
+  { displayName: "Volantes", hyprcursor: "Volantes", xcursor: "Volantes", formats: ["hyprcursor", "xcursor"], bundled: true, subtitle: "varlesh" },
+  { displayName: "Nordzy", hyprcursor: "Nordzy-cursors", xcursor: "Nordzy-cursors", formats: ["hyprcursor", "xcursor"], bundled: true, subtitle: "gboehm" },
+  { displayName: "Capitaine", hyprcursor: "Capitaine", xcursor: "Capitaine", formats: ["hyprcursor", "xcursor"], bundled: true, subtitle: "Keefer Rourke" },
   { displayName: "Yaru", hyprcursor: "", xcursor: "Yaru", formats: ["xcursor"] },
   { displayName: "OtherUnknown", hyprcursor: "OtherUnknown", formats: ["hyprcursor"] }
 ]
 
 const filtered = Model.normalizeThemes(mockDiscovered)
-// 1. Exactly 8 themes are exposed
-assert.strictEqual(filtered.length, 8)
+// 1. Exactly 10 themes are exposed
+assert.strictEqual(filtered.length, 10)
 // 2. Ordering is exact
 assert.deepStrictEqual(Array.from(filtered.map(t => t.displayName)), expectedVisible)
 // 3. Unlisted themes are filtered out
 assert.strictEqual(filtered.some(t => t.displayName === "Banana-Dracula"), false)
 assert.strictEqual(filtered.some(t => t.displayName === "Banana-Blue"), false)
-assert.strictEqual(filtered.some(t => t.displayName === "Bibata-Catppuccin-Macchiato"), false)
+assert.strictEqual(filtered.some(t => t.displayName === "Yaru"), false)
 assert.strictEqual(filtered.some(t => t.displayName === "OtherUnknown"), false)
 
 // 4. Fallback handling for persisted hidden/unlisted theme
 assert.strictEqual(Model.findTheme(filtered, { displayName: "Banana-Dracula", xcursor: "Banana-Dracula" }), null)
 assert.strictEqual(Model.fallbackTheme(filtered, "Banana-Dracula").displayName, "Banana")
-assert.strictEqual(Model.fallbackTheme(filtered, "Yaru").displayName, "Yaru")
+assert.strictEqual(Model.fallbackTheme(filtered, "Banana-Green").displayName, "Banana-Green")
+assert.strictEqual(Model.fallbackTheme(filtered, "Banana-Catppuccin-Mocha").displayName, "Banana-Catppuccin-Mocha")
+assert.strictEqual(Model.fallbackTheme(filtered, "Nordzy").displayName, "Nordzy")
 
-// 5. Grid navigation with 8 items across 3 columns
+// 5. Grid navigation with 10 items across 3 columns
 const columns = 3
 function stepGrid(currentIndex, dx, dy) {
   let next = currentIndex
@@ -125,16 +128,18 @@ function stepGrid(currentIndex, dx, dy) {
   else next += dx
   return Math.max(0, Math.min(filtered.length - 1, next))
 }
-// Row 0: 0 (Banana), 1 (Adwaita), 2 (Banana-Catppuccin-Mocha)
-// Row 1: 3 (Banana-Green), 4 (Bibata-Frappe), 5 (Bibata-Latte)
-// Row 2: 6 (Bibata-Mocha), 7 (Yaru)
-assert.strictEqual(stepGrid(2, 0, 1), 5) // down from 2 -> 5
-assert.strictEqual(stepGrid(5, 0, 1), 7) // down from 5 -> clamps to 7 (Yaru)
-assert.strictEqual(stepGrid(7, 0, 1), 7) // down from 7 -> clamps to 7
-assert.strictEqual(stepGrid(7, 1, 0), 7) // right from 7 -> clamps to 7
-assert.strictEqual(stepGrid(7, -1, 0), 6) // left from 7 -> 6 (Bibata-Mocha)
-assert.strictEqual(stepGrid(6, 0, -1), 3) // up from 6 -> 3 (Banana-Green)
-assert.strictEqual(stepGrid(7, 0, -1), 4) // up from 7 -> 4 (Bibata-Frappe)
+// Row 0: 0 (Banana), 1 (Banana-Catppuccin-Mocha), 2 (Banana-Green)
+// Row 1: 3 (Adwaita), 4 (Bibata-Catppuccin-Mocha), 5 (Phinger)
+// Row 2: 6 (Oreo), 7 (Volantes), 8 (Nordzy)
+// Row 3: 9 (Capitaine)
+assert.strictEqual(stepGrid(2, 0, 1), 5) // down from 2 (Banana-Green) -> 5 (Phinger)
+assert.strictEqual(stepGrid(5, 0, 1), 8) // down from 5 (Phinger) -> 8 (Nordzy)
+assert.strictEqual(stepGrid(8, 0, 1), 9) // down from 8 (Nordzy) -> clamps to 9 (Capitaine)
+assert.strictEqual(stepGrid(9, 0, 1), 9) // down from 9 -> clamps to 9
+assert.strictEqual(stepGrid(9, 1, 0), 9) // right from 9 -> clamps to 9
+assert.strictEqual(stepGrid(9, -1, 0), 8) // left from 9 -> 8 (Nordzy)
+assert.strictEqual(stepGrid(8, 0, -1), 5) // up from 8 -> 5 (Phinger)
+assert.strictEqual(stepGrid(9, 0, -1), 6) // up from 9 -> 6 (Oreo)
 
 // State parsing and persistence
 const bananaTheme = filtered[0]

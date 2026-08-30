@@ -69,10 +69,15 @@ Item {
   function applyTheme(arg) {
     try {
       var requested = JSON.parse(String(arg || "{}"))
-      var theme = null
-      for (var i = 0; service && i < service.themes.length; i++) {
-        var candidate = service.themes[i]
-        if (candidate.hyprcursor === requested.theme || candidate.xcursor === requested.theme) { theme = candidate; break }
+      var theme = service ? Model.findTheme(service.themes, requested.theme || requested) : null
+      if (!theme && service) {
+        for (var i = 0; i < service.themes.length; i++) {
+          var candidate = service.themes[i]
+          if (candidate.hyprcursor === requested.theme || candidate.xcursor === requested.theme || candidate.displayName === requested.theme) {
+            theme = candidate
+            break
+          }
+        }
       }
       if (!theme) return "unknown theme"
       service.enqueueApply(theme, requested.size || service.committedSize, "commit")
@@ -86,10 +91,15 @@ Item {
       var requested = JSON.parse(String(arg || "{}"))
       var theme = service.committedTheme
       if (requested.theme) {
-        theme = null
-        for (var i = 0; i < service.themes.length; i++) {
-          var candidate = service.themes[i]
-          if (candidate.hyprcursor === requested.theme || candidate.xcursor === requested.theme) { theme = candidate; break }
+        theme = service ? Model.findTheme(service.themes, requested.theme) : null
+        if (!theme && service) {
+          for (var i = 0; i < service.themes.length; i++) {
+            var candidate = service.themes[i]
+            if (candidate.hyprcursor === requested.theme || candidate.xcursor === requested.theme || candidate.displayName === requested.theme) {
+              theme = candidate
+              break
+            }
+          }
         }
       }
       if (!theme) return "unknown theme"
