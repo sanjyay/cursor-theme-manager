@@ -84,9 +84,9 @@ const available = [
 let r = Mappings.resolveMappedTheme("Catppuccin Mocha", {}, available)
 assert.strictEqual(r.theme.displayName, "Bibata-Catppuccin-Mocha")
 
-// Tokyo Night -> Tokyonight-Dark
+// Tokyo Night -> Nordzy (or mapped default)
 r = Mappings.resolveMappedTheme("Tokyo Night", {}, available)
-assert.strictEqual(r.theme.displayName, "Tokyonight-Dark")
+assert.strictEqual(r.theme.displayName, "Nordzy")
 
 // Unmapped -> Adwaita fallback
 r = Mappings.resolveMappedTheme("some-custom-omarchy-theme", {}, available)

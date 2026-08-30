@@ -215,7 +215,6 @@ function parseState(text) {
 }
 
 function stateDocument(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
-  // Support stateDocument(stateObject) or stateDocument(theme, size) or stateDocument(mode, manualTheme, manualSize, followSize, followMappings, importedThemes, activeTheme)
   var doc = { version: 2 }
   if (typeof arg1 === "object" && arg1 !== null && !arg1.displayName && !arg1.hyprcursor && !arg1.xcursor) {
     var s = arg1
@@ -264,7 +263,6 @@ function stateDocument(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
     }
     doc.importedThemes = importedThemes
   } else {
-    // Backward-compatible stateDocument(theme, size)
     var theme = arg1
     var size = validSize(arg2, DefaultSize)
     doc.mode = "manual"
@@ -311,7 +309,6 @@ function fallbackTheme(themes, currentXcursor) {
       }
     }
   }
-  // Try Banana first
   for (var k = 0; k < themes.length; k++) {
     if (themes[k].displayName.toLowerCase() === "banana" ||
         themes[k].hyprcursor.toLowerCase() === "banana" ||

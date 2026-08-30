@@ -98,8 +98,9 @@ const mockDiscovered = [
   { displayName: "Volantes", hyprcursor: "Volantes", xcursor: "Volantes", formats: ["hyprcursor", "xcursor"], bundled: true, subtitle: "varlesh" },
   { displayName: "Nordzy", hyprcursor: "Nordzy-cursors", xcursor: "Nordzy-cursors", formats: ["hyprcursor", "xcursor"], bundled: true, subtitle: "gboehm" },
   { displayName: "Capitaine", hyprcursor: "Capitaine", xcursor: "Capitaine", formats: ["hyprcursor", "xcursor"], bundled: true, subtitle: "Keefer Rourke" },
+  { displayName: "Banana-Dracula", hyprcursor: "", xcursor: "Banana-Dracula", formats: ["xcursor"] },
   { displayName: "Yaru", hyprcursor: "", xcursor: "Yaru", formats: ["xcursor"] },
-  { displayName: "OtherUnknown", hyprcursor: "OtherUnknown", formats: ["hyprcursor"] }
+  { displayName: "OtherUnknown", hyprcursor: "", xcursor: "OtherUnknown", formats: ["xcursor"] }
 ]
 
 const filtered = Model.normalizeThemes(mockDiscovered)
@@ -187,6 +188,7 @@ assert.strictEqual(normalizedWithImported.some(t => t.displayName === "My Custom
 const customTheme = normalizedWithImported.find(t => t.displayName === "My Custom Cursor")
 assert.strictEqual(customTheme.imported, true)
 assert.strictEqual(customTheme.sourceType, "imported")
+// Imported themes appear after curated themes
 assert.strictEqual(normalizedWithImported.indexOf(customTheme) >= filtered.length, true)
 
 console.log("model tests: ok")

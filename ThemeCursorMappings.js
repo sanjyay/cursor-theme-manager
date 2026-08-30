@@ -3,21 +3,21 @@
 // Canonical mapping model between Omarchy desktop themes and cursor themes
 var DefaultFallbackTheme = "Adwaita"
 
-// Initial sensible defaults for Omarchy themes installed on this system
+// Initial sensible defaults for Omarchy themes mapped to guaranteed available curated/bundled cursors
 var DefaultMappings = {
   // Catppuccin variants
   "catppuccin": "Bibata-Catppuccin-Mocha",
   "catppuccin-mocha": "Bibata-Catppuccin-Mocha",
-  "catppuccin-latte": "Bibata-Catppuccin-Latte",
-  "catppuccin-frappe": "Bibata-Catppuccin-Frappe",
-  "catppuccin-macchiato": "Bibata-Catppuccin-Macchiato",
+  "catppuccin-latte": "Banana",
+  "catppuccin-frappe": "Bibata-Catppuccin-Mocha",
+  "catppuccin-macchiato": "Bibata-Catppuccin-Mocha",
 
   // Tokyo Night variants
-  "tokyo-night": "Tokyonight-Dark",
-  "tokyo-night-dark": "Tokyonight-Dark",
-  "tokyo-night-light": "Tokyonight-Light",
-  "tokyo-night-moon": "Tokyonight-Moon",
-  "tokyo-night-storm": "Tokyonight-Dark",
+  "tokyo-night": "Nordzy",
+  "tokyo-night-dark": "Nordzy",
+  "tokyo-night-light": "Adwaita",
+  "tokyo-night-moon": "Nordzy",
+  "tokyo-night-storm": "Nordzy",
 
   // Nord & Arctic
   "nord": "Nordzy",
@@ -52,11 +52,8 @@ var DefaultMappings = {
 
 function normalizeOmarchyThemeId(rawName) {
   var str = String(rawName || "").trim().toLowerCase()
-  // Replace spaces and underscores with hyphens
   str = str.replace(/[\s_]+/g, "-")
-  // Strip any non-alphanumeric except hyphen
   str = str.replace(/[^a-z0-9\-]/g, "")
-  // Remove duplicate hyphens
   str = str.replace(/-+/g, "-")
   return str
 }
@@ -64,7 +61,6 @@ function normalizeOmarchyThemeId(rawName) {
 function formatOmarchyThemeName(rawName) {
   var str = String(rawName || "").trim()
   if (!str) return "Unknown"
-  // Format title case (e.g. catppuccin-mocha -> Catppuccin Mocha)
   var parts = str.split(/[\s_\-]+/)
   var formatted = []
   for (var i = 0; i < parts.length; i++) {
