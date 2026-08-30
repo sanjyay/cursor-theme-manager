@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons
 import "CursorModel.js" as Model
 
 Item {
@@ -68,23 +69,9 @@ Item {
   Component.onDestruction: {
     var sourceRoot = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : (root.pluginRoot || "")
     if (sourceRoot !== "") {
-      cleanupProcess.command = [sourceRoot + "/scripts/cursorctl", "unregister-app"]
-      cleanupProcess.running = true
-      resetDefaultsProcess.command = [sourceRoot + "/scripts/cursorctl", "reset-defaults"]
-      resetDefaultsProcess.running = true
+      Util.execDetached(Util.shellQuote(sourceRoot + "/scripts/cursorctl") + " unregister-app")
+      Util.execDetached(Util.shellQuote(sourceRoot + "/scripts/cursorctl") + " reset-defaults")
     }
-  }
-
-  Process {
-    id: cleanupProcess
-    running: false
-    command: []
-  }
-
-  Process {
-    id: resetDefaultsProcess
-    running: false
-    command: []
   }
 
   Timer { id: startupTimer; interval: 25; repeat: false; onTriggered: root.start() }
