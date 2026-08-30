@@ -1,0 +1,8 @@
+resize_algorithm = bilinear
+hotspot_x = 0.500000
+hotspot_y = 0.500000
+define_override = dot_box_mask
+define_override = draped_box
+define_override = icon
+define_override = target
+define_size = 256, image.svg

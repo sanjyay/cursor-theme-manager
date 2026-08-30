@@ -61,7 +61,7 @@ has_hyprcursor() {
 
 discover() {
   local bundled_preview=${1:-} home=${HOME:?HOME is not set} root dir base
-  local first=1 display hypr xcursor formats path manifest_name index_name is_bundled
+  local first=1 display hypr xcursor formats path manifest_name index_name is_bundled subtitle
   local -a roots=("${XDG_DATA_HOME:-$home/.local/share}/icons" "$home/.icons")
   IFS=: read -ra system_roots <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
   for root in "${system_roots[@]}"; do roots+=("$root/icons"); done
@@ -74,7 +74,11 @@ discover() {
       [[ -d $dir ]] || continue
       safe_theme_dir "$root" "$dir" || continue
       base=${dir##*/}; valid_name "$base" || continue
-      hypr=""; xcursor=""; formats=""; display=""; is_bundled=false
+
+      # Skip internal generated converted themes in discovery list
+      [[ $base == CursorSwitcher-XCursor-* ]] && continue
+
+      hypr=""; xcursor=""; formats=""; display=""; is_bundled=false; subtitle=""
       if has_hyprcursor "$dir"; then
         manifest_name=$(read_key "$dir/manifest.hl" name)
         [[ -n $manifest_name ]] || manifest_name=$(read_key "$dir/manifest.toml" name)
@@ -91,10 +95,17 @@ discover() {
       fi
       [[ -n $formats ]] || continue
       path=$(readlink -f -- "$dir")
-      [[ $base == Omarchy-Banana ]] && is_bundled=true
+
+      if [[ $base == Banana || $base == Omarchy-Banana ]]; then
+        is_bundled=true
+        display="Banana"
+        subtitle="ful1e5"
+      fi
+
       (( first )) || printf ','
       first=0
       printf '{"displayName":'; json_string "$display"
+      printf ',"subtitle":'; json_string "$subtitle"
       printf ',"hyprcursor":'; json_string "$hypr"
       printf ',"xcursor":'; json_string "$xcursor"
       printf ',"path":'; json_string "$path"
@@ -109,9 +120,6 @@ discover() {
     current=$(gsettings get org.gnome.desktop.interface cursor-theme 2>/dev/null || true)
     current=${current#\'}; current=${current%\'}
   fi
-  # GNOME's literal "default" is an alias, not a selectable cursor package.
-  # Resolve only the packaged system default metadata; do not follow a user
-  # theme symlink or inspect cursor artwork to guess.
   if [[ $current == default && -f /usr/share/icons/default/index.theme && ! -L /usr/share/icons/default/index.theme ]]; then
     local inherited
     inherited=$(read_key /usr/share/icons/default/index.theme Inherits)
@@ -121,61 +129,194 @@ discover() {
   printf '}\n'
 }
 
+ensure_hyprcursor() {
+  local hypr=$1 xcursor=$2 theme_path=${3:-} home=${HOME:?HOME is not set}
+
+  # If native Hyprcursor is provided, check if it actually exists
+  if [[ $hypr != - && -n $hypr ]]; then
+    local -a check_roots=("${XDG_DATA_HOME:-$home/.local/share}/icons" "$home/.icons")
+    IFS=: read -ra sys_roots <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+    for r in "${sys_roots[@]}"; do check_roots+=("$r/icons"); done
+    for r in "${check_roots[@]}"; do
+      [[ -d $r ]] || continue
+      for d in "$r"/*; do
+        [[ -d $d ]] || continue
+        if has_hyprcursor "$d"; then
+          local mname
+          mname=$(read_key "$d/manifest.hl" name)
+          [[ -n $mname ]] || mname=$(read_key "$d/manifest.toml" name)
+          if [[ $mname == "$hypr" || ${d##*/} == "$hypr" ]]; then
+            printf '%s' "$hypr"
+            return 0
+          fi
+        fi
+      done
+    done
+  fi
+
+  [[ $xcursor != - && -n $xcursor ]] || die "no cursor theme specified"
+
+  # Find XCursor theme directory
+  local xdir=""
+  if [[ -n $theme_path && -d $theme_path/cursors ]]; then
+    xdir=$theme_path
+  else
+    local -a roots=("${XDG_DATA_HOME:-$home/.local/share}/icons" "$home/.icons")
+    IFS=: read -ra system_roots <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+    for root in "${system_roots[@]}"; do roots+=("$root/icons"); done
+    for root in "${roots[@]}"; do
+      local candidate="$root/$xcursor"
+      if [[ -d $candidate/cursors ]]; then
+        xdir=$candidate
+        break
+      fi
+    done
+  fi
+
+  [[ -n $xdir && -d $xdir/cursors ]] || die "XCursor directory not found for theme '$xcursor'"
+
+  # Compute content hash
+  local sig
+  if command -v sha256sum >/dev/null 2>&1; then
+    sig=$(find "$xdir" -type f -exec stat -c "%n %s %Y" {} + 2>/dev/null | sha256sum | awk '{print $1}')
+  else
+    sig=$(find "$xdir" -type f -exec stat -c "%n %s %Y" {} + 2>/dev/null | cksum | awk '{print $1}')
+  fi
+  local hash_short=${sig:0:12}
+  local converted_name="CursorSwitcher-XCursor-${xcursor}-${hash_short}"
+  local target_parent="${XDG_DATA_HOME:-$home/.local/share}/icons"
+  local target_dir="$target_parent/$converted_name"
+
+  if [[ -d $target_dir && -f $target_dir/manifest.hl && -d $target_dir/hyprcursors ]]; then
+    printf '%s' "$converted_name"
+    return 0
+  fi
+
+  command -v hyprcursor-util >/dev/null 2>&1 || die "hyprcursor-util is required to convert XCursor theme '$xcursor'"
+
+  local temp_dir
+  temp_dir=$(mktemp -d -t .cs-convert.XXXXXX)
+  local clean_source="$temp_dir/clean_source"
+  local extracted_dir="$temp_dir/extracted"
+  local created_dir="$temp_dir/created"
+  mkdir -p "$clean_source/cursors" "$extracted_dir" "$created_dir" "$target_parent"
+
+  if [[ -f $xdir/index.theme ]]; then
+    cp -- "$xdir/index.theme" "$clean_source/"
+  fi
+
+  local item item_base item_target
+  for item in "$xdir/cursors"/*; do
+    [[ -e $item || -L $item ]] || continue
+    item_base=${item##*/}
+    [[ $item_base == *.cur || $item_base == *.ani ]] && continue
+    if [[ -L $item ]]; then
+      item_target=$(readlink -- "$item") || continue
+      [[ $item_target == *.cur || $item_target == *.ani ]] && continue
+      ln -s -- "$item_target" "$clean_source/cursors/$item_base"
+    elif [[ -f $item ]]; then
+      cp -a -- "$item" "$clean_source/cursors/"
+    fi
+  done
+
+  if ! hyprcursor-util --extract "$clean_source" --output "$extracted_dir" >/dev/null 2>&1; then
+    rm -rf -- "$temp_dir"
+    die "failed to extract XCursor theme '$xcursor'"
+  fi
+
+  local extracted_theme
+  extracted_theme=$(find "$extracted_dir" -mindepth 1 -maxdepth 1 -type d -name "extracted_*" | head -n1)
+  if [[ -z $extracted_theme || ! -d $extracted_theme ]]; then
+    rm -rf -- "$temp_dir"
+    die "hyprcursor-util extract produced no output for '$xcursor'"
+  fi
+
+  cat <<EOF > "$extracted_theme/manifest.hl"
+name = $converted_name
+description = Automatically converted from $xcursor by Cursor Switcher
+version = 1.0
+cursors_directory = hyprcursors
+EOF
+
+  if ! hyprcursor-util --create "$extracted_theme" --output "$created_dir" >/dev/null 2>&1; then
+    rm -rf -- "$temp_dir"
+    die "failed to create Hyprcursor package for '$xcursor'"
+  fi
+
+  local created_theme
+  created_theme=$(find "$created_dir" -mindepth 1 -maxdepth 1 -type d -name "theme_*" | head -n1)
+  if [[ -z $created_theme || ! -d $created_theme ]]; then
+    rm -rf -- "$temp_dir"
+    die "hyprcursor-util create produced no output for '$xcursor'"
+  fi
+
+  local temp_install
+  temp_install=$(mktemp -d --tmpdir="$target_parent" .convert.XXXXXX)
+  cp -a "$created_theme"/. "$temp_install"/
+  printf '%s\n' "1.0" > "$temp_install/.omarchy-cursor-switcher-converted"
+  mv -f "$temp_install" "$target_dir"
+  rm -rf -- "$temp_dir"
+
+  printf '%s' "$converted_name"
+  return 0
+}
+
 apply_theme() {
-  local hypr="" xcursor="" size="" mode=""
+  local hypr="" xcursor="" theme_path="" size="" mode=""
   while (($#)); do
     case $1 in
       --hyprcursor) [[ $# -ge 2 ]] || die "missing Hyprcursor name"; hypr=$2; shift 2 ;;
       --xcursor) [[ $# -ge 2 ]] || die "missing XCursor name"; xcursor=$2; shift 2 ;;
+      --theme-path) [[ $# -ge 2 ]] || die "missing theme path"; theme_path=$2; shift 2 ;;
       --size) [[ $# -ge 2 ]] || die "missing size"; size=$2; shift 2 ;;
       --preview|--commit) mode=$1; shift ;;
       *) die "unknown apply argument: $1" ;;
     esac
   done
-  [[ $size =~ ^(16|20|24|28|32|40|48)$ ]] || die "unsupported cursor size: $size"
+  [[ $size =~ ^(16|20|24|28|32|40|48|64|80|96|128|160|192|224|256)$ ]] || die "unsupported cursor size: $size"
   [[ $hypr == - ]] || valid_name "$hypr" || die "invalid Hyprcursor theme name"
   [[ $xcursor == - ]] || valid_name "$xcursor" || die "invalid XCursor theme name"
   [[ $hypr != - || $xcursor != - ]] || die "theme has no supported cursor format"
 
-  if [[ $hypr != - ]]; then
-    command -v hyprctl >/dev/null 2>&1 || die "hyprctl is unavailable"
-    hyprctl setcursor "$hypr" "$size" >/dev/null
+  command -v hyprctl >/dev/null 2>&1 || die "hyprctl is unavailable"
+
+  local effective_hypr
+  effective_hypr=$(ensure_hyprcursor "$hypr" "$xcursor" "$theme_path") || die "could not resolve Hyprcursor for $xcursor"
+
+  if ! hyprctl setcursor "$effective_hypr" "$size" >/dev/null; then
+    die "hyprctl setcursor failed for '$effective_hypr' ($size px)"
   fi
 
-  # Quattro's Hyprland Lua runtime can update the environment inherited by
-  # subsequently launched applications (including a restarted shell). Keep
-  # previews out of it so a transient hover can never become session state.
-  if [[ $mode == --commit ]] && command -v hyprctl >/dev/null 2>&1; then
+  if [[ $mode == --commit ]]; then
     local hypr_env=""
-    [[ $hypr == - ]] || hypr_env=$hypr
-    hyprctl eval "hl.env(\"HYPRCURSOR_THEME\", \"$hypr_env\")" >/dev/null
-    hyprctl eval "hl.env(\"HYPRCURSOR_SIZE\", \"$size\")" >/dev/null
+    [[ $effective_hypr == - ]] || hypr_env=$effective_hypr
+    hyprctl eval "hl.env(\"HYPRCURSOR_THEME\", \"$hypr_env\")" >/dev/null 2>&1 || true
+    hyprctl eval "hl.env(\"HYPRCURSOR_SIZE\", \"$size\")" >/dev/null 2>&1 || true
     if [[ $xcursor != - ]]; then
-      hyprctl eval "hl.env(\"XCURSOR_THEME\", \"$xcursor\")" >/dev/null
-      hyprctl eval "hl.env(\"XCURSOR_SIZE\", \"$size\")" >/dev/null
+      hyprctl eval "hl.env(\"XCURSOR_THEME\", \"$xcursor\")" >/dev/null 2>&1 || true
+      hyprctl eval "hl.env(\"XCURSOR_SIZE\", \"$size\")" >/dev/null 2>&1 || true
     fi
   fi
 
   if [[ $xcursor != - ]]; then
     if command -v gsettings >/dev/null 2>&1; then
-      gsettings set org.gnome.desktop.interface cursor-theme "$xcursor"
-      gsettings set org.gnome.desktop.interface cursor-size "$size"
+      gsettings set org.gnome.desktop.interface cursor-theme "$xcursor" 2>/dev/null || true
+      gsettings set org.gnome.desktop.interface cursor-size "$size" 2>/dev/null || true
     else
       log "gsettings unavailable; GTK cursor could not be updated"
     fi
   fi
 
-  # uwsm-app and D-Bus activated applications inherit the user manager's
-  # environment. Existing clients may retain their cached cursor theme.
   local -a assignments=("XCURSOR_SIZE=$size" "HYPRCURSOR_SIZE=$size")
-  [[ $hypr == - ]] || assignments+=("HYPRCURSOR_THEME=$hypr")
+  [[ $effective_hypr == - ]] || assignments+=("HYPRCURSOR_THEME=$effective_hypr")
   [[ $xcursor == - ]] || assignments+=("XCURSOR_THEME=$xcursor")
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user set-environment "${assignments[@]}" >/dev/null 2>&1 || log "could not update systemd user environment"
+    systemctl --user set-environment "${assignments[@]}" >/dev/null 2>&1 || true
   fi
   if command -v dbus-update-activation-environment >/dev/null 2>&1; then
-    dbus-update-activation-environment --systemd "${assignments[@]}" >/dev/null 2>&1 || log "could not update D-Bus activation environment"
+    dbus-update-activation-environment --systemd "${assignments[@]}" >/dev/null 2>&1 || true
   fi
+
   if [[ $mode == --commit ]]; then
     local config_home=${XDG_CONFIG_HOME:-${HOME:?HOME is not set}/.config}
     local common_dir="$config_home/uwsm/env.d" hypr_dir="$config_home/uwsm/env-hyprland.d"
@@ -191,7 +332,7 @@ apply_theme() {
     } > "$common_tmp"
     {
       printf '# Managed by goblin.cursor-switcher.\n'
-      if [[ $hypr == - ]]; then printf 'unset HYPRCURSOR_THEME\n'; else printf "export HYPRCURSOR_THEME='%s'\n" "$hypr"; fi
+      if [[ $effective_hypr == - ]]; then printf 'unset HYPRCURSOR_THEME\n'; else printf "export HYPRCURSOR_THEME='%s'\n" "$effective_hypr"; fi
       printf "export HYPRCURSOR_SIZE='%s'\n" "$size"
     } > "$hypr_tmp"
     chmod 600 -- "$common_tmp" "$hypr_tmp"
@@ -211,24 +352,34 @@ install_bundled() {
     esac
   done
   [[ -d $source && -f $source/manifest.hl && -f $source/index.theme ]] || die "bundled theme is incomplete"
-  [[ ${target##*/} == Omarchy-Banana ]] || die "refusing unexpected bundled theme target"
+  local target_base=${target##*/}
+  [[ $target_base == Banana || $target_base == Omarchy-Banana ]] || die "refusing unexpected bundled theme target: $target"
+
   local link link_target
   while IFS= read -r -d '' link; do
     link_target=$(readlink -- "$link") || die "cannot inspect bundled alias"
     [[ $link_target != */* && $link_target != .* && -f ${link%/*}/$link_target ]] || die "bundled theme contains an unsafe alias"
   done < <(find "$source" -type l -print0)
+
   local parent=${target%/*} marker=.omarchy-cursor-switcher-theme temp
   mkdir -p -- "$parent"
+
+  # Clean up old Omarchy-Banana if migrating to Banana
+  if [[ $target_base == Banana && -d $parent/Omarchy-Banana && -f $parent/Omarchy-Banana/$marker ]]; then
+    rm -rf -- "$parent/Omarchy-Banana"
+  fi
+
   if [[ -e $target && ! -f $target/$marker ]]; then
     die "the target exists and is not owned by this plugin: $target"
   fi
+
   if [[ -f $target/$marker ]] && [[ $(<"$target/$marker") == "$version" ]]; then return 0; fi
-  temp=$(mktemp -d --tmpdir="$parent" .Omarchy-Banana.install.XXXXXX)
+  temp=$(mktemp -d --tmpdir="$parent" .Banana.install.XXXXXX)
   trap 'rm -rf -- "$temp"' EXIT
   cp -a -- "$source"/. "$temp"/
   printf '%s\n' "$version" > "$temp/$marker"
   if [[ -e $target ]]; then
-    local old="$parent/.Omarchy-Banana.old.$$"
+    local old="$parent/.Banana.old.$$"
     mv -- "$target" "$old"
     if mv -- "$temp" "$target"; then rm -rf -- "$old"; else mv -- "$old" "$target"; die "atomic theme replacement failed"; fi
   else
@@ -237,9 +388,80 @@ install_bundled() {
   trap - EXIT
 }
 
+register_app() {
+  local source_dir="" home=${HOME:?HOME is not set}
+  while (($#)); do
+    case $1 in
+      --source) source_dir=${2:-}; shift 2 ;;
+      *) die "unknown register-app argument: $1" ;;
+    esac
+  done
+  [[ -n $source_dir && -d $source_dir ]] || die "missing --source directory"
+
+  local data_home=${XDG_DATA_HOME:-$home/.local/share}
+  local bin_dir="$home/.local/bin"
+  local app_dir="$data_home/applications"
+  local icon_dir="$data_home/icons/hicolor/scalable/apps"
+
+  local launcher_src="$source_dir/scripts/omarchy-cursor-switcher"
+  local desktop_src="$source_dir/desktop/omarchy-cursor-switcher.desktop"
+  local icon_src="$source_dir/icons/omarchy-cursor-switcher.svg"
+
+  [[ -f $launcher_src ]] || die "launcher script not found: $launcher_src"
+  [[ -f $desktop_src ]] || die "desktop entry not found: $desktop_src"
+  [[ -f $icon_src ]] || die "icon not found: $icon_src"
+
+  mkdir -p -- "$bin_dir" "$app_dir" "$icon_dir"
+
+  # Install launcher script (atomic)
+  local tmp
+  tmp=$(mktemp --tmpdir="$bin_dir" .omarchy-cursor-switcher.XXXXXX)
+  cp -- "$launcher_src" "$tmp"
+  chmod 755 -- "$tmp"
+  mv -f -- "$tmp" "$bin_dir/omarchy-cursor-switcher"
+
+  # Install desktop entry (atomic)
+  tmp=$(mktemp --tmpdir="$app_dir" .omarchy-cursor-switcher.XXXXXX)
+  cp -- "$desktop_src" "$tmp"
+  chmod 644 -- "$tmp"
+  mv -f -- "$tmp" "$app_dir/omarchy-cursor-switcher.desktop"
+
+  # Install icon (atomic)
+  tmp=$(mktemp --tmpdir="$icon_dir" .omarchy-cursor-switcher.XXXXXX)
+  cp -- "$icon_src" "$tmp"
+  chmod 644 -- "$tmp"
+  mv -f -- "$tmp" "$icon_dir/omarchy-cursor-switcher.svg"
+
+  # Refresh icon cache and desktop database if available (best effort)
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q "$app_dir" 2>/dev/null || true
+  fi
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q "$data_home/icons/hicolor" 2>/dev/null || true
+  fi
+}
+
+unregister_app() {
+  local home=${HOME:?HOME is not set}
+  local data_home=${XDG_DATA_HOME:-$home/.local/share}
+  local bin_dir="$home/.local/bin"
+  local app_dir="$data_home/applications"
+  local icon_dir="$data_home/icons/hicolor/scalable/apps"
+
+  rm -f -- "$bin_dir/omarchy-cursor-switcher"
+  rm -f -- "$app_dir/omarchy-cursor-switcher.desktop"
+  rm -f -- "$icon_dir/omarchy-cursor-switcher.svg"
+
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q "$app_dir" 2>/dev/null || true
+  fi
+}
+
 case ${1:-} in
   discover) shift; discover "$@" ;;
   apply) shift; apply_theme "$@" ;;
   install-bundled) shift; install_bundled "$@" ;;
-  *) die "usage: $PROGRAM {discover [banana-preview.svg]|apply ...|install-bundled ...}" ;;
+  register-app) shift; register_app "$@" ;;
+  unregister-app) shift; unregister_app "$@" ;;
+  *) die "usage: $PROGRAM {discover|apply|install-bundled|register-app|unregister-app} ..." ;;
 esac

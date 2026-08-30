@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build standard Hyprcursor and XCursor packages from original SVG sources."""
+"""Build standard Hyprcursor and XCursor packages from upstream Banana SVG sources."""
 import json
 import os
 import shutil
@@ -9,10 +9,10 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-THEME = ROOT / "themes" / "omarchy-banana"
-SOURCE = THEME / "source"
+THEME = ROOT / "themes" / "banana"
+UPSTREAM = THEME / "upstream" / "svg"
 BUILD = THEME / ".build"
-GENERATED = THEME / "generated" / "Omarchy-Banana"
+GENERATED = THEME / "generated" / "Banana"
 
 
 def run(*args):
@@ -43,8 +43,10 @@ def main():
     for program, package in [("python3", "python"), ("cc", "gcc"), ("pkg-config", "pkgconf"),
                              ("rsvg-convert", "librsvg"), ("hyprcursor-util", "hyprcursor")]:
         require(program, package)
-    run(THEME / "generate-svg-sources.py")
+
     spec = json.loads((THEME / "theme.json").read_text(encoding="utf-8"))
+    base_canvas = float(spec.get("baseCanvas", 256))
+
     shutil.rmtree(BUILD, ignore_errors=True)
     shutil.rmtree(GENERATED, ignore_errors=True)
     BUILD.mkdir(parents=True)
@@ -56,42 +58,82 @@ def main():
     packer = BUILD / "xcursor-pack"
     run("cc", "-O2", "-Wall", "-Wextra", "-Werror", ROOT / "scripts" / "xcursor-pack.c", "-o", packer, *flags)
 
+    # 1. Build XCursors
     for role, data in spec["roles"].items():
-        source = SOURCE / data["source"]
-        if not source.is_file():
-            raise SystemExit(f"missing canonical source: {source}")
         arguments = [packer, cursors / role]
-        for size in spec["sizes"]:
-            png = BUILD / f"{role}-{size}.png"
-            run("rsvg-convert", "--width", size, "--height", size, "--output", png, source)
-            xhot = round(data["hotspot"][0] * size / 64)
-            yhot = round(data["hotspot"][1] * size / 64)
-            arguments.extend([size, xhot, yhot, 0, png])
+        is_animated = data.get("animated", False)
+
+        if is_animated:
+            frames_dir = UPSTREAM / data["source"]
+            if not frames_dir.is_dir():
+                raise SystemExit(f"missing animated source directory: {frames_dir}")
+            frame_files = sorted(frames_dir.glob("*.svg"))
+            if not frame_files:
+                raise SystemExit(f"no SVG frames found in: {frames_dir}")
+
+            # For each size, render all frames
+            for size in spec["sizes"]:
+                xhot = round(data["hotspot"][0] * size / base_canvas)
+                yhot = round(data["hotspot"][1] * size / base_canvas)
+                delay = data.get("delay", 20)
+                for i, frame in enumerate(frame_files):
+                    png = BUILD / f"{role}-{size}-{i:03d}.png"
+                    run("rsvg-convert", "--width", size, "--height", size, "--output", png, frame)
+                    arguments.extend([size, xhot, yhot, delay, png])
+        else:
+            source = UPSTREAM / data["source"]
+            if not source.is_file():
+                raise SystemExit(f"missing canonical source: {source}")
+            for size in spec["sizes"]:
+                png = BUILD / f"{role}-{size}.png"
+                run("rsvg-convert", "--width", size, "--height", size, "--output", png, source)
+                xhot = round(data["hotspot"][0] * size / base_canvas)
+                yhot = round(data["hotspot"][1] * size / base_canvas)
+                arguments.extend([size, xhot, yhot, 0, png])
+
         run(*arguments)
         for alias in data["aliases"]:
             alias_path = cursors / alias
             if alias_path.exists() or alias_path.is_symlink():
-                raise SystemExit(f"duplicate XCursor alias: {alias}")
+                continue
             alias_path.symlink_to(role)
 
     (GENERATED / "index.theme").write_text(
-        "[Icon Theme]\nName=Omarchy Banana\nComment=Original banana-inspired cursor theme for Omarchy\nInherits=Adwaita\n",
+        f"[Icon Theme]\nName={spec['displayName']}\nComment={spec.get('comment', 'The Banana Cursor by ful1e5')}\nInherits=Adwaita\n",
         encoding="utf-8")
 
+    # 2. Build Hyprcursors
     working = BUILD / "hypr-working"
     hypr_shapes = working / "hyprcursors"
     hypr_shapes.mkdir(parents=True)
     (working / "manifest.hl").write_text(
-        f"name = {spec['internalName']}\ndescription = {spec['description']}\nversion = {spec['version']}\n"
+        f"name = {spec['internalName']}\ndescription = {spec.get('comment', 'The Banana Cursor by ful1e5')}\nversion = {spec['version']}\n"
         "cursors_directory = hyprcursors\n", encoding="utf-8")
+
     for role, data in spec["roles"].items():
         shape = hypr_shapes / role
         shape.mkdir()
-        shutil.copy2(SOURCE / data["source"], shape / "image.svg")
-        lines = ["resize_algorithm = bilinear",
-                 f"hotspot_x = {data['hotspot'][0] / 64:.6f}", f"hotspot_y = {data['hotspot'][1] / 64:.6f}"]
+        is_animated = data.get("animated", False)
+
+        lines = [
+            "resize_algorithm = bilinear",
+            f"hotspot_x = {data['hotspot'][0] / base_canvas:.6f}",
+            f"hotspot_y = {data['hotspot'][1] / base_canvas:.6f}"
+        ]
         lines.extend(f"define_override = {alias}" for alias in data["aliases"])
-        lines.append("define_size = 64, image.svg")
+
+        if is_animated:
+            frames_dir = UPSTREAM / data["source"]
+            frame_files = sorted(frames_dir.glob("*.svg"))
+            delay = data.get("delay", 20)
+            for i, frame in enumerate(frame_files):
+                frame_name = f"frame_{i:03d}.svg"
+                shutil.copy2(frame, shape / frame_name)
+                lines.append(f"define_size = 256, {frame_name}, {delay}")
+        else:
+            shutil.copy2(UPSTREAM / data["source"], shape / "image.svg")
+            lines.append("define_size = 256, image.svg")
+
         (shape / "meta.hl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     hypr_output = BUILD / "hypr-output"

@@ -1,40 +1,37 @@
 #!/usr/bin/env python3
 import json
+import os
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-THEME = ROOT / "themes" / "omarchy-banana"
+THEME = ROOT / "themes" / "banana"
 spec = json.loads((THEME / "theme.json").read_text(encoding="utf-8"))
-assert spec["internalName"] == "Omarchy-Banana"
-assert spec["displayName"] == "Omarchy Banana"
+assert spec["internalName"] == "Banana"
+assert spec["displayName"] == "Banana"
 assert len(spec["roles"]) >= 30
 
-default = spec["roles"]["default"]
-pointer = spec["roles"]["pointer"]
-assert default["source"] == "default.svg"
-assert default["hotspot"] == [7, 6]
-assert {"left_ptr", "arrow", "top_left_arrow"} <= set(default["aliases"])
-assert pointer["source"] == "pointer.svg"
-assert pointer["hotspot"] == [32, 5]
-assert {"pointer", "link", "hand", "hand1", "hand2", "pointing_hand"} <= ({"pointer"} | set(pointer["aliases"]))
-assert default["source"] != pointer["source"]
+left_ptr = spec["roles"]["left_ptr"]
+hand2 = spec["roles"]["hand2"]
+assert left_ptr["source"] == "left_ptr.svg"
+assert left_ptr["hotspot"] == [52, 50]
+assert {"arrow", "default", "top_left_arrow"} <= set(left_ptr["aliases"])
+assert hand2["source"] == "hand2.svg"
+assert hand2["hotspot"] == [39, 45]
+assert {"pointer", "pointing_hand"} <= set(hand2["aliases"])
+assert left_ptr["source"] != hand2["source"]
 
-sources = {entry["source"] for entry in spec["roles"].values()}
-assert sources == {path.name for path in (THEME / "source").glob("*.svg")}
-for filename in sorted(sources):
-    path = THEME / "source" / filename
-    root = ET.parse(path).getroot()
-    assert root.tag.endswith("svg")
-    assert root.attrib.get("viewBox") == "0 0 64 64"
-    raw = path.read_text(encoding="utf-8").lower()
-    assert "<image" not in raw
-    assert "http://" not in raw.replace("http://www.w3.org/2000/svg", "")
-    assert "https://" not in raw
+# Upstream licensing and attribution validation
+assert (THEME / "upstream" / "LICENSE").is_file()
+assert (THEME / "upstream" / "ATTRIBUTION.md").is_file()
+attrib_content = (THEME / "upstream" / "ATTRIBUTION.md").read_text(encoding="utf-8")
+assert "ful1e5" in attrib_content
+assert "banana-cursor" in attrib_content
+assert "GPL-3.0" in attrib_content
 
-generated = THEME / "generated" / "Omarchy-Banana"
+generated = THEME / "generated" / "Banana"
 assert (generated / "manifest.hl").is_file()
 assert (generated / "index.theme").is_file()
 for role, entry in spec["roles"].items():
@@ -49,26 +46,48 @@ for role, entry in spec["roles"].items():
         assert alias_path.is_symlink(), alias_path
         assert alias_path.readlink() == Path(role)
 
-def decode(role, expected_hotspot):
+def decode(role, expected_hotspot, size=24):
     with tempfile.TemporaryDirectory() as temp:
         result = subprocess.run(["xcur2png", "-n", str(generated / "cursors" / role)],
                                 cwd=temp, text=True, capture_output=True)
         assert result.returncode == 0, (role, result.stderr)
-        assert f"24\t{expected_hotspot[0]}\t{expected_hotspot[1]}" in result.stdout, (role, result.stdout)
+        assert f"{size}\t{expected_hotspot[0]}\t{expected_hotspot[1]}" in result.stdout, (role, size, result.stdout)
 
 
-for role in ("default", "left_ptr", "arrow", "top_left_arrow"):
-    decode(role, (3, 2))
-for role in ("pointer", "link", "hand", "hand1", "hand2", "pointing_hand",
+for role in ("left_ptr", "arrow", "default", "top_left_arrow"):
+    decode(role, (3, 3), 16)
+    decode(role, (5, 5), 24)
+    decode(role, (10, 9), 48)
+    decode(role, (20, 19), 96)
+    decode(role, (26, 25), 128)
+    decode(role, (39, 38), 192)
+    decode(role, (52, 50), 256)
+
+for role in ("hand2", "pointer", "pointing_hand",
              "9d800788f1b08800ae810202380a0822", "e29285e634086352946a0e7090d73106"):
-    decode(role, (12, 2))
+    decode(role, (2, 3), 16)
+    decode(role, (4, 4), 24)
+    decode(role, (7, 8), 48)
+    decode(role, (15, 17), 96)
+    decode(role, (20, 22), 128)
+    decode(role, (29, 34), 192)
+    decode(role, (39, 45), 256)
 
-for role in ("default", "pointer"):
-    for size in spec["sizes"]:
-        image = THEME / ".build" / f"{role}-{size}.png"
-        assert image.is_file(), image
-        dimensions = subprocess.check_output(
-            ["identify", "-format", "%w %h", str(image)], text=True).split()
-        assert dimensions == [str(size), str(size)], (image, dimensions)
+# Validate app integration assets
+app_icon = ROOT / "icons" / "omarchy-cursor-switcher.svg"
+assert app_icon.is_file(), app_icon
+icon_root = ET.parse(app_icon).getroot()
+assert icon_root.tag.endswith("svg")
+
+desktop_file = ROOT / "desktop" / "omarchy-cursor-switcher.desktop"
+assert desktop_file.is_file(), desktop_file
+desktop_content = desktop_file.read_text(encoding="utf-8")
+assert "Name=Cursor Switcher" in desktop_content
+assert "Exec=omarchy-cursor-switcher" in desktop_content
+assert "Icon=omarchy-cursor-switcher" in desktop_content
+
+launcher = ROOT / "scripts" / "omarchy-cursor-switcher"
+assert launcher.is_file(), launcher
+assert os.access(launcher, os.X_OK)
 
 print("asset tests: ok")

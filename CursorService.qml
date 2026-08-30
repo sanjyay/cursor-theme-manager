@@ -10,16 +10,16 @@ Item {
   property var manifest: null
   readonly property string pluginRoot: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
   readonly property string helperPath: pluginRoot + "/scripts/cursorctl"
-  readonly property string bananaPackage: pluginRoot + "/themes/omarchy-banana/generated/Omarchy-Banana"
-  readonly property string bananaPreview: pluginRoot + "/themes/omarchy-banana/source/default.svg"
+  readonly property string bananaPackage: pluginRoot + "/themes/banana/generated/Banana"
+  readonly property string bananaPreview: pluginRoot + "/themes/banana/upstream/svg/left_ptr.svg"
   readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || ((Quickshell.env("HOME") || "") + "/.config")
   readonly property string stateDir: configHome + "/omarchy"
   readonly property string statePath: stateDir + "/cursor-switcher.json"
-  readonly property string installTarget: (Quickshell.env("XDG_DATA_HOME") || ((Quickshell.env("HOME") || "") + "/.local/share")) + "/icons/Omarchy-Banana"
+  readonly property string installTarget: (Quickshell.env("XDG_DATA_HOME") || ((Quickshell.env("HOME") || "") + "/.local/share")) + "/icons/Banana"
 
   property var themes: []
   property var committedTheme: null
-  property int committedSize: 24
+  property int committedSize: 16
   property var previewTheme: null
   property int previewSize: 0
   property bool ready: false
@@ -32,7 +32,7 @@ Item {
   property bool _started: false
   property bool _stateLoaded: false
   property bool _scanLoaded: false
-  property var _loadedState: ({ ok: false, reason: "missing", theme: null, size: 24 })
+  property var _loadedState: ({ ok: false, reason: "missing", theme: null, size: 16 })
   property string _installError: ""
   property var _queuedApply: null
   property var _activeApply: null
@@ -59,7 +59,7 @@ Item {
     _started = true
     stateDirProcess.running = true
     installProcess.command = [sourceRoot + "/scripts/cursorctl", "install-bundled",
-      "--source", sourceRoot + "/themes/omarchy-banana/generated/Omarchy-Banana",
+      "--source", bananaPackage,
       "--target", installTarget, "--version", String(manifest.version || "1")]
     installProcess.running = true
   }
@@ -113,10 +113,6 @@ Item {
 
   function requestPreview(theme, size) {
     if (!ready || !theme || !theme.previewable) return
-    if (!committedTheme || !committedTheme.hyprcursor) {
-      statusText = "Live preview needs a committed Hyprcursor theme"
-      return
-    }
     _debouncedPreview = { theme: theme, size: Model.validSize(size === undefined ? committedSize : size) }
     previewTimer.restart()
   }
@@ -176,8 +172,9 @@ Item {
 
   function themeSummary(theme) {
     if (!theme) return "Unavailable"
+    if (theme.subtitle) return theme.subtitle
     if (theme.formats.length === 2) return "Hyprcursor + XCursor"
-    return theme.formats[0] === "hyprcursor" ? "Hyprcursor" : "XCursor · app restart may be required"
+    return theme.formats[0] === "hyprcursor" ? "Hyprcursor" : "XCursor"
   }
 
   function restoreConfigured() {
@@ -226,6 +223,22 @@ Item {
         root.lastError = root._installError
         console.warn("goblin.cursor-switcher:", root._installError)
       }
+      registerAppProcess.command = [root.helperPath, "register-app",
+        "--source", root.pluginRoot]
+      registerAppProcess.running = true
+    }
+  }
+
+  Process {
+    id: registerAppProcess
+    running: false
+    command: []
+    stderr: StdioCollector { id: registerAppStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        console.warn("goblin.cursor-switcher: app registration failed:",
+          root.elide(registerAppStderr.text || "unknown error"))
+      }
       root.refresh(true)
     }
   }
@@ -269,6 +282,13 @@ Item {
       if (exitCode !== 0) {
         root.lastError = root.elide(applyStderr.text || root._applyStderr || applyStdout.text || root._applyStdout || "Cursor could not be applied")
         console.warn("goblin.cursor-switcher: apply failed:", root.lastError)
+        if (request && request.kind === "commit") {
+          root.statusText = "Failed to switch to " + request.theme.displayName
+        } else if (request && request.kind === "preview") {
+          root.previewTheme = null
+          root.previewSize = 0
+          root.statusText = "Preview unavailable for " + request.theme.displayName
+        }
       } else if (request) {
         root.lastError = ""
         if (request.kind === "preview") {
@@ -282,8 +302,6 @@ Item {
           root.previewSize = 0
           root.persistCommitted()
           root.statusText = request.theme.displayName + " · " + request.size + " px"
-          if (!request.theme.hyprcursor)
-            root.statusText += " · compositor updates next login"
         } else {
           root.previewTheme = null
           root.previewSize = 0

@@ -72,7 +72,7 @@ Rectangle {
 
     Text {
       width: parent.width
-      text: root.theme.formats.length === 2 ? "HYPR + X" : (root.theme.formats[0] === "hyprcursor" ? "HYPR" : "XCURSOR")
+      text: root.theme.subtitle ? root.theme.subtitle : (root.theme.formats.length === 2 ? "HYPR + X" : (root.theme.formats[0] === "hyprcursor" ? "HYPR" : "XCURSOR"))
       color: Color.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.caption

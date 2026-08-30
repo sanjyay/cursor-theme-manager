@@ -11,6 +11,6 @@ probe_dir=$(mktemp -d)
 trap 'rm -rf -- "$probe_dir"' EXIT
 c++ -std=c++20 -Wall -Wextra -Werror tests/hyprcursor-probe.cpp -o "$probe_dir/hyprcursor-probe" $(pkg-config --cflags --libs hyprcursor)
 mkdir -p "$probe_dir/home/.local/share/icons"
-ln -s "$ROOT/themes/omarchy-banana/generated/Omarchy-Banana" "$probe_dir/home/.local/share/icons/Omarchy-Banana"
-HOME="$probe_dir/home" XDG_DATA_HOME="$probe_dir/home/.local/share" "$probe_dir/hyprcursor-probe" Omarchy-Banana
+ln -s "$ROOT/themes/banana/generated/Banana" "$probe_dir/home/.local/share/icons/Banana"
+HOME="$probe_dir/home" XDG_DATA_HOME="$probe_dir/home/.local/share" "$probe_dir/hyprcursor-probe" Banana
 echo "all tests: ok"

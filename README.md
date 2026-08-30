@@ -1,18 +1,20 @@
 # Omarchy Cursor Switcher
 
-A native Omarchy Quattro / `omarchy-shell` panel for discovering, previewing, applying, and persisting Linux cursor themes. It supports current Hyprcursor themes, legacy XCursor themes for GTK and other clients, discrete cursor sizes, keyboard navigation, safe hover previews, and a bundled original cursor family called **Omarchy Banana**.
+A native Omarchy Quattro / `omarchy-shell` panel for discovering, previewing, applying, and persisting Linux cursor themes in Hyprland. It supports native Hyprcursor themes, legacy XCursor themes with automatic on-the-fly Hyprcursor conversion, discrete cursor sizes, keyboard navigation, safe hover previews, and a bundled cursor family: **Banana** by [ful1e5](https://github.com/ful1e5/banana-cursor).
 
 ![Cursor Switcher panel](docs/panel.png)
 
 ## Features
 
-- Discovers real cursor themes in `~/.local/share/icons`, `~/.icons`, and the `XDG_DATA_DIRS` icon roots (normally `/usr/share/icons`).
-- Distinguishes Hyprcursor, XCursor, and combined packages instead of listing ordinary icon themes.
-- Uses `hyprctl setcursor` for live Hyprcursor changes and `gsettings` for GTK/XCursor compatibility.
+- Discovers real cursor themes in `~/.local/share/icons`, `~/.icons`, and `XDG_DATA_DIRS/icons` (normally `/usr/share/icons`).
+- **Live switching for all themes:** Native Hyprcursor themes apply directly via `hyprctl setcursor`. Legacy XCursor-only themes (such as Adwaita, Yaru, Bibata, etc.) are automatically and transparently converted to Hyprcursor packages on-the-fly and cached locally under `~/.local/share/icons/CursorSwitcher-XCursor-<name>-<hash>`.
+- Uses `hyprctl setcursor` for instant compositor cursor changes and `gsettings` for GTK/XCursor compatibility.
 - Updates the systemd/D-Bus activation environment and Quattro's live Hyprland Lua environment for newly launched applications.
-- Persists the selection in `~/.config/omarchy/cursor-switcher.json` and UWSM-owned environment fragments.
-- Debounces live previews and restores the committed cursor when hover ends, the panel closes, or Escape is pressed.
-- Installs the bundled theme idempotently at `~/.local/share/icons/Omarchy-Banana` without sudo.
+- Persists the selection in `~/.config/omarchy/cursor-switcher.json` and UWSM-owned environment fragments (`~/.config/uwsm/env.d/90-omarchy-cursor-switcher` and `~/.config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher`).
+- Strict commit/preview transactions: the UI checkmark only moves after backend cursor application is verified successful.
+- Debounced live hover previews with clean restoration when hover ends or Escape is pressed.
+- Idempotent application launcher integration (`omarchy-cursor-switcher.desktop`, launcher wrapper, SVG icon).
+- Installs the bundled Banana theme idempotently at `~/.local/share/icons/Banana` without sudo.
 - Has no polling loop and does not scan cursor directories continuously.
 
 ## Install
@@ -42,28 +44,41 @@ omarchy-shell shell hide goblin.cursor-switcher
 
 Arrow keys (or `h/j/k/l`) navigate, Tab switches between the theme grid and size row, Enter/Space commits, `r` refreshes, and Escape cancels any preview and closes the panel.
 
-## Applying Omarchy Banana manually
+## Application launcher entry
+
+When installed, Cursor Switcher automatically registers an application desktop entry (`omarchy-cursor-switcher.desktop`), executable launcher (`omarchy-cursor-switcher`), and SVG application icon.
+
+Users can open the panel directly from the Omarchy application launcher by searching:
+
+- `Cursor` / `Cursor Switcher`
+- `Pointer`
+- `Mouse`
+- `Theme`
+- `Banana`
+
+The desktop entry invokes `omarchy-cursor-switcher`, which sends an IPC `summon` call to `omarchy-shell` to reveal/open the existing panel without launching a redundant process or toggling it closed if already open.
+
+## Applying Banana manually
 
 Through the loaded plugin service:
 
 ```bash
-omarchy-shell shell call goblin.cursor-switcher applyTheme '{"theme":"Omarchy-Banana","size":24}'
+omarchy-shell shell call goblin.cursor-switcher applyTheme '{"theme":"Banana","size":24}'
 ```
 
-Or directly through the self-contained backend:
+Or directly through the backend helper:
 
 ```bash
 ~/.config/omarchy/plugins/goblin.cursor-switcher/scripts/cursorctl apply \
-  --hyprcursor Omarchy-Banana --xcursor Omarchy-Banana --size 24 --commit
+  --hyprcursor Banana --xcursor Banana --size 24 --commit
 ```
-
-The plugin-owned IPC methods are `status`, `refresh`, `restore`, `applyTheme`, `preview`, and `cancelPreview` in addition to the shell's normal summon/hide/toggle lifecycle.
 
 ## Hyprcursor and XCursor behavior
 
-Hyprland 0.37 and newer accepts only Hyprcursor packages through `hyprctl setcursor`. GTK and some other clients still use XCursor. For a combined package such as Omarchy Banana, the plugin applies both paths.
+Hyprland 0.37 and newer accepts only Hyprcursor packages through `hyprctl setcursor`. GTK and some other clients still use XCursor.
 
-An XCursor-only theme can be committed for GTK, future applications, and the next login, but it cannot replace an already-active Hyprcursor in the current compositor. The panel reports this instead of claiming a full live switch. Live preview is enabled only when both the target and the committed cursor have a reversible Hyprcursor path.
+For combined packages (such as bundled Banana), both paths are applied immediately.
+For legacy XCursor-only packages, the backend extracts and compiles a matching Hyprcursor package on first use, stores it in `~/.local/share/icons/CursorSwitcher-XCursor-<name>-<hash>`, and loads it live into Hyprland while setting XCursor/GTK to the original theme name.
 
 Many applications cache their cursor theme. New applications inherit the updated session environment; existing GTK, Qt, Chromium, or Electron processes may need to be restarted. The plugin writes:
 
@@ -72,23 +87,26 @@ Many applications cache their cursor theme. New applications inherit the updated
 
 UWSM sources these fragments at the next graphical login. It also updates the current systemd/D-Bus activation environment and the Quattro Lua environment immediately.
 
-## Omarchy Banana
+## Banana Cursor
 
-![Omarchy Banana cursor roles](docs/banana-preview.png)
+![Banana cursor roles](docs/banana-preview.png)
 
-Omarchy Banana contains 30 canonical roles and the common Linux aliases: default, link pointer, text and vertical text, crosshair, cell, grab/grabbing, move, wait, progress, prohibited, copy, alias, help, context menu, zoom controls, all cardinal/diagonal resize directions, and paired resize axes.
+Banana contains 45 canonical roles and all standard Linux aliases: default/arrow, pointing hand (peeled banana), text, crosshair, cell, open hand / closed hand, move, wait, progress, not-allowed, copy, alias, help, context menu, zoom controls, and cardinal/diagonal resize directions.
 
 ![Normal intact banana changing to its clickable peeled role](docs/banana-intact-to-peeled.png)
 
-The default pointer is a chunky intact banana and uses its narrow upper-left stem tip as the click point. Its packaged 24 px hotspot is `(3, 2)`. Applications naturally request another cursor role over clickable controls; `pointer`, `link`, `hand`, `hand1`, `hand2`, `pointing_hand`, and the two standard installed XCursor hand hashes all resolve to the original peeled-banana artwork. That role's hotspot is the top of the exposed fruit—`(12, 2)` at 24 px. The intact/peeled change is native role switching: it uses no polling, timer, animation, mouse hook, or application integration.
+The default pointer is an intact banana (`left_ptr`) with hotspot `(5, 5)` at 24 px (`[52, 50]` / 256).
+The clickable/pointer role is the peeled banana (`hand2`) with hotspot `(4, 4)` at 24 px (`[39, 45]` / 256).
 
-Directional and text cursors prioritize familiar silhouettes over the fruit motif. Resize, move, crosshair, drag, and action badges share the same heavier outline and optical weight as the redesigned default.
+The intact/peeled change is native role switching: it uses no polling, timer, animation, mouse hook, or application integration.
 
-**Clean-room statement:** Omarchy Banana is original artwork authored from scratch for this project. It contains no artwork, geometry, colors, animation, source structure, code, or generated cursor assets from third-party banana cursor projects, and it has no runtime or build-time dependency on them.
+### Upstream Attribution & License
+
+The Banana cursor artwork is from the [banana-cursor](https://github.com/ful1e5/banana-cursor) project by Abdulkaiz Khatri ([ful1e5](https://github.com/ful1e5)) and is distributed under the GNU General Public License v3.0 (GPL-3.0). See [`themes/banana/upstream/LICENSE`](themes/banana/upstream/LICENSE) and [`ATTRIBUTION.md`](ATTRIBUTION.md) for full licensing information.
 
 ## Building the assets
 
-Prebuilt Hyprcursor and XCursor output ships in `themes/omarchy-banana/generated/Omarchy-Banana`, so runtime selection needs no Python, Node, renderer, or compiler.
+Prebuilt Hyprcursor and XCursor output ships in `themes/banana/generated/Banana`, so runtime selection needs no compiler.
 
 Contributor build dependencies (Arch package names) are:
 
@@ -102,30 +120,15 @@ Rebuild deterministically with:
 ./scripts/build-banana-theme
 ```
 
-The pipeline first regenerates the canonical 64×64 SVGs from the shared clean-room design system in `themes/omarchy-banana/generate-svg-sources.py`. It rasterizes 16, 20, 24, 28, 32, 40, 48, and 64 px XCursor frames, writes them through the installed `libXcursor` API, and builds vector Hyprcursor archives with the official `hyprcursor-util`. Common role names are symlinked/overridden instead of duplicating artwork.
-
-## Architecture
-
-- `Panel.qml` owns only panel lifecycle, focus/navigation, and presentation.
-- `CursorService.qml` owns discovery cadence, state, preview/restore transitions, process orchestration, installation, errors, and persistence.
-- `CursorModel.js` contains deterministic normalization, deduplication, state parsing, fallback, size, command, and preview-state logic.
-- `components/` contains the theme card/grid and discrete size selector.
-- `scripts/cursorctl` is the validated argv-oriented runtime backend. It never executes theme-provided code.
-- `themes/omarchy-banana/source/` contains canonical SVG artwork; `generated/` contains the combined installable package.
-
-Discovery rejects unsafe theme names and paths, does not follow theme paths outside their configured root, parses only constrained metadata keys, and verifies that a cursor payload exists. The bundled installer refuses an existing unowned `Omarchy-Banana` directory and replaces only its own marked package atomically.
-
 ## Development and tests
 
-Run everything with:
+Run the test suite with:
 
 ```bash
 ./tests/run.sh
 ```
 
-Coverage includes cursor directory/format detection, normalization and deduplication, persistence round trips and corrupt input, missing-theme fallback, command argv construction, preview/cancel/commit transitions, supported sizes, installer idempotence and collision refusal, unsafe inputs, UWSM persistence, SVG/XML constraints, every generated role and alias, intact-versus-peeled role mappings, XCursor alias decoding/hotspots, direct `libhyprcursor` alias loading/hotspots, and `qmllint` against the installed Omarchy shell imports.
-
-For an isolated native role-switching check, apply Omarchy Banana and run `qml tests/manual-cursor-roles.qml`. The test surface requests default, pointing-hand, horizontal-resize, open-hand, and text cursors directly from Qt.
+Coverage includes cursor directory/format detection, normalization and deduplication, persistence round trips and corrupt input, missing-theme fallback, command argv construction, preview/cancel/commit transitions, supported sizes, automated XCursor-to-Hyprcursor conversion and caching, installer idempotence and collision refusal, unsafe inputs, UWSM persistence, SVG/XML constraints, every generated role and alias, intact-versus-peeled role mappings, XCursor alias decoding/hotspots, direct `libhyprcursor` alias loading/hotspots, and `qmllint` against the installed Omarchy shell imports.
 
 ## Removal
 
@@ -136,18 +139,20 @@ omarchy plugin disable goblin.cursor-switcher
 rm ~/.config/omarchy/plugins/goblin.cursor-switcher
 ```
 
-The generated cursor, saved selection, and UWSM fragments are deliberately not deleted behind the user's back. If desired, remove only these plugin-owned paths after checking them:
+To clean up the application launcher entries:
+
+```bash
+~/.config/omarchy/plugins/goblin.cursor-switcher/scripts/cursorctl unregister-app
+```
+
+Or remove only these plugin-owned paths manually:
 
 ```text
-~/.local/share/icons/Omarchy-Banana
+~/.local/bin/omarchy-cursor-switcher
+~/.local/share/applications/omarchy-cursor-switcher.desktop
+~/.local/share/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg
+~/.local/share/icons/Banana
 ~/.config/omarchy/cursor-switcher.json
 ~/.config/uwsm/env.d/90-omarchy-cursor-switcher
 ~/.config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher
 ```
-
-## Known limitations
-
-- Existing applications may retain cached cursors until restarted.
-- XCursor-only themes cannot replace a live Hyprcursor inside the current Hyprland session; the compositor updates at the next login.
-- Arbitrary third-party XCursor thumbnails are intentionally represented by a restrained fallback glyph. Parsing cursor binaries solely for card artwork would add cost and fragility; the bundled Banana card uses its actual SVG.
-- Wait/progress are strong static cursors in v1 rather than animated cursors.

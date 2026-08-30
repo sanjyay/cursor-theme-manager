@@ -1,0 +1,11 @@
+resize_algorithm = bilinear
+hotspot_x = 0.496094
+hotspot_y = 0.503906
+define_override = fcf1c3c7cd4491d801f1e1c78f100000
+define_override = ne-resize
+define_override = nesw-resize
+define_override = ll_angle
+define_override = ur_angle
+define_override = sw-resize
+define_override = size_bdiag
+define_size = 256, image.svg

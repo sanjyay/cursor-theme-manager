@@ -1,14 +1,71 @@
 .pragma library
 
-var SupportedSizes = [16, 20, 24, 28, 32, 40, 48]
+var SupportedSizes = [16, 20, 24, 28, 32, 40, 48, 64, 80, 96, 128, 160, 192, 224, 256]
+var DefaultSize = 16
+
+var VisibleThemes = [
+  "Banana",
+  "Adwaita",
+  "Banana-Catppuccin-Mocha",
+  "Banana-Green",
+  "Bibata-Catppuccin-Frappe",
+  "Bibata-Catppuccin-Latte",
+  "Bibata-Catppuccin-Mocha",
+  "Yaru"
+]
 
 function safeString(value) {
   return value === undefined || value === null ? "" : String(value)
 }
 
-function validSize(value) {
+function validSize(value, fallback) {
   var n = Number(value)
-  return SupportedSizes.indexOf(n) !== -1 ? n : 24
+  if (SupportedSizes.indexOf(n) !== -1) return n
+  return fallback !== undefined ? fallback : DefaultSize
+}
+
+function nextSize(currentSize) {
+  var current = validSize(currentSize)
+  var idx = SupportedSizes.indexOf(current)
+  if (idx === -1) return SupportedSizes[0]
+  if (idx < SupportedSizes.length - 1) return SupportedSizes[idx + 1]
+  return SupportedSizes[idx]
+}
+
+function prevSize(currentSize) {
+  var current = validSize(currentSize)
+  var idx = SupportedSizes.indexOf(current)
+  if (idx === -1) return SupportedSizes[0]
+  if (idx > 0) return SupportedSizes[idx - 1]
+  return SupportedSizes[0]
+}
+
+function canIncreaseSize(currentSize) {
+  var current = validSize(currentSize)
+  var idx = SupportedSizes.indexOf(current)
+  return idx !== -1 && idx < SupportedSizes.length - 1
+}
+
+function canDecreaseSize(currentSize) {
+  var current = validSize(currentSize)
+  var idx = SupportedSizes.indexOf(current)
+  return idx !== -1 && idx > 0
+}
+
+function visibleThemeIndex(theme) {
+  if (!theme) return -1
+  var hypr = safeString(theme.hyprcursor).toLowerCase()
+  var xcur = safeString(theme.xcursor).toLowerCase()
+  var name = safeString(theme.displayName).toLowerCase()
+  for (var i = 0; i < VisibleThemes.length; i++) {
+    var target = VisibleThemes[i].toLowerCase()
+    if (hypr === target || xcur === target || name === target) return i
+  }
+  return -1
+}
+
+function isThemeVisible(theme) {
+  return visibleThemeIndex(theme) !== -1
 }
 
 function normalizedTheme(raw) {
@@ -23,13 +80,14 @@ function normalizedTheme(raw) {
   if (formats.length === 0) return null
   return {
     displayName: safeString(raw.displayName) || hypr || xcursor,
+    subtitle: safeString(raw.subtitle),
     hyprcursor: hypr,
     xcursor: xcursor,
     path: safeString(raw.path),
     formats: formats,
     previewPath: safeString(raw.previewPath),
     bundled: raw.bundled === true,
-    previewable: hypr !== ""
+    previewable: true
   }
 }
 
@@ -45,13 +103,14 @@ function mergeTheme(a, b) {
   other.formats.forEach(function(format) { if (formats.indexOf(format) === -1) formats.push(format) })
   return {
     displayName: preferred.displayName || other.displayName,
+    subtitle: preferred.subtitle || other.subtitle,
     hyprcursor: preferred.hyprcursor || other.hyprcursor,
     xcursor: preferred.xcursor || other.xcursor,
     path: preferred.path || other.path,
     formats: formats,
     previewPath: preferred.previewPath || other.previewPath,
     bundled: preferred.bundled || other.bundled,
-    previewable: (preferred.hyprcursor || other.hyprcursor) !== ""
+    previewable: true
   }
 }
 
@@ -67,24 +126,26 @@ function normalizeThemes(rawThemes) {
     else { byKey[key] = theme; order.push(key) }
   })
   var themes = order.map(function(key) { return byKey[key] })
-  themes.sort(function(a, b) {
-    if (a.bundled !== b.bundled) return a.bundled ? -1 : 1
-    return a.displayName.localeCompare(b.displayName)
+  var filtered = themes.filter(function(theme) {
+    return visibleThemeIndex(theme) !== -1
   })
-  return themes
+  filtered.sort(function(a, b) {
+    return visibleThemeIndex(a) - visibleThemeIndex(b)
+  })
+  return filtered
 }
 
 function parseState(text) {
-  var fallback = { ok: false, reason: "missing", theme: null, size: 24 }
+  var fallback = { ok: false, reason: "missing", theme: null, size: DefaultSize }
   if (!safeString(text).trim()) return fallback
   try {
     var raw = JSON.parse(text)
-    if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid", theme: null, size: 24 }
+    if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid", theme: null, size: DefaultSize }
     var theme = normalizedTheme(raw.theme)
-    if (!theme) return { ok: false, reason: "invalid", theme: null, size: validSize(raw.size) }
-    return { ok: true, reason: "", theme: theme, size: validSize(raw.size) }
+    if (!theme) return { ok: false, reason: "invalid", theme: null, size: validSize(raw.size, DefaultSize) }
+    return { ok: true, reason: "", theme: theme, size: validSize(raw.size, DefaultSize) }
   } catch (error) {
-    return { ok: false, reason: "corrupt", theme: null, size: 24 }
+    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize }
   }
 }
 
@@ -114,20 +175,37 @@ function findTheme(themes, wanted) {
 
 function fallbackTheme(themes, currentXcursor) {
   var current = safeString(currentXcursor).toLowerCase()
-  for (var i = 0; i < themes.length; i++)
-    if (current && themes[i].xcursor.toLowerCase() === current) return themes[i]
-  for (var j = 0; j < themes.length; j++)
-    if (themes[j].xcursor.toLowerCase() === "default") return themes[j]
+  if (current) {
+    for (var i = 0; i < themes.length; i++) {
+      if (themes[i].xcursor.toLowerCase() === current ||
+          themes[i].hyprcursor.toLowerCase() === current ||
+          themes[i].displayName.toLowerCase() === current) {
+        return themes[i]
+      }
+    }
+  }
+  // Try Banana first
+  for (var k = 0; k < themes.length; k++) {
+    if (themes[k].displayName.toLowerCase() === "banana" ||
+        themes[k].hyprcursor.toLowerCase() === "banana" ||
+        themes[k].xcursor.toLowerCase() === "banana") {
+      return themes[k]
+    }
+  }
   return themes.length ? themes[0] : null
 }
 
 function applyArguments(scriptPath, theme, size, preview) {
   if (!theme) return []
-  return [scriptPath, "apply",
+  var args = [scriptPath, "apply",
     "--hyprcursor", theme.hyprcursor || "-",
-    "--xcursor", theme.xcursor || "-",
-    "--size", String(validSize(size)),
-    preview ? "--preview" : "--commit"]
+    "--xcursor", theme.xcursor || "-"]
+  if (theme.path) {
+    args.push("--theme-path", theme.path)
+  }
+  args.push("--size", String(validSize(size)),
+    preview ? "--preview" : "--commit")
+  return args
 }
 
 function initialPreviewState(theme, size) {
@@ -158,7 +236,15 @@ function commitPreview(state, theme, size) {
 
 if (typeof module !== "undefined") module.exports = {
   SupportedSizes: SupportedSizes,
+  DefaultSize: DefaultSize,
+  VisibleThemes: VisibleThemes,
+  isThemeVisible: isThemeVisible,
+  visibleThemeIndex: visibleThemeIndex,
   validSize: validSize,
+  nextSize: nextSize,
+  prevSize: prevSize,
+  canIncreaseSize: canIncreaseSize,
+  canDecreaseSize: canDecreaseSize,
   normalizedTheme: normalizedTheme,
   normalizeThemes: normalizeThemes,
   parseState: parseState,

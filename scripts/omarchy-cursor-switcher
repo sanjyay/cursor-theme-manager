@@ -1,0 +1,4 @@
+#!/bin/bash
+# Managed by goblin.cursor-switcher — do not edit.
+# Opens the Cursor Switcher panel via the running Omarchy shell.
+exec omarchy-shell -q shell summon goblin.cursor-switcher '{}'

@@ -1,0 +1,563 @@
+{
+  "version": "2.0.0",
+  "internalName": "Banana",
+  "displayName": "Banana",
+  "author": "ful1e5",
+  "comment": "The Banana Cursor by ful1e5",
+  "website": "https://github.com/ful1e5/banana-cursor",
+  "license": "GPL-3.0",
+  "sizes": [
+    16,
+    20,
+    24,
+    28,
+    32,
+    40,
+    48,
+    64,
+    80,
+    96,
+    128,
+    160,
+    192,
+    224,
+    256
+  ],
+  "baseCanvas": 256,
+  "roles": {
+    "X_cursor": {
+      "source": "X_cursor.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "x-cursor"
+      ]
+    },
+    "all-scroll": {
+      "source": "all-scroll.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "fleur",
+        "size_all"
+      ]
+    },
+    "bd_double_arrow": {
+      "source": "bd_double_arrow.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        130
+      ],
+      "aliases": [
+        "c7088f0f3e6c8088236ef8e1e3e70000",
+        "nw-resize",
+        "ul_angle",
+        "lr_angle",
+        "nwse-resize",
+        "size_fdiag",
+        "se-resize"
+      ]
+    },
+    "bottom_left_corner": {
+      "source": "bottom_left_corner.svg",
+      "animated": false,
+      "hotspot": [
+        65,
+        188
+      ],
+      "aliases": []
+    },
+    "bottom_right_corner": {
+      "source": "bottom_right_corner.svg",
+      "animated": false,
+      "hotspot": [
+        190,
+        187
+      ],
+      "aliases": []
+    },
+    "bottom_side": {
+      "source": "bottom_side.svg",
+      "animated": false,
+      "hotspot": [
+        130,
+        196
+      ],
+      "aliases": []
+    },
+    "center_ptr": {
+      "source": "center_ptr.svg",
+      "animated": false,
+      "hotspot": [
+        52,
+        50
+      ],
+      "aliases": []
+    },
+    "col-resize": {
+      "source": "col-resize.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "split_h",
+        "right_tee",
+        "left_tee"
+      ]
+    },
+    "color-picker": {
+      "source": "color-picker.svg",
+      "animated": false,
+      "hotspot": [
+        65,
+        189
+      ],
+      "aliases": []
+    },
+    "context-menu": {
+      "source": "context-menu.svg",
+      "animated": false,
+      "hotspot": [
+        34,
+        47
+      ],
+      "aliases": []
+    },
+    "copy": {
+      "source": "copy.svg",
+      "animated": false,
+      "hotspot": [
+        34,
+        47
+      ],
+      "aliases": [
+        "1081e37283d90000800003c07f3ef6bf",
+        "6407b0e94181790501fd1e167b474872",
+        "b66166c04f8c3109214a4fbd64a50fc8",
+        "dnd-copy"
+      ]
+    },
+    "cross": {
+      "source": "cross.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "cross_reverse",
+        "diamond_cross",
+        "tcross",
+        "crosshair"
+      ]
+    },
+    "crossed_circle": {
+      "source": "crossed_circle.svg",
+      "animated": false,
+      "hotspot": [
+        34,
+        47
+      ],
+      "aliases": [
+        "forbidden",
+        "not-allowed"
+      ]
+    },
+    "dnd_no_drop": {
+      "source": "dnd_no_drop.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "03b6e0fcb3499374a867c041f52298f0",
+        "circle",
+        "no-drop"
+      ]
+    },
+    "dotbox": {
+      "source": "dotbox.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "dot_box_mask",
+        "draped_box",
+        "icon",
+        "target"
+      ]
+    },
+    "fd_double_arrow": {
+      "source": "fd_double_arrow.svg",
+      "animated": false,
+      "hotspot": [
+        127,
+        129
+      ],
+      "aliases": [
+        "fcf1c3c7cd4491d801f1e1c78f100000",
+        "ne-resize",
+        "nesw-resize",
+        "ll_angle",
+        "ur_angle",
+        "sw-resize",
+        "size_bdiag"
+      ]
+    },
+    "hand1": {
+      "source": "hand1.svg",
+      "animated": false,
+      "hotspot": [
+        63,
+        45
+      ],
+      "aliases": [
+        "grab",
+        "openhand"
+      ]
+    },
+    "hand2": {
+      "source": "hand2.svg",
+      "animated": false,
+      "hotspot": [
+        39,
+        45
+      ],
+      "aliases": [
+        "9d800788f1b08800ae810202380a0822",
+        "e29285e634086352946a0e7090d73106",
+        "pointer",
+        "pointing_hand"
+      ]
+    },
+    "left_ptr": {
+      "source": "left_ptr.svg",
+      "animated": false,
+      "hotspot": [
+        52,
+        50
+      ],
+      "aliases": [
+        "arrow",
+        "default",
+        "top_left_arrow"
+      ]
+    },
+    "left_ptr_watch": {
+      "source": "left_ptr_watch",
+      "animated": true,
+      "hotspot": [
+        52,
+        50
+      ],
+      "aliases": [
+        "00000000000000020006000e7e9ffc3f",
+        "08e8e1c95fe2fc01f976f1e063a24ccd",
+        "3ecb610c1bf2410f44200f48c40d3599",
+        "progress"
+      ]
+    },
+    "left_side": {
+      "source": "left_side.svg",
+      "animated": false,
+      "hotspot": [
+        66,
+        127
+      ],
+      "aliases": []
+    },
+    "link": {
+      "source": "link.svg",
+      "animated": false,
+      "hotspot": [
+        34,
+        47
+      ],
+      "aliases": [
+        "3085a0e285430894940527032f8b26df",
+        "640fb0e74195791501fd1ed57b41487f",
+        "a2a266d0498c3104214a47bd64ab0fc8",
+        "alias",
+        "dnd-link"
+      ]
+    },
+    "move": {
+      "source": "move.svg",
+      "animated": false,
+      "hotspot": [
+        52,
+        50
+      ],
+      "aliases": [
+        "4498f0e0c1937ffe01fd06f973665830",
+        "9081237383d90e509aa00f00170e968f",
+        "fcf21c00b30f7e3f83fe0dfd12e71cff",
+        "grabbing",
+        "pointer_move",
+        "dnd-move",
+        "closedhand",
+        "dnd-none"
+      ]
+    },
+    "pencil": {
+      "source": "pencil.svg",
+      "animated": false,
+      "hotspot": [
+        51,
+        205
+      ],
+      "aliases": [
+        "draft"
+      ]
+    },
+    "pirate": {
+      "source": "pirate.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": []
+    },
+    "plus": {
+      "source": "plus.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "cell"
+      ]
+    },
+    "question_arrow": {
+      "source": "question_arrow.svg",
+      "animated": false,
+      "hotspot": [
+        34,
+        47
+      ],
+      "aliases": [
+        "5c6cd98b3f3ebcb1f9c7f1c204630408",
+        "d9ce0ab605698f320427677b458ad60b",
+        "help",
+        "left_ptr_help",
+        "whats_this",
+        "dnd-ask"
+      ]
+    },
+    "right_ptr": {
+      "source": "right_ptr.svg",
+      "animated": false,
+      "hotspot": [
+        204,
+        49
+      ],
+      "aliases": [
+        "draft_large",
+        "draft_small"
+      ]
+    },
+    "right_side": {
+      "source": "right_side.svg",
+      "animated": false,
+      "hotspot": [
+        189,
+        126
+      ],
+      "aliases": []
+    },
+    "row-resize": {
+      "source": "row-resize.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "split_v",
+        "top_tee",
+        "bottom_tee"
+      ]
+    },
+    "sb_down_arrow": {
+      "source": "sb_down_arrow.svg",
+      "animated": false,
+      "hotspot": [
+        127,
+        219
+      ],
+      "aliases": [
+        "down-arrow"
+      ]
+    },
+    "sb_h_double_arrow": {
+      "source": "sb_h_double_arrow.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "028006030e0e7ebffc7f7070c0600140",
+        "14fef782d02440884392942c1120523",
+        "e-resize",
+        "ew-resize",
+        "h_double_arrow",
+        "size-hor",
+        "size_hor",
+        "w-resize"
+      ]
+    },
+    "sb_left_arrow": {
+      "source": "sb_left_arrow.svg",
+      "animated": false,
+      "hotspot": [
+        34,
+        127
+      ],
+      "aliases": [
+        "left-arrow"
+      ]
+    },
+    "sb_right_arrow": {
+      "source": "sb_right_arrow.svg",
+      "animated": false,
+      "hotspot": [
+        220,
+        127
+      ],
+      "aliases": [
+        "right-arrow"
+      ]
+    },
+    "sb_up_arrow": {
+      "source": "sb_up_arrow.svg",
+      "animated": false,
+      "hotspot": [
+        127,
+        34
+      ],
+      "aliases": [
+        "up-arrow"
+      ]
+    },
+    "sb_v_double_arrow": {
+      "source": "sb_v_double_arrow.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "00008160000006810000408080010102",
+        "2870a09082c103050810ffdffffe0204",
+        "double_arrow",
+        "n-resize",
+        "ns-resize",
+        "size-ver",
+        "size_ver",
+        "s-resize",
+        "v_double_arrow"
+      ]
+    },
+    "top_left_corner": {
+      "source": "top_left_corner.svg",
+      "animated": false,
+      "hotspot": [
+        65,
+        67
+      ],
+      "aliases": []
+    },
+    "top_right_corner": {
+      "source": "top_right_corner.svg",
+      "animated": false,
+      "hotspot": [
+        190,
+        67
+      ],
+      "aliases": []
+    },
+    "top_side": {
+      "source": "top_side.svg",
+      "animated": false,
+      "hotspot": [
+        129,
+        68
+      ],
+      "aliases": []
+    },
+    "vertical-text": {
+      "source": "vertical-text.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        127
+      ],
+      "aliases": []
+    },
+    "wait": {
+      "source": "wait",
+      "animated": true,
+      "hotspot": [
+        50,
+        52
+      ],
+      "aliases": [
+        "watch"
+      ]
+    },
+    "wayland-cursor": {
+      "source": "wayland-cursor.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": []
+    },
+    "xterm": {
+      "source": "xterm.svg",
+      "animated": false,
+      "hotspot": [
+        128,
+        128
+      ],
+      "aliases": [
+        "ibeam",
+        "text"
+      ]
+    },
+    "zoom-in": {
+      "source": "zoom-in.svg",
+      "animated": false,
+      "hotspot": [
+        119,
+        117
+      ],
+      "aliases": []
+    },
+    "zoom-out": {
+      "source": "zoom-out.svg",
+      "animated": false,
+      "hotspot": [
+        119,
+        119
+      ],
+      "aliases": []
+    }
+  }
+}

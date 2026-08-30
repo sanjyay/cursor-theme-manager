@@ -5,6 +5,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "components"
+import "CursorModel.js" as Model
 
 Item {
   id: root
@@ -13,7 +14,6 @@ Item {
   property bool closingFromHost: false
   property string focusSection: "themes"
   property int themeIndex: 0
-  property int sizeIndex: 2
   readonly property bool opened: window.visible
 
   function open(payloadJson) {
@@ -21,7 +21,6 @@ Item {
     if (service) {
       service.refreshIfStale()
       themeIndex = Math.max(0, service.indexOfCommitted())
-      sizeIndex = Math.max(0, service.sizes.indexOf(service.committedSize))
     }
     focusSection = "themes"
     window.visible = true
@@ -50,17 +49,21 @@ Item {
       else themeIndex += dx
       themeIndex = Math.max(0, Math.min(service.themes.length - 1, themeIndex))
       grid.ensureVisible(themeIndex)
-      if (service.themes[themeIndex]) service.requestPreview(service.themes[themeIndex], service.committedSize)
     } else {
-      sizeIndex = Math.max(0, Math.min(service.sizes.length - 1, sizeIndex + (dx !== 0 ? dx : dy)))
-      service.requestPreview(service.committedTheme, service.sizes[sizeIndex])
+      var step = dx !== 0 ? dx : dy
+      if (step < 0 && Model.canDecreaseSize(service.committedSize)) {
+        service.commitSize(Model.prevSize(service.committedSize))
+      } else if (step > 0 && Model.canIncreaseSize(service.committedSize)) {
+        service.commitSize(Model.nextSize(service.committedSize))
+      }
     }
   }
 
   function activateCursor() {
     if (!service || !service.ready) return
-    if (focusSection === "themes" && service.themes[themeIndex]) service.commitTheme(service.themes[themeIndex])
-    else if (focusSection === "sizes") service.commitSize(service.sizes[sizeIndex])
+    if (focusSection === "themes" && service.themes[themeIndex]) {
+      service.commitTheme(service.themes[themeIndex])
+    }
   }
 
   function applyTheme(arg) {
@@ -104,8 +107,8 @@ Item {
     title: "Cursor"
     color: Color.popups.background
     implicitWidth: Math.min(Style.space(620), 760)
-    implicitHeight: Math.min(Style.space(610), 760)
-    minimumSize: Qt.size(Math.min(Style.space(500), 560), Math.min(Style.space(460), 520))
+    implicitHeight: Math.min(Style.space(560), 700)
+    minimumSize: Qt.size(Math.min(Style.space(500), 560), Math.min(Style.space(420), 480))
 
     onVisibleChanged: {
       if (!visible && !root.closingFromHost) {
@@ -122,9 +125,6 @@ Item {
       onCloseRequested: root.requestClose()
       onTabRequested: function(direction) {
         root.focusSection = root.focusSection === "themes" ? "sizes" : "themes"
-        if (root.focusSection === "themes" && root.service && root.service.themes[root.themeIndex])
-          root.service.requestPreview(root.service.themes[root.themeIndex], root.service.committedSize)
-        else if (root.service) root.service.requestPreview(root.service.committedTheme, root.service.sizes[root.sizeIndex])
       }
       onTextKey: function(text) { if (text === "r" || text === "R") root.service.refresh(true) }
 
@@ -171,7 +171,7 @@ Item {
         CursorGrid {
           id: grid
           width: parent.width
-          height: parent.height - y - sizesHeader.implicitHeight - sizeSelector.implicitHeight - footer.implicitHeight - parent.spacing * 3
+          height: parent.height - y - sizeRow.implicitHeight - footer.implicitHeight - parent.spacing * 2
           themes: root.service ? root.service.themes : []
           committedIndex: root.service ? root.service.indexOfCommitted() : -1
           cursorIndex: root.themeIndex
@@ -185,39 +185,35 @@ Item {
             if (hovered) {
               root.themeIndex = index
               root.focusSection = "themes"
-              root.service.requestPreview(theme, root.service.committedSize)
-            } else if (root.service.previewTheme === theme) root.service.cancelPreview()
+            }
           }
         }
 
-        Text {
-          id: sizesHeader
-          width: parent.width
-          text: "CURSOR SIZE"
-          color: Color.muted
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          font.bold: true
-        }
+        Row {
+          id: sizeRow
+          spacing: Style.space(16)
+          anchors.left: parent.left
 
-        SizeSelector {
-          id: sizeSelector
-          width: parent.width
-          sizes: root.service ? root.service.sizes : []
-          committedSize: root.service ? root.service.committedSize : 24
-          cursorIndex: root.sizeIndex
-          cursorActive: root.focusSection === "sizes"
-          onSizeActivated: function(size, index) {
-            root.sizeIndex = index
-            root.focusSection = "sizes"
-            root.service.commitSize(size)
+          Text {
+            id: sizesHeader
+            anchors.verticalCenter: parent.verticalCenter
+            text: "CURSOR SIZE"
+            color: Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            font.bold: true
           }
-          onSizeHovered: function(size, index, hovered) {
-            if (hovered) {
-              root.sizeIndex = index
+
+          SizeSelector {
+            id: sizeSelector
+            anchors.verticalCenter: parent.verticalCenter
+            sizes: root.service ? root.service.sizes : []
+            committedSize: root.service ? root.service.committedSize : 16
+            cursorActive: root.focusSection === "sizes"
+            onSizeActivated: function(size) {
               root.focusSection = "sizes"
-              root.service.requestPreview(root.service.committedTheme, size)
-            } else if (root.service.previewActive && root.service.previewSize === size) root.service.cancelPreview()
+              root.service.commitSize(size)
+            }
           }
         }
 
