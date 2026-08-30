@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Build standard Hyprcursor and XCursor packages from original SVG sources."""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+THEME = ROOT / "themes" / "omarchy-banana"
+SOURCE = THEME / "source"
+BUILD = THEME / ".build"
+GENERATED = THEME / "generated" / "Omarchy-Banana"
+
+
+def run(*args):
+    subprocess.run([str(value) for value in args], check=True)
+
+
+def require(program, package):
+    if shutil.which(program) is None:
+        raise SystemExit(f"missing build tool '{program}' (Arch package: {package})")
+
+
+def normalize_hlc(path):
+    """Remove packer timestamps while preserving the standard HLC ZIP format."""
+    with zipfile.ZipFile(path, "r") as archive:
+        entries = [(name, archive.read(name)) for name in sorted(archive.namelist())]
+    temporary = path.with_suffix(".hlc.tmp")
+    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for name, payload in entries:
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            archive.writestr(info, payload)
+    temporary.replace(path)
+
+
+def main():
+    for program, package in [("python3", "python"), ("cc", "gcc"), ("pkg-config", "pkgconf"),
+                             ("rsvg-convert", "librsvg"), ("hyprcursor-util", "hyprcursor")]:
+        require(program, package)
+    run(THEME / "generate-svg-sources.py")
+    spec = json.loads((THEME / "theme.json").read_text(encoding="utf-8"))
+    shutil.rmtree(BUILD, ignore_errors=True)
+    shutil.rmtree(GENERATED, ignore_errors=True)
+    BUILD.mkdir(parents=True)
+    GENERATED.mkdir(parents=True)
+    cursors = GENERATED / "cursors"
+    cursors.mkdir()
+
+    flags = subprocess.check_output(["pkg-config", "--cflags", "--libs", "xcursor", "libpng"], text=True).split()
+    packer = BUILD / "xcursor-pack"
+    run("cc", "-O2", "-Wall", "-Wextra", "-Werror", ROOT / "scripts" / "xcursor-pack.c", "-o", packer, *flags)
+
+    for role, data in spec["roles"].items():
+        source = SOURCE / data["source"]
+        if not source.is_file():
+            raise SystemExit(f"missing canonical source: {source}")
+        arguments = [packer, cursors / role]
+        for size in spec["sizes"]:
+            png = BUILD / f"{role}-{size}.png"
+            run("rsvg-convert", "--width", size, "--height", size, "--output", png, source)
+            xhot = round(data["hotspot"][0] * size / 64)
+            yhot = round(data["hotspot"][1] * size / 64)
+            arguments.extend([size, xhot, yhot, 0, png])
+        run(*arguments)
+        for alias in data["aliases"]:
+            alias_path = cursors / alias
+            if alias_path.exists() or alias_path.is_symlink():
+                raise SystemExit(f"duplicate XCursor alias: {alias}")
+            alias_path.symlink_to(role)
+
+    (GENERATED / "index.theme").write_text(
+        "[Icon Theme]\nName=Omarchy Banana\nComment=Original banana-inspired cursor theme for Omarchy\nInherits=Adwaita\n",
+        encoding="utf-8")
+
+    working = BUILD / "hypr-working"
+    hypr_shapes = working / "hyprcursors"
+    hypr_shapes.mkdir(parents=True)
+    (working / "manifest.hl").write_text(
+        f"name = {spec['internalName']}\ndescription = {spec['description']}\nversion = {spec['version']}\n"
+        "cursors_directory = hyprcursors\n", encoding="utf-8")
+    for role, data in spec["roles"].items():
+        shape = hypr_shapes / role
+        shape.mkdir()
+        shutil.copy2(SOURCE / data["source"], shape / "image.svg")
+        lines = ["resize_algorithm = bilinear",
+                 f"hotspot_x = {data['hotspot'][0] / 64:.6f}", f"hotspot_y = {data['hotspot'][1] / 64:.6f}"]
+        lines.extend(f"define_override = {alias}" for alias in data["aliases"])
+        lines.append("define_size = 64, image.svg")
+        (shape / "meta.hl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    hypr_output = BUILD / "hypr-output"
+    hypr_output.mkdir()
+    run("hyprcursor-util", "--create", working, "--output", hypr_output)
+    candidates = [path for path in hypr_output.iterdir() if path.is_dir() and (path / "manifest.hl").is_file()]
+    if len(candidates) != 1:
+        raise SystemExit(f"hyprcursor-util produced {len(candidates)} theme directories, expected one")
+    for item in candidates[0].iterdir():
+        target = GENERATED / item.name
+        if target.exists():
+            raise SystemExit(f"Hyprcursor output collides with XCursor output: {item.name}")
+        shutil.copytree(item, target) if item.is_dir() else shutil.copy2(item, target)
+    for archive in sorted((GENERATED / "hyprcursors").glob("*.hlc")):
+        normalize_hlc(archive)
+
+    print(f"built combined cursor package: {GENERATED}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(f"build command failed ({error.returncode}): {' '.join(map(str, error.cmd))}")

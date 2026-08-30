@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "goblin.cursor-switcher",
+  "name": "Cursor Switcher",
+  "version": "1.1.0",
+  "author": "Omarchy Banana contributors",
+  "license": "MIT",
+  "description": "A native cursor theme and size selector with the original Omarchy Banana theme.",
+  "kinds": ["service", "panel"],
+  "entryPoints": {
+    "service": "CursorService.qml",
+    "panel": "Panel.qml"
+  },
+  "keepLoaded": true
+}
