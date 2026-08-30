@@ -107,8 +107,8 @@ Item {
     title: "Cursor"
     color: Color.popups.background
     implicitWidth: Math.min(Style.space(620), 760)
-    implicitHeight: Math.min(Style.space(560), 700)
-    minimumSize: Qt.size(Math.min(Style.space(500), 560), Math.min(Style.space(420), 480))
+    implicitHeight: Math.min(Style.space(540), 680)
+    minimumSize: Qt.size(Math.min(Style.space(500), 560), Math.min(Style.space(400), 460))
 
     onVisibleChanged: {
       if (!visible && !root.closingFromHost) {
@@ -133,29 +133,13 @@ Item {
         anchors.margins: Style.space(22)
         spacing: Style.space(12)
 
-        Item {
-          width: parent.width
-          height: Math.max(title.implicitHeight, active.implicitHeight)
-          Text {
-            id: title
-            anchors.left: parent.left
-            text: "Cursor"
-            color: Color.popups.text
-            font.family: Style.font.family
-            font.pixelSize: Style.font.title
-            font.bold: true
-          }
-          Text {
-            id: active
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.service && root.service.committedTheme
-              ? root.service.committedTheme.displayName + "  ·  " + root.service.committedSize
-              : "Loading…"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.bodySmall
-          }
+        Text {
+          id: title
+          text: "Cursor"
+          color: Color.popups.text
+          font.family: Style.font.family
+          font.pixelSize: Style.font.title
+          font.bold: true
         }
 
         Text {
@@ -171,7 +155,7 @@ Item {
         CursorGrid {
           id: grid
           width: parent.width
-          height: parent.height - y - sizeRow.implicitHeight - footer.implicitHeight - parent.spacing * 2
+          height: parent.height - y - sizeRow.implicitHeight - parent.spacing
           themes: root.service ? root.service.themes : []
           committedIndex: root.service ? root.service.indexOfCommitted() : -1
           cursorIndex: root.themeIndex
@@ -214,28 +198,6 @@ Item {
               root.focusSection = "sizes"
               root.service.commitSize(size)
             }
-          }
-        }
-
-        Item {
-          id: footer
-          width: parent.width
-          implicitHeight: Math.max(status.implicitHeight, hint.implicitHeight)
-          Text {
-            id: status
-            anchors.left: parent.left
-            text: root.service ? root.service.statusText : "Service unavailable"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-          }
-          Text {
-            id: hint
-            anchors.right: parent.right
-            text: "Arrows navigate  ·  Tab switches  ·  Enter applies  ·  Esc closes"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
           }
         }
       }

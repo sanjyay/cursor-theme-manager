@@ -59,6 +59,57 @@ has_hyprcursor() {
   [[ -d $dir/${cursors:-hyprcursors} ]]
 }
 
+get_preview_path() {
+  local dir=$1 is_bundled=$2 bundled_preview=${3:-}
+  if [[ $is_bundled == true && -n $bundled_preview && -f $bundled_preview ]]; then
+    printf '%s' "$bundled_preview"
+    return 0
+  fi
+
+  local base=${dir##*/}
+  local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-cursor-switcher/previews"
+  local preview_png="$cache_dir/$base.png"
+
+  if [[ -f $preview_png ]]; then
+    printf '%s' "$preview_png"
+    return 0
+  fi
+
+  if [[ -d $dir/cursors ]]; then
+    local cur_path=""
+    local candidate
+    for candidate in left_ptr default arrow pointer top_left_arrow; do
+      if [[ -f $dir/cursors/$candidate ]]; then
+        cur_path="$dir/cursors/$candidate"
+        break
+      fi
+    done
+
+    if [[ -n $cur_path ]] && command -v xcur2png >/dev/null 2>&1; then
+      mkdir -p "$cache_dir"
+      local temp_dir
+      temp_dir=$(mktemp -d -t .preview.XXXXXX)
+      if (cd "$temp_dir" && xcur2png "$cur_path" >/dev/null 2>&1); then
+        local best_png
+        best_png=$(find "$temp_dir" -type f -name "*.png" -size +100c 2>/dev/null | sort -V | tail -n1)
+        if [[ -n $best_png && -f $best_png ]]; then
+          if command -v magick >/dev/null 2>&1; then
+            magick "$best_png" -resize 64x64 "$preview_png" >/dev/null 2>&1 || cp "$best_png" "$preview_png"
+          else
+            cp "$best_png" "$preview_png"
+          fi
+          rm -rf -- "$temp_dir"
+          printf '%s' "$preview_png"
+          return 0
+        fi
+      fi
+      rm -rf -- "$temp_dir"
+    fi
+  fi
+
+  printf ''
+}
+
 discover() {
   local bundled_preview=${1:-} home=${HOME:?HOME is not set} root dir base
   local first=1 display hypr xcursor formats path manifest_name index_name is_bundled subtitle
@@ -102,6 +153,9 @@ discover() {
         subtitle="ful1e5"
       fi
 
+      local theme_preview
+      theme_preview=$(get_preview_path "$dir" "$is_bundled" "$bundled_preview")
+
       (( first )) || printf ','
       first=0
       printf '{"displayName":'; json_string "$display"
@@ -110,7 +164,7 @@ discover() {
       printf ',"xcursor":'; json_string "$xcursor"
       printf ',"path":'; json_string "$path"
       printf ',"formats":[%s],"bundled":%s,"previewPath":' "$formats" "$is_bundled"
-      if [[ $is_bundled == true && -n $bundled_preview ]]; then json_string "$bundled_preview"; else json_string ""; fi
+      json_string "$theme_preview"
       printf '}'
     done
   done
