@@ -13,7 +13,7 @@ ICONS_DIR="$DATA_HOME/icons"
 APP_DIR="$DATA_HOME/applications"
 BIN_DIR="$HOME_DIR/.local/bin"
 APP_ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
-CLEANUP_DIR="$DATA_HOME/omarchy/cursor-switcher"
+CLEANUP_DIR="$DATA_HOME/omarchy-cursor-switcher"
 
 die() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; exit 1; }
 log() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; }
@@ -388,7 +388,7 @@ report = {
     "bundled_themes": bundled_themes,
     "converted_themes": converted_themes,
     "cache_previews": os.path.isdir(os.path.join(cache_home, "omarchy-cursor-switcher")),
-    "cleanup_helper": os.path.isfile(os.path.join(data_home, "omarchy", "cursor-switcher", "omarchy-cursor-switcher-cleanup"))
+    "cleanup_helper": os.path.isfile(os.path.join(data_home, "omarchy-cursor-switcher", "omarchy-cursor-switcher-cleanup"))
 }
 
 is_clean = not (

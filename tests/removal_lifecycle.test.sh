@@ -88,12 +88,12 @@ assert snap["hyprcursorSize"]["present"] == False
 PY
 
 # Verify active artifacts
-AUDIT_ACTIVE=$("$XDG_DATA_HOME/omarchy/cursor-switcher/omarchy-cursor-switcher-cleanup" audit-installation)
+AUDIT_ACTIVE=$("$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup" audit-installation)
 python3 -c "import sys, json; rep = json.loads(sys.argv[1]); assert rep['is_clean'] == False; assert rep['desktop_entry'] == True; assert 'Banana' in rep['bundled_themes']" "$AUDIT_ACTIVE"
 
 # 2. Test DISABLE lifecycle (plugin dir still exists)
 # on-destroy should deactivate cursor, unregister app, but keep bundled themes & state
-"$XDG_DATA_HOME/omarchy/cursor-switcher/omarchy-cursor-switcher-cleanup" on-destroy --plugin-dir "$PLUGIN_DIR"
+"$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup" on-destroy --plugin-dir "$PLUGIN_DIR"
 
 [[ ! -e "$HOME/.local/bin/omarchy-cursor-switcher" ]]
 [[ ! -e "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
@@ -120,7 +120,7 @@ grep -q "systemctl --user unset-environment HYPRCURSOR_THEME" "$MOCK_LOG"
 rm -rf -- "$PLUGIN_DIR"
 
 # on-destroy should detect plugin dir is missing and trigger full purge
-"$XDG_DATA_HOME/omarchy/cursor-switcher/omarchy-cursor-switcher-cleanup" on-destroy --plugin-dir "$PLUGIN_DIR"
+"$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup" on-destroy --plugin-dir "$PLUGIN_DIR"
 
 # 5. Verify NO traces remain
 [[ ! -e "$HOME/.local/bin/omarchy-cursor-switcher" ]]
@@ -132,7 +132,7 @@ rm -rf -- "$PLUGIN_DIR"
 [[ ! -e "$XDG_CONFIG_HOME/omarchy/cursor-switcher.json" ]]
 [[ ! -e "$SNAPSHOT_FILE" ]]
 [[ ! -e "$XDG_CACHE_HOME/omarchy-cursor-switcher" ]]
-[[ ! -e "$XDG_DATA_HOME/omarchy/cursor-switcher" ]]
+[[ ! -e "$XDG_DATA_HOME/omarchy-cursor-switcher" ]]
 
 # Verify unrelated theme is intact
 [[ -d "$XDG_DATA_HOME/icons/CustomTheme" ]]

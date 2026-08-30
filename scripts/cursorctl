@@ -562,7 +562,7 @@ install_cleanup_helper() {
   [[ -n $source_dir && -d $source_dir ]] || die "missing --source directory"
 
   local data_home=${XDG_DATA_HOME:-$home/.local/share}
-  local target_dir="$data_home/omarchy/cursor-switcher"
+  local target_dir="$data_home/omarchy-cursor-switcher"
   local target_file="$target_dir/omarchy-cursor-switcher-cleanup"
   local src_file="$source_dir/scripts/omarchy-cursor-switcher-cleanup"
 

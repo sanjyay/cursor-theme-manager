@@ -78,7 +78,7 @@ Item {
     }
     // Plugin disabled or removed -> execute standalone cleanup helper
     var dataHome = Quickshell.env("XDG_DATA_HOME") || ((Quickshell.env("HOME") || "") + "/.local/share")
-    var cleanupPath = dataHome + "/omarchy/cursor-switcher/omarchy-cursor-switcher-cleanup"
+    var cleanupPath = dataHome + "/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup"
     var sourceRoot = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : (root.pluginRoot || "")
     Util.execDetached(Util.shellQuote(cleanupPath) + " on-destroy --plugin-dir " + Util.shellQuote(sourceRoot))
   }

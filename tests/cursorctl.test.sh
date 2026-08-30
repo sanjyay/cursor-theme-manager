@@ -98,7 +98,7 @@ fi
 
 # Test install-cleanup-helper
 "$ROOT/scripts/cursorctl" install-cleanup-helper --source "$ROOT"
-CLEANUP_HELPER="$XDG_DATA_HOME/omarchy/cursor-switcher/omarchy-cursor-switcher-cleanup"
+CLEANUP_HELPER="$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup"
 [[ -x "$CLEANUP_HELPER" ]]
 
 # Test snapshot-original-state
@@ -198,7 +198,7 @@ PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" XDG_CACHE_HOME
 [[ ! -e "$TEST_DIR/config/omarchy/cursor-switcher.json" ]]
 [[ ! -e "$SNAPSHOT_FILE" ]]
 [[ ! -e "$TEST_DIR/home/.cache/omarchy-cursor-switcher" ]]
-[[ ! -e "$XDG_DATA_HOME/omarchy/cursor-switcher" ]]
+[[ ! -e "$XDG_DATA_HOME/omarchy-cursor-switcher" ]]
 
 # Test double purge (idempotency)
 PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" XDG_CACHE_HOME="$TEST_DIR/home/.cache" \
