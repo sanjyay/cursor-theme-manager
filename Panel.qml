@@ -114,6 +114,7 @@ Item {
 
   FloatingWindow {
     id: window
+    visible: false
     title: "Cursor"
     color: Color.popups.background
     implicitWidth: Math.min(Style.space(620), 760)
