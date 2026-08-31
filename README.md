@@ -1,10 +1,14 @@
-# Cursor Theme (Omarchy Plugin)
+# Cursor Theme Manager
 
 [![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](manifest.json)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Hyprland%20%7C%20Omarchy-purple.svg)](https://omarchyplugins.com)
 
-A native, keyboard-first cursor theme manager and previewer for **Omarchy** and **Hyprland**. It features dynamic multi-role previews, live hover inspection, discrete size scaling, native in-app archive/folder importing with automatic XCursor-to-Hyprcursor compilation, and bundled curated open-source cursor themes.
+A cursor theme manager and previewer for **Omarchy** and **Hyprland**. It features dynamic multi-role previews, live hover inspection, discrete size scaling, native in-app archive/folder importing with automatic XCursor-to-Hyprcursor compilation, and bundled curated open-source cursor themes.
+
+
+https://github.com/user-attachments/assets/365f9cf4-a422-4385-a559-150a68cded5c
+
 
 ---
 
