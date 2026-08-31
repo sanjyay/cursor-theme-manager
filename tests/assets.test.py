@@ -82,7 +82,7 @@ assert icon_root.tag.endswith("svg")
 desktop_file = ROOT / "desktop" / "omarchy-cursor-switcher.desktop"
 assert desktop_file.is_file(), desktop_file
 desktop_content = desktop_file.read_text(encoding="utf-8")
-assert "Name=Cursor Theme" in desktop_content
+assert "Name=Cursor Theme Manager" in desktop_content
 assert "Exec=omarchy-cursor-switcher" in desktop_content
 assert "Icon=omarchy-cursor-switcher" in desktop_content
 

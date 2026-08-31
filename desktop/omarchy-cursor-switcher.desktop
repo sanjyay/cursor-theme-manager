@@ -1,8 +1,8 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Cursor Theme
-GenericName=Cursor Theme
+Name=Cursor Theme Manager
+GenericName=Cursor Theme Manager
 Comment=Choose and preview cursor themes in Omarchy
 Exec=omarchy-cursor-switcher
 Icon=omarchy-cursor-switcher

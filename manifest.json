@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "sanjyay.cursor-switcher",
-  "name": "Cursor Theme",
+  "name": "Cursor Theme Manager",
   "version": "1.0.0",
   "author": "sanjyay",
   "license": "GPL-3.0-or-later",

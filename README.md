@@ -50,9 +50,9 @@ omarchy plugin enable sanjyay.cursor-switcher
 
 ## Launching & Configuring
 
-Cursor Theme installs as a standard graphical application on your system:
+Cursor Theme Manager installs as a standard graphical application on your system:
 
-- **Application Launcher:** Open your app launcher (Omarchy drawer, Rofi, Fuzzel, etc.) and search for **Cursor Theme** (or *Mouse*, *Pointer*, *Banana*).
+- **Application Launcher:** Open your app launcher (Omarchy drawer, Rofi, Fuzzel, etc.) and search for **Cursor Theme Manager** (or *Mouse*, *Pointer*, *Banana*).
 - **Command Line:** Run `omarchy-cursor-switcher` from any terminal.
 - **Omarchy Shell IPC:**
   ```bash
@@ -106,7 +106,7 @@ You can import any standard Linux cursor theme.
 
 ### Using the In-App Importer
 
-1. Open **Cursor Theme** from your application launcher or terminal.
+1. Open **Cursor Theme Manager** from your application launcher or terminal.
 2. Click **Import** in the sidebar header.
 3. Browse using the quick shortcuts (`Home`, `Downloads`, `~/.local/share/icons`, `/usr/share/icons`) or navigate directories.
 4. Select a supported cursor archive or extracted theme folder and click **Import Theme**.
@@ -136,10 +136,10 @@ scripts/cursorctl remove-imported --id CursorSwitcher-Imported-Bibata-1a2b3c
 
 ## Security & omarchyplugins.com Compliance
 
-Cursor Theme adheres strictly to Omarchy plugin standards and follows defensive security practices:
+Cursor Theme Manager adheres strictly to Omarchy plugin standards and follows defensive security practices:
 
 - **Untrusted Input Hardening:** All imported archives and folders are treated as untrusted data.
-- **No Script Execution:** Cursor Theme never executes `install.sh`, `Makefile`, Python, or shell scripts bundled inside third-party theme archives.
+- **No Script Execution:** Cursor Theme Manager never executes `install.sh`, `Makefile`, Python, or shell scripts bundled inside third-party theme archives.
 - **Path Traversal Protection:** Extraction strictly validates target paths, forbidding relative directory traversal (`..`), absolute path escapes, device files, FIFOs, and symlinks pointing outside the theme root.
 - **Decompression Bomb Protection:** Archive extraction enforces safe file size caps (max 50 MB archive, max 150 MB extracted, max 5,000 files).
 - **Safe Subprocess Execution:** All backend scripts execute with parameterized arguments (`subprocess.run(list, ...)`), preventing shell injection.
@@ -149,7 +149,7 @@ Cursor Theme adheres strictly to Omarchy plugin standards and follows defensive 
 
 ## Bundled Themes & Attributions
 
-Cursor Theme ships with curated, high-quality open-source cursor themes. Each theme is packaged independently, preserving original authorship, copyright notices, vector sources, and licenses:
+Cursor Theme Manager ships with curated, high-quality open-source cursor themes. Each theme is packaged independently, preserving original authorship, copyright notices, vector sources, and licenses:
 
 | Theme | Upstream Project | Author / Creator | License | Sources |
 | :--- | :--- | :--- | :--- | :--- |

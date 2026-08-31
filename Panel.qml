@@ -69,7 +69,7 @@ Item {
 
   FloatingWindow {
     id: window
-    title: "Cursor Theme"
+    title: "Cursor Theme Manager"
     color: "transparent"
     visible: false
     implicitWidth: Style.space(1040)
@@ -188,7 +188,7 @@ Item {
               id: headerTitle
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
-              text: "Cursor Theme"
+              text: "Cursor Theme Manager"
               color: Color.popups.text
               font.family: Style.font.family
               font.pixelSize: Style.font.title
