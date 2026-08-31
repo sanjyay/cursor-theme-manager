@@ -35,26 +35,35 @@ def is_cursor_archive(filename: str) -> bool:
     return False
 
 
-def is_cursor_theme_dir(dir_path: Path) -> tuple[bool, str]:
-    """Check if directory contains a cursor theme structure and extract theme name."""
+def is_cursor_theme_dir(dir_path_str: str) -> tuple[bool, str]:
+    """Check if directory contains a cursor theme structure in a single shallow pass."""
     try:
-        if not dir_path.is_dir():
-            return False, ""
-
-        has_cursors = (dir_path / "cursors").is_dir()
-        has_index = (dir_path / "index.theme").is_file()
-        has_hypr = (dir_path / "manifest.hl").is_file() or (dir_path / "manifest.toml").is_file()
-        has_hypr_dir = (dir_path / "hyprcursors").is_dir()
+        has_cursors = False
+        has_index = False
+        has_hypr = False
+        has_hypr_dir = False
+        index_file_path = None
+        with os.scandir(dir_path_str) as it:
+            for entry in it:
+                n = entry.name.lower()
+                if n == "cursors" and entry.is_dir():
+                    has_cursors = True
+                elif n == "hyprcursors" and entry.is_dir():
+                    has_hypr_dir = True
+                elif n == "index.theme" and entry.is_file():
+                    has_index = True
+                    index_file_path = entry.path
+                elif n in ("manifest.hl", "manifest.toml") and entry.is_file():
+                    has_hypr = True
 
         if has_cursors or has_index or has_hypr or has_hypr_dir:
-            theme_name = dir_path.name
-            if has_index:
+            theme_name = os.path.basename(dir_path_str)
+            if index_file_path:
                 try:
-                    with open(dir_path / "index.theme", "r", encoding="utf-8", errors="ignore") as f:
+                    with open(index_file_path, "r", encoding="utf-8", errors="ignore") as f:
                         for line in f:
-                            line = line.strip()
-                            if line.lower().startswith("name="):
-                                theme_name = line.split("=", 1)[1].strip()
+                            if line.strip().lower().startswith("name="):
+                                theme_name = line.strip().split("=", 1)[1].strip()
                                 break
                 except Exception:
                     pass
@@ -76,7 +85,6 @@ def list_directory(target_path_str: str) -> dict:
         target_path = home / "Downloads"
 
     if not target_path.exists() or not target_path.is_dir():
-        # Fallback to home or Downloads
         if (home / "Downloads").is_dir():
             target_path = home / "Downloads"
         else:
@@ -94,7 +102,7 @@ def list_directory(target_path_str: str) -> dict:
                 if name.startswith(".") and not (target_path.name in ["icons", ".icons"] or name in [".icons"]):
                     continue
 
-                full_path = Path(entry.path)
+                full_path_str = entry.path
                 try:
                     is_dir = entry.is_dir(follow_symlinks=True)
                     is_file = entry.is_file(follow_symlinks=True)
@@ -102,10 +110,10 @@ def list_directory(target_path_str: str) -> dict:
                     continue
 
                 if is_dir:
-                    is_theme, theme_name = is_cursor_theme_dir(full_path)
+                    is_theme, theme_name = is_cursor_theme_dir(full_path_str)
                     entries.append({
                         "name": name,
-                        "path": str(full_path),
+                        "path": full_path_str,
                         "is_dir": True,
                         "is_archive": False,
                         "is_theme_dir": is_theme,
@@ -122,7 +130,7 @@ def list_directory(target_path_str: str) -> dict:
                             size_str = "Archive"
                         entries.append({
                             "name": name,
-                            "path": str(full_path),
+                            "path": full_path_str,
                             "is_dir": False,
                             "is_archive": True,
                             "is_theme_dir": False,
@@ -140,20 +148,19 @@ def list_directory(target_path_str: str) -> dict:
             "entries": []
         }
 
-    # Sort entries: theme dirs first (0), normal dirs (1), archives (2), then alphabetically by name
-    entries.sort(key=lambda e: (e["sort_order"], e["name"].lower()))
+    # Sort: cursor themes first, then regular folders alphabetically, then archives alphabetically
+    entries.sort(key=lambda x: (x["sort_order"], x["name"].lower()))
 
-    # Build breadcrumb segments
+    # Build breadcrumbs
     breadcrumbs = []
     curr = target_path
-    while curr:
+    while curr != curr.parent:
         breadcrumbs.append({
-            "name": curr.name or str(curr),
+            "name": curr.name or "/",
             "path": str(curr)
         })
-        if curr.parent == curr:
-            break
         curr = curr.parent
+    breadcrumbs.append({"name": "/", "path": "/"})
     breadcrumbs.reverse()
 
     return {
@@ -167,12 +174,12 @@ def list_directory(target_path_str: str) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="List directory and cursor candidates")
-    parser.add_argument("--path", default="", help="Target directory to inspect")
+    parser = argparse.ArgumentParser(description="Omarchy File Browser Helper")
+    parser.add_argument("--path", default="~/Downloads", help="Directory path to list")
     args = parser.parse_args()
 
     result = list_directory(args.path)
-    print(json.dumps(result, indent=2))
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

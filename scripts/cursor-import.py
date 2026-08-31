@@ -323,7 +323,7 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
             slug = "theme"
         short_hash = content_hash[:12]
         internal_id = f"CursorSwitcher-Imported-{slug}-{short_hash}"
-        display_name = f"{declared_name} (Imported)"
+        display_name = declared_name
         install_path = os.path.join(icons_dir, internal_id)
 
         # Copy theme to destination
@@ -343,7 +343,7 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
             "hyprcursor": internal_id if "hyprcursor" in meta["formats"] else "",
             "path": install_path,
             "license": meta["license"],
-            "subtitle": f"Imported • {meta['license']}"
+            "subtitle": meta["license"] if meta["license"] and meta["license"] != "Unknown" else ""
         }
 
         # If XCursor-only or lacks Hyprcursor, run ensure-hyprcursor
@@ -385,9 +385,9 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
 
 def run_remove(theme_id: str):
     if not theme_id:
-        return {"ok": False, "error": "Missing theme ID to remove"}
+        return {"ok": False, "error": "Missing theme ID"}
 
-    # Security check: theme_id must be safe
+    # Security check: theme_id must be an imported namespace
     if not theme_id.startswith("CursorSwitcher-Imported-") or "/" in theme_id or ".." in theme_id:
         return {"ok": False, "error": "Refusing to remove theme: not a valid imported theme ID"}
 
@@ -403,25 +403,21 @@ def run_remove(theme_id: str):
     if not os.path.isfile(marker):
         return {"ok": False, "error": f"Directory is not managed by Cursor Switcher import: {target}"}
 
-    # Remove converted Hyprcursor if present
-    if os.path.isdir(icons_dir):
-        for entry in os.listdir(icons_dir):
-            if entry.startswith(f"CursorSwitcher-XCursor-{theme_id}-"):
-                conv_path = os.path.join(icons_dir, entry)
-                if os.path.isdir(conv_path):
-                    shutil.rmtree(conv_path, ignore_errors=True)
-
-    # Remove theme directory
+    # Remove the theme directory
     shutil.rmtree(target)
 
-    # Clean preview cache if present
+    # Clean up associated converted themes if any
+    for entry in os.listdir(icons_dir):
+        if entry.startswith("CursorSwitcher-XCursor-" + theme_id) or entry.startswith("CursorSwitcher-Themed-" + theme_id):
+            full = os.path.join(icons_dir, entry)
+            if os.path.isdir(full):
+                shutil.rmtree(full, ignore_errors=True)
+
+    # Clean preview cache for this theme
     cache_home = os.environ.get("XDG_CACHE_HOME", os.path.join(home, ".cache"))
-    preview_cache = os.path.join(cache_home, "omarchy-cursor-switcher", "previews", f"{theme_id}.png")
-    if os.path.exists(preview_cache):
-        try:
-            os.unlink(preview_cache)
-        except Exception:
-            pass
+    theme_cache = os.path.join(cache_home, "omarchy", "cursor-previews", theme_id)
+    if os.path.isdir(theme_cache):
+        shutil.rmtree(theme_cache, ignore_errors=True)
 
     return {"ok": True, "removed": theme_id}
 
@@ -450,38 +446,70 @@ def run_rename(theme_id: str, new_name: str):
     if not os.path.isfile(marker):
         return {"ok": False, "error": f"Directory is not managed by Cursor Switcher import: {target}"}
 
-    # Update index.theme if present
+    # 1. Update .omarchy-cursor-switcher-imported JSON marker
+    try:
+        with open(marker, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["displayName"] = clean_name
+        with open(marker, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to update metadata marker: {e}"}
+
+    # 2. Update index.theme if present
     idx_path = os.path.join(target, "index.theme")
     if os.path.isfile(idx_path):
         try:
             lines = []
+            found = False
             with open(idx_path, "r", encoding="utf-8", errors="ignore") as f:
                 for line in f:
                     if line.strip().startswith("Name="):
                         lines.append(f"Name={clean_name}\n")
+                        found = True
                     else:
                         lines.append(line)
+            if not found:
+                lines.insert(0, f"Name={clean_name}\n")
             with open(idx_path, "w", encoding="utf-8") as f:
                 f.writelines(lines)
         except Exception as e:
             return {"ok": False, "error": f"Failed to update index.theme: {e}"}
 
-    # Update manifest.hl / manifest.toml if present
+    # 3. Update manifest.hl / manifest.toml if present
     for mname in ["manifest.hl", "manifest.toml"]:
         mpath = os.path.join(target, mname)
         if os.path.isfile(mpath):
             try:
                 lines = []
+                found = False
                 with open(mpath, "r", encoding="utf-8", errors="ignore") as f:
                     for line in f:
                         if line.strip().startswith("name =") or line.strip().startswith("name="):
                             lines.append(f"name = {clean_name}\n")
+                            found = True
                         else:
                             lines.append(line)
+                if not found:
+                    lines.insert(0, f"name = {clean_name}\n")
                 with open(mpath, "w", encoding="utf-8") as f:
                     f.writelines(lines)
             except Exception:
                 pass
+
+    # 4. Update state file if active
+    config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
+    state_file = os.path.join(config_home, "omarchy", "cursor-switcher.json")
+    if os.path.isfile(state_file):
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                st = json.load(f)
+            if st.get("theme") == theme_id:
+                st["displayName"] = clean_name
+                with open(state_file, "w", encoding="utf-8") as f:
+                    json.dump(st, f, indent=2)
+        except Exception:
+            pass
 
     return {"ok": True, "theme_id": theme_id, "displayName": clean_name}
 

@@ -287,6 +287,25 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
     return roles_found
 
 
+def get_all_theme_role_previews():
+    results = {}
+    candidates = []
+    for base in [LOCAL_ICONS, Path("/usr/share/icons"), THEMES_ROOT]:
+        if base.is_dir():
+            for d in base.iterdir():
+                if d.is_dir():
+                    candidates.append(d.name)
+    for c in sorted(set(candidates)):
+        try:
+            r = get_theme_role_previews(c)
+            if r and any(k for k in r if not k.startswith("_")):
+                results[c] = r
+                results[c.lower()] = r
+        except Exception:
+            pass
+    return results
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: cursor_theming.py get-preview-roles [--theme <name>] [--path <path>]", file=sys.stderr)
@@ -311,6 +330,9 @@ def main():
                 i += 1
         roles = get_theme_role_previews(theme, path_hint)
         print(json.dumps(roles))
+    elif cmd == "get-all-preview-roles":
+        all_roles = get_all_theme_role_previews()
+        print(json.dumps(all_roles))
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         sys.exit(1)
@@ -318,3 +340,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

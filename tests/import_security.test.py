@@ -332,6 +332,26 @@ class TestCursorImportSecurity(unittest.TestCase):
         self.assertTrue(len(imported_entries) >= 1)
         self.assertTrue(any("DiscoveredImport" in t["displayName"] for t in imported_entries))
 
+    def test_21_rename_imported_theme(self):
+        src = self.create_mock_xcursor("InitialName")
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0)
+        imported_id = json.loads(res.stdout)["theme"]["id"]
+
+        # Rename
+        res_rename = subprocess.run([CURSORCTL, "rename-imported", "--id", imported_id, "--name", "BrandNewName"], capture_output=True, text=True)
+        self.assertEqual(res_rename.returncode, 0)
+        rename_data = json.loads(res_rename.stdout)
+        self.assertTrue(rename_data.get("ok"))
+        self.assertEqual(rename_data.get("displayName"), "BrandNewName")
+
+        # Discover should immediately reflect BrandNewName
+        res_disc = subprocess.run([CURSORCTL, "discover"], capture_output=True, text=True)
+        disc_data = json.loads(res_disc.stdout)
+        renamed_theme = next((t for t in disc_data["themes"] if t["id"] == imported_id), None)
+        self.assertIsNotNone(renamed_theme)
+        self.assertEqual(renamed_theme["displayName"], "BrandNewName")
+
 
 if __name__ == "__main__":
     unittest.main()

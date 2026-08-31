@@ -269,24 +269,9 @@ Item {
               anchors.left: parent.left
               width: Math.max(Style.space(240), Math.min(Style.space(340), Math.round(parent.width * 0.35)))
 
-              Text {
-                id: listHeader
-                anchors.top: parent.top
-                anchors.left: parent.left
-                text: "Cursor Themes"
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-
               ThemeListView {
                 id: themeList
-                anchors.top: listHeader.bottom
-                anchors.topMargin: Style.space(8)
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
+                anchors.fill: parent
                 themes: root.service ? root.service.themes : []
                 committedTheme: root.service ? root.service.committedTheme : null
                 committedIndex: root.service ? root.service.indexOfCommitted() : -1
@@ -347,7 +332,20 @@ Item {
               anchors.right: parent.right
               theme: root.hoveredTheme || ((root.service && root.service.themes && root.themeIndex >= 0 && root.themeIndex < root.service.themes.length) ? root.service.themes[root.themeIndex] : (root.service ? root.service.committedTheme : null))
               committedSize: root.service ? root.service.committedSize : 16
-              previewRoles: root.service ? root.service.currentRoles : ({})
+              previewRoles: {
+                if (!root.service) return ({})
+                var activeTheme = previewPane.theme
+                if (activeTheme) {
+                  var name = activeTheme.displayName || activeTheme.id
+                  if (root.service.rolesCache && root.service.rolesCache[name]) {
+                    return root.service.rolesCache[name]
+                  }
+                  if (name && root.service.rolesCache && root.service.rolesCache[name.toLowerCase()]) {
+                    return root.service.rolesCache[name.toLowerCase()]
+                  }
+                }
+                return root.service.currentRoles || ({})
+              }
               sizeCursorActive: root.focusSection === "sizes"
 
               onSizeActivated: function(size) {

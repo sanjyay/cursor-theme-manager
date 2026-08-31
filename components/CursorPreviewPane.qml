@@ -207,9 +207,19 @@ Item {
             }
 
             Text {
-              visible: Boolean(root.theme && root.theme.subtitle)
+              readonly property string cleanSubtitle: {
+                if (!root.theme || !root.theme.subtitle) return ""
+                var s = String(root.theme.subtitle).trim()
+                if (s === "Unknown" || s === "Imported • Unknown" || s === "System • Unknown" || s === "Imported") return ""
+                if (s.indexOf("Imported • ") === 0) {
+                  var rest = s.substring(11).trim()
+                  return rest === "Unknown" ? "" : rest
+                }
+                return s
+              }
+              visible: cleanSubtitle.length > 0
               anchors.verticalCenter: parent.verticalCenter
-              text: "• " + (root.theme ? root.theme.subtitle : "")
+              text: "• " + cleanSubtitle
               color: Color.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -217,7 +227,7 @@ Item {
             }
           }
 
-          // Line 2: Format & Source Badges
+          // Line 2: Format Badges & Context Menu
           Item {
             width: parent.width
             height: Style.space(22)
@@ -251,46 +261,18 @@ Item {
               }
             }
 
-            // Source Badge and Context Menu on right
-            Row {
+            // Context Action Menu Button [⋯] (For Imported Themes)
+            Rectangle {
+              id: contextBtn
+              visible: Boolean(root.theme && (root.theme.imported === true || root.theme.sourceType === "imported"))
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(6)
-
-              // Source Badge
-              Rectangle {
-                height: Style.space(20)
-                radius: Style.space(3)
-                color: root.theme && (root.theme.imported || root.theme.sourceType === "imported")
-                  ? Util.alpha(Color.accent, 0.15)
-                  : Util.alpha(Color.popups.text, 0.06)
-                border.color: root.theme && (root.theme.imported || root.theme.sourceType === "imported")
-                  ? Util.alpha(Color.accent, 0.4)
-                  : Util.alpha(Color.popups.text, 0.16)
-                border.width: 1
-                implicitWidth: srcLabel.implicitWidth + Style.space(10)
-
-                Text {
-                  id: srcLabel
-                  anchors.centerIn: parent
-                  text: root.theme ? (root.theme.imported || root.theme.sourceType === "imported" ? "Imported" : (root.theme.bundled ? "Bundled" : "System")) : "System"
-                  color: root.theme && (root.theme.imported || root.theme.sourceType === "imported") ? Color.accent : Color.muted
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption - 2
-                  font.bold: true
-                }
-              }
-
-              // Context Action Menu Button [⋯] (For Imported Themes)
-              Rectangle {
-                id: contextBtn
-                visible: Boolean(root.theme && (root.theme.imported === true || root.theme.sourceType === "imported"))
-                height: Style.space(20)
-                width: Style.space(24)
-                radius: Style.space(3)
-                color: contextMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : Util.alpha(Color.popups.text, 0.08)
-                border.color: Util.alpha(Color.popups.text, 0.18)
-                border.width: 1
+              height: Style.space(20)
+              width: Style.space(24)
+              radius: Style.space(3)
+              color: contextMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : Util.alpha(Color.popups.text, 0.08)
+              border.color: Util.alpha(Color.popups.text, 0.18)
+              border.width: 1
 
                 Text {
                   anchors.centerIn: parent
@@ -331,5 +313,4 @@ Item {
         }
       }
     }
-  }
 }

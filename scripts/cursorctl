@@ -700,6 +700,11 @@ case ${1:-} in
     script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
     exec python3 "$script_dir/cursor_theming.py" get-preview-roles "$@"
     ;;
+  get-all-preview-roles)
+    shift
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    exec python3 "$script_dir/cursor_theming.py" get-all-preview-roles "$@"
+    ;;
   install-bundled) shift; install_bundled "$@" ;;
   install-cleanup-helper) shift; install_cleanup_helper "$@" ;;
   register-app) shift; register_app "$@" ;;

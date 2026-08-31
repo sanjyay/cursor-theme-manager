@@ -118,6 +118,7 @@ Item {
       } else if (committedTheme) {
         fetchRoles(committedTheme.displayName || committedTheme.id, committedTheme.path || "")
       }
+      prefetchAllRoles()
     } catch (error) {
       lastError = "Cursor discovery returned invalid data"
       console.warn("sanjyay.cursor-switcher: discovery parse failed:", error)
@@ -129,11 +130,21 @@ Item {
   property string _pendingFetchTheme: ""
   property string _pendingFetchPath: ""
 
+  function prefetchAllRoles() {
+    if (prefetchRolesProcess.running) return
+    prefetchRolesProcess.command = [helperPath, "get-all-preview-roles"]
+    prefetchRolesProcess.running = true
+  }
+
   function fetchRoles(themeIdentifier, themePath) {
     if (!themeIdentifier) return
     var key = String(themeIdentifier)
     if (rolesCache[key]) {
       currentRoles = rolesCache[key]
+      return
+    }
+    if (rolesCache[key.toLowerCase()]) {
+      currentRoles = rolesCache[key.toLowerCase()]
       return
     }
     if (fetchRolesProcess.running) {
@@ -425,6 +436,33 @@ Item {
         root._pendingFetchTheme = ""
         root._pendingFetchPath = ""
         root.fetchRoles(nextTheme, nextPath)
+      }
+    }
+  }
+
+  Process {
+    id: prefetchRolesProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: prefetchRolesStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        try {
+          var allRes = JSON.parse(prefetchRolesStdout.text || "{}")
+          if (allRes && typeof allRes === "object") {
+            for (var k in allRes) {
+              root.rolesCache[k] = allRes[k]
+            }
+            if (root.committedTheme) {
+              var cName = root.committedTheme.displayName || root.committedTheme.id
+              if (root.rolesCache[cName]) {
+                root.currentRoles = root.rolesCache[cName]
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("sanjyay.cursor-switcher: prefetch parse failed:", e)
+        }
       }
     }
   }
