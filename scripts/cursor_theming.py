@@ -38,18 +38,28 @@ SEMANTIC_ROLE_ALIASES = {
         "all-scroll", "fleur", "size_all", "all-resize", "grab", "move", "dnd-move"
     ],
     "resize": [
-        "ew-resize", "col-resize", "sb_h_double_arrow", "h_double_arrow", "left_right", "size_hor",
-        "nwse-resize", "se-resize", "row-resize", "ns-resize"
+        "ew-resize", "col-resize", "sb_h_double_arrow", "h_double_arrow", "size_hor", "left_right",
+        "nwse-resize", "se-resize", "row-resize", "ns-resize", "size_ver"
     ],
     "wait": [
-        "wait", "watch", "progress", "half-busy", "left_ptr_watch"
+        "wait", "watch", "progress", "half-busy", "left_ptr_watch", "08e8e1c95fe2fc01f976f1e063a24ccd"
     ]
 }
+
+ROLE_LABELS = {
+    "default": "Default",
+    "pointer": "Pointer",
+    "text": "Text",
+    "move": "Move",
+    "resize": "Resize",
+    "wait": "Wait"
+}
+
 
 def find_theme_directory(theme_input, theme_path_hint=None):
     if theme_path_hint and os.path.isdir(theme_path_hint):
         return Path(theme_path_hint)
-    
+
     s = str(theme_input).strip()
     if not s:
         return None
@@ -87,24 +97,55 @@ def find_theme_directory(theme_input, theme_path_hint=None):
                         pass
     return None
 
+
 def extract_role_from_hlc(hlc_path, out_file_base):
     try:
+        hotspot_x = -1.0
+        hotspot_y = -1.0
         with zipfile.ZipFile(hlc_path, "r") as zf:
             names = zf.namelist()
+            # Try to read meta.hl for hotspot
+            meta_names = [n for n in names if n == "meta.hl" or n.endswith("/meta.hl")]
+            if meta_names:
+                try:
+                    meta_text = zf.read(meta_names[0]).decode("utf-8", errors="ignore")
+                    define_size = 24.0
+                    for line in meta_text.splitlines():
+                        line = line.strip()
+                        if line.startswith("hotspot_x"):
+                            val = float(line.split("=")[1].strip())
+                            hotspot_x = val
+                        elif line.startswith("hotspot_y"):
+                            val = float(line.split("=")[1].strip())
+                            hotspot_y = val
+                        elif line.startswith("define_size"):
+                            try:
+                                define_size = float(line.split("=")[1].split(",")[0].strip())
+                            except Exception:
+                                pass
+                    if hotspot_x > 1.0 and define_size > 0:
+                        hotspot_x /= define_size
+                    if hotspot_y > 1.0 and define_size > 0:
+                        hotspot_y /= define_size
+                except Exception:
+                    pass
+
             svgs = [n for n in names if n.endswith(".svg")]
             if svgs:
                 out_path = out_file_base.with_suffix(".svg")
                 out_path.write_bytes(zf.read(svgs[0]))
-                return str(out_path)
+                return str(out_path), hotspot_x, hotspot_y
+
             pngs = [n for n in names if n.endswith(".png")]
             if pngs:
                 pngs.sort(key=lambda n: len(n))
                 out_path = out_file_base.with_suffix(".png")
                 out_path.write_bytes(zf.read(pngs[-1]))
-                return str(out_path)
+                return str(out_path), hotspot_x, hotspot_y
     except Exception:
         pass
-    return None
+    return None, -1.0, -1.0
+
 
 def extract_role_from_xcursor(cursor_file, out_file_base):
     try:
@@ -115,16 +156,38 @@ def extract_role_from_xcursor(cursor_file, out_file_base):
         res = subprocess.run(["xcur2png", "-d", str(temp_dir), str(cursor_file)], cwd=str(temp_dir), capture_output=True, text=True)
         if res.returncode == 0:
             pngs = list(temp_dir.glob("*.png"))
+            conf_files = list(temp_dir.glob("*.conf"))
+            hotspot_x = -1.0
+            hotspot_y = -1.0
+            if conf_files:
+                try:
+                    conf_lines = conf_files[0].read_text(encoding="utf-8", errors="ignore").splitlines()
+                    for line in conf_lines:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            parts = line.split()
+                            if len(parts) >= 3:
+                                sz = float(parts[0])
+                                xh = float(parts[1])
+                                yh = float(parts[2])
+                                if sz > 0:
+                                    hotspot_x = xh / sz
+                                    hotspot_y = yh / sz
+                                break
+                except Exception:
+                    pass
+
             if pngs:
                 pngs.sort(key=lambda p: p.stat().st_size, reverse=True)
                 target_png = out_file_base.with_suffix(".png")
                 shutil.copy2(pngs[0], target_png)
                 shutil.rmtree(temp_dir, ignore_errors=True)
-                return str(target_png)
+                return str(target_png), hotspot_x, hotspot_y
         shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception:
         pass
-    return None
+    return None, -1.0, -1.0
+
 
 def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
     ROLES_DIR.mkdir(parents=True, exist_ok=True)
@@ -136,20 +199,35 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
     cache_target_dir = ROLES_DIR / theme_id
     cache_target_dir.mkdir(parents=True, exist_ok=True)
 
+    meta_file = cache_target_dir / "meta.json"
+    cached_meta = {}
+    if meta_file.is_file():
+        try:
+            cached_meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except Exception:
+            cached_meta = {}
+
     is_banana = theme_id.lower() == "banana" or theme_id.lower() == "banana-catppuccin-mocha"
     roles_found = {}
+    roles_meta = {}
 
     for role_key, aliases in SEMANTIC_ROLE_ALIASES.items():
         cached_svg = cache_target_dir / f"{role_key}.svg"
         cached_png = cache_target_dir / f"{role_key}.png"
-        if cached_svg.is_file():
+
+        if cached_svg.is_file() and role_key in cached_meta:
             roles_found[role_key] = str(cached_svg)
+            roles_meta[role_key] = cached_meta[role_key]
             continue
-        if cached_png.is_file():
+        if cached_png.is_file() and role_key in cached_meta:
             roles_found[role_key] = str(cached_png)
+            roles_meta[role_key] = cached_meta[role_key]
             continue
 
         resolved_file = None
+        matched_source = ""
+        hx = -1.0
+        hy = -1.0
 
         # 1. Upstream vector SVGs (e.g. Banana)
         if is_banana and BANANA_UPSTREAM_SVG.is_dir():
@@ -158,20 +236,26 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
                 if cand.is_file():
                     shutil.copy2(cand, cached_svg)
                     resolved_file = str(cached_svg)
+                    matched_source = alias
+                    hx, hy = (0.203, 0.195) if role_key == "default" else (0.28, 0.20)
                     break
             if not resolved_file and role_key == "wait":
                 wait_cand = BANANA_UPSTREAM_SVG / "wait" / "wait-01.svg"
                 if wait_cand.is_file():
                     shutil.copy2(wait_cand, cached_svg)
                     resolved_file = str(cached_svg)
+                    matched_source = "wait-01"
+                    hx, hy = (0.5, 0.5)
 
         # 2. Hyprcursor shapes in hyprcursors/*.hlc
         if not resolved_file and (theme_dir / "hyprcursors").is_dir():
             for alias in aliases:
                 hlc = theme_dir / "hyprcursors" / f"{alias}.hlc"
                 if hlc.is_file():
-                    resolved_file = extract_role_from_hlc(hlc, cache_target_dir / role_key)
-                    if resolved_file:
+                    res, hx, hy = extract_role_from_hlc(hlc, cache_target_dir / role_key)
+                    if res:
+                        resolved_file = res
+                        matched_source = alias
                         break
 
         # 3. XCursor shapes in cursors/* (resolving symlinks safely)
@@ -179,14 +263,29 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
             for alias in aliases:
                 cur = theme_dir / "cursors" / alias
                 if cur.is_file():
-                    resolved_file = extract_role_from_xcursor(cur, cache_target_dir / role_key)
-                    if resolved_file:
+                    res, hx, hy = extract_role_from_xcursor(cur, cache_target_dir / role_key)
+                    if res:
+                        resolved_file = res
+                        matched_source = alias
                         break
 
         if resolved_file:
             roles_found[role_key] = resolved_file
+            roles_meta[role_key] = {
+                "label": ROLE_LABELS.get(role_key, role_key.capitalize()),
+                "source": matched_source,
+                "hotspot_x": round(hx, 3) if hx >= 0 else -1,
+                "hotspot_y": round(hy, 3) if hy >= 0 else -1
+            }
 
+    try:
+        meta_file.write_text(json.dumps(roles_meta, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    roles_found["_meta"] = roles_meta
     return roles_found
+
 
 def main():
     if len(sys.argv) < 2:
@@ -215,6 +314,7 @@ def main():
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

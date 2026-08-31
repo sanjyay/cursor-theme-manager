@@ -78,7 +78,7 @@ Item {
   Component.onDestruction: {
     var isEnabled = false
     if (shell && shell.pluginRegistry && typeof shell.pluginRegistry.isEnabled === "function") {
-      isEnabled = shell.pluginRegistry.isEnabled(manifest && manifest.id ? manifest.id : "goblin.cursor-switcher")
+      isEnabled = shell.pluginRegistry.isEnabled(manifest && manifest.id ? manifest.id : "sanjyay.cursor-switcher")
     } else if (manifest && manifest.id && shell && shell.pluginRegistry) {
       isEnabled = shell.pluginRegistry.isEnabled(manifest.id)
     }
@@ -120,13 +120,29 @@ Item {
       }
     } catch (error) {
       lastError = "Cursor discovery returned invalid data"
-      console.warn("goblin.cursor-switcher: discovery parse failed:", error)
+      console.warn("sanjyay.cursor-switcher: discovery parse failed:", error)
     }
   }
 
+  property var rolesCache: ({})
+  property string _activeFetchingTheme: ""
+  property string _pendingFetchTheme: ""
+  property string _pendingFetchPath: ""
+
   function fetchRoles(themeIdentifier, themePath) {
-    if (!themeIdentifier || fetchRolesProcess.running) return
-    var args = [helperPath, "get-preview-roles", "--theme", String(themeIdentifier)]
+    if (!themeIdentifier) return
+    var key = String(themeIdentifier)
+    if (rolesCache[key]) {
+      currentRoles = rolesCache[key]
+      return
+    }
+    if (fetchRolesProcess.running) {
+      _pendingFetchTheme = key
+      _pendingFetchPath = themePath ? String(themePath) : ""
+      return
+    }
+    _activeFetchingTheme = key
+    var args = [helperPath, "get-preview-roles", "--theme", key]
     if (themePath) {
       args.push("--path", String(themePath))
     }
@@ -264,8 +280,22 @@ Item {
       var fb = Model.fallbackTheme(themes, "Banana")
       if (fb) enqueueApply(fb, committedSize, "commit")
     }
+    rolesCache = ({})
     removeImportProcess.command = [helperPath, "remove-imported", "--id", theme.id]
     removeImportProcess.running = true
+  }
+
+  function openThemeFolder(theme) {
+    if (!theme || !theme.path) return
+    Util.execDetached("xdg-open " + Util.shellQuote(theme.path))
+  }
+
+  function renameImportedTheme(theme, newName) {
+    if (!theme || !theme.id || !newName || renameImportProcess.running) return
+    lastError = ""
+    rolesCache = ({})
+    renameImportProcess.command = [helperPath, "rename-imported", "--id", theme.id, "--name", String(newName).trim()]
+    renameImportProcess.running = true
   }
 
   Process {
@@ -330,7 +360,7 @@ Item {
       if (exitCode !== 0) {
         root._installError = root.elide(installStderr.text || "Bundled theme installation failed")
         root.lastError = root._installError
-        console.warn("goblin.cursor-switcher:", root._installError)
+        console.warn("sanjyay.cursor-switcher:", root._installError)
       }
       registerAppProcess.command = [root.helperPath, "register-app",
         "--source", root.pluginRoot]
@@ -345,7 +375,7 @@ Item {
     stderr: StdioCollector { id: registerAppStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        console.warn("goblin.cursor-switcher: app registration failed:",
+        console.warn("sanjyay.cursor-switcher: app registration failed:",
           root.elide(registerAppStderr.text || "unknown error"))
       }
       root.refresh(true)
@@ -363,7 +393,7 @@ Item {
       if (exitCode === 0) root.parseDiscovery(discoverStdout.text || root._discoverOutput)
       else {
         root.lastError = root.elide(discoverStderr.text || root._discoverError || "Cursor discovery failed")
-        console.warn("goblin.cursor-switcher:", root.lastError)
+        console.warn("sanjyay.cursor-switcher:", root.lastError)
       }
     }
   }
@@ -374,15 +404,27 @@ Item {
     command: []
     stdout: StdioCollector { id: fetchRolesStdout; waitForEnd: true }
     onExited: function(exitCode) {
+      var fetchingTheme = root._activeFetchingTheme
+      root._activeFetchingTheme = ""
       if (exitCode === 0) {
         try {
           var res = JSON.parse(fetchRolesStdout.text || "{}")
           if (res && typeof res === "object") {
+            if (fetchingTheme) {
+              root.rolesCache[fetchingTheme] = res
+            }
             root.currentRoles = res
           }
         } catch (e) {
-          console.warn("goblin.cursor-switcher: failed to parse preview roles output:", e)
+          console.warn("sanjyay.cursor-switcher: failed to parse preview roles output:", e)
         }
+      }
+      if (root._pendingFetchTheme) {
+        var nextTheme = root._pendingFetchTheme
+        var nextPath = root._pendingFetchPath
+        root._pendingFetchTheme = ""
+        root._pendingFetchPath = ""
+        root.fetchRoles(nextTheme, nextPath)
       }
     }
   }
@@ -489,6 +531,23 @@ Item {
     }
   }
 
+  Process {
+    id: renameImportProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: renameImportStdout; waitForEnd: true }
+    stderr: StdioCollector { id: renameImportStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.rolesCache = ({})
+        root.statusText = "Theme renamed"
+        root.refresh(true)
+      } else {
+        root.lastError = root.elide(renameImportStderr.text || "Failed to rename theme")
+      }
+    }
+  }
+
   Timer {
     id: previewTimer
     interval: 120
@@ -511,7 +570,7 @@ Item {
       root.applying = false
       if (exitCode !== 0) {
         root.lastError = root.elide(applyStderr.text || root._applyStderr || applyStdout.text || root._applyStdout || "Cursor could not be applied")
-        console.warn("goblin.cursor-switcher:", root.lastError)
+        console.warn("sanjyay.cursor-switcher:", root.lastError)
         if (request && request.kind === "commit") {
           root.statusText = "Failed to switch to " + request.theme.displayName
         } else if (request && request.kind === "preview") {

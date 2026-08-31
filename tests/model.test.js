@@ -234,15 +234,43 @@ for (const card of wideGeom.cards) {
   assert.ok(card.x + 72 <= 600)
 }
 
-// 5. Old implementation failure reproduction check:
-// Old implementation placed a fixed 502px row centered in a 442px container
-const oldRowX = (442 - 502) / 2 // -30px
-const oldRowRight = oldRowX + 502 // 472px
-assert.strictEqual(oldRowX, -30) // Overflow left by 30px
-assert.strictEqual(oldRowRight, 472) // Overflow right by 30px (472 > 442)
-// New implementation eliminates both overflows completely:
-assert.ok(tiledGeom.gridX >= 16) // grid starts at >= 16px padding
-assert.ok(tiledGeom.gridX + tiledGeom.gridWidth <= 442 - 16) // grid ends at <= 426px
+// 6. Dynamic role count tests (e.g. 5 roles for Volantes/Oreo vs 6 for Banana)
+assert.strictEqual(Model.previewColumns(600, 72, 14, 16, 5), 5) // Wide with 5 items -> 5 cols
+assert.strictEqual(Model.previewColumns(442, 72, 14, 16, 5), 3) // Tiled with 5 items -> 3 cols (3 + 2)
+assert.strictEqual(Model.previewColumns(600, 72, 14, 16, 4), 4) // Wide with 4 items -> 4 cols
+assert.strictEqual(Model.previewColumns(300, 72, 14, 16, 4), 2) // Narrow with 4 items -> 2 cols (2 x 2)
+
+const volantesWideGeom = Model.previewGridGeometry(5, 600, 72, 92, 14, 12, 16, 14)
+assert.strictEqual(volantesWideGeom.columns, 5)
+assert.strictEqual(volantesWideGeom.rows, 1)
+assert.strictEqual(volantesWideGeom.cards.length, 5)
+assert.strictEqual(volantesWideGeom.fitsInside, true)
+
+const volantesTiledGeom = Model.previewGridGeometry(5, 442, 72, 92, 14, 12, 16, 14)
+assert.strictEqual(volantesTiledGeom.columns, 3)
+assert.strictEqual(volantesTiledGeom.rows, 2)
+assert.strictEqual(volantesTiledGeom.cards.length, 5)
+assert.strictEqual(volantesTiledGeom.fitsInside, true)
+for (const card of volantesTiledGeom.cards) {
+  assert.strictEqual(card.inBounds, true)
+}
+
+// 7. Search filtering and classification
+const testThemes = [
+  { id: "banana", displayName: "Banana", subtitle: "ful1e5", bundled: true, imported: false },
+  { id: "adwaita", displayName: "Adwaita", subtitle: "GNOME", bundled: true, imported: false },
+  { id: "custom1", displayName: "Bibata Modern Ice", subtitle: "ful1e5", bundled: false, imported: true }
+]
+
+function filterThemes(themes, query) {
+  const q = (query || "").trim().toLowerCase()
+  return themes.filter(t => !q || (t.displayName && t.displayName.toLowerCase().includes(q)) || (t.subtitle && t.subtitle.toLowerCase().includes(q)))
+}
+
+assert.strictEqual(filterThemes(testThemes, "").length, 3)
+assert.strictEqual(filterThemes(testThemes, "bibata").length, 1)
+assert.strictEqual(filterThemes(testThemes, "ful1e5").length, 2) // Banana + Bibata Modern Ice
+assert.strictEqual(filterThemes(testThemes, "nonexistent").length, 0)
 
 console.log("model tests: ok")
 

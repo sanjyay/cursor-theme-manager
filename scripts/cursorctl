@@ -424,12 +424,12 @@ apply_theme() {
     common_tmp=$(mktemp --tmpdir="$common_dir" .cursor-switcher.XXXXXX)
     hypr_tmp=$(mktemp --tmpdir="$hypr_dir" .cursor-switcher.XXXXXX)
     {
-      printf '# Managed by goblin.cursor-switcher.\n'
+      printf '# Managed by sanjyay.cursor-switcher.\n'
       [[ $xcursor == - ]] || printf "export XCURSOR_THEME='%s'\n" "$xcursor"
       printf "export XCURSOR_SIZE='%s'\n" "$size"
     } > "$common_tmp"
     {
-      printf '# Managed by goblin.cursor-switcher.\n'
+      printf '# Managed by sanjyay.cursor-switcher.\n'
       if [[ $effective_hypr == - ]]; then printf 'unset HYPRCURSOR_THEME\n'; else printf "export HYPRCURSOR_THEME='%s'\n" "$effective_hypr"; fi
       printf "export HYPRCURSOR_SIZE='%s'\n" "$size"
     } > "$hypr_tmp"
@@ -679,6 +679,11 @@ case ${1:-} in
     else
       exec python3 "$script_dir/cursor-import.py" remove "$@"
     fi
+    ;;
+  rename-imported)
+    shift
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    exec python3 "$script_dir/cursor-import.py" rename "$@"
     ;;
   choose-file)
     shift

@@ -343,12 +343,36 @@ function commitPreview(state, theme, size) {
   return initialPreviewState(theme, size)
 }
 
-function previewColumns(containerWidth, cardWidth, columnSpacing, paddingHorizontal) {
+function previewColumns(containerWidth, cardWidth, columnSpacing, paddingHorizontal, totalCount) {
   var pad = paddingHorizontal !== undefined ? paddingHorizontal : 16
   var cw = cardWidth !== undefined ? cardWidth : 72
   var cs = columnSpacing !== undefined ? columnSpacing : 14
+  var count = Math.max(1, Number(totalCount) || 6)
   var avail = (Number(containerWidth) || 0) - pad * 2
 
+  if (count <= 3) {
+    var wCount = count * cw + (count - 1) * cs
+    if (avail >= wCount) return count
+    if (count === 3 && avail >= (2 * cw + cs)) return 2
+    return 1
+  }
+
+  if (count === 4) {
+    var w4 = 4 * cw + 3 * cs
+    if (avail >= w4) return 4
+    if (avail >= (2 * cw + cs)) return 2
+    return 1
+  }
+
+  if (count === 5) {
+    var w5 = 5 * cw + 4 * cs
+    if (avail >= w5) return 5
+    if (avail >= (3 * cw + 2 * cs)) return 3
+    if (avail >= (2 * cw + cs)) return 2
+    return 1
+  }
+
+  // 6 or more roles
   var w6 = 6 * cw + 5 * cs
   var w3 = 3 * cw + 2 * cs
   var w2 = 2 * cw + 1 * cs
@@ -375,7 +399,7 @@ function previewGridGeometry(totalCount, containerWidth, cardWidth, itemHeight, 
   var padH = paddingHorizontal !== undefined ? paddingHorizontal : 16
   var padV = paddingVertical !== undefined ? paddingVertical : 14
 
-  var cols = previewColumns(width, cw, cs, padH)
+  var cols = previewColumns(width, cw, cs, padH, count)
   var rows = previewRows(count, cols)
 
   var gridWidth = cols * cw + Math.max(0, cols - 1) * cs

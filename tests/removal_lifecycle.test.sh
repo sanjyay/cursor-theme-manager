@@ -61,7 +61,7 @@ chmod +x "$MOCK_BIN/dbus-update-activation-environment"
 PATH="$MOCK_BIN:/usr/bin:/bin"
 
 # 1. Step 1: Initialize plugin environment
-PLUGIN_DIR="$TEST_DIR/mock_plugins/goblin.cursor-switcher"
+PLUGIN_DIR="$TEST_DIR/mock_plugins/sanjyay.cursor-switcher"
 mkdir -p "$PLUGIN_DIR"
 cp -a "$ROOT"/. "$PLUGIN_DIR"/
 

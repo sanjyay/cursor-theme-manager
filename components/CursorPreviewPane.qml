@@ -11,16 +11,38 @@ Item {
   property bool sizeCursorActive: false
 
   signal sizeActivated(int size)
+  signal openFolderRequested(var theme)
+  signal renameThemeRequested(var theme)
   signal removeThemeRequested(var theme)
 
-  readonly property var roleList: [
-    { key: "default", label: "Default" },
-    { key: "pointer", label: "Pointer" },
-    { key: "text",    label: "Text" },
-    { key: "move",    label: "Move" },
-    { key: "resize",  label: "Resize" },
-    { key: "wait",    label: "Wait" }
-  ]
+  readonly property var visibleRoles: {
+    if (!previewRoles || typeof previewRoles !== "object") return []
+    var list = []
+    var roleDefs = [
+      { key: "default", label: "Default" },
+      { key: "pointer", label: "Pointer" },
+      { key: "text",    label: "Text" },
+      { key: "move",    label: "Move" },
+      { key: "resize",  label: "Resize" },
+      { key: "wait",    label: "Wait" }
+    ]
+    var metaObj = previewRoles._meta || {}
+    for (var i = 0; i < roleDefs.length; i++) {
+      var def = roleDefs[i]
+      var p = previewRoles[def.key]
+      if (p && typeof p === "string" && p.length > 0) {
+        var meta = metaObj[def.key] || {}
+        list.push({
+          key: def.key,
+          label: meta.label || def.label,
+          path: p,
+          hotspotX: meta.hotspot_x !== undefined ? Number(meta.hotspot_x) : -1.0,
+          hotspotY: meta.hotspot_y !== undefined ? Number(meta.hotspot_y) : -1.0
+        })
+      }
+    }
+    return list
+  }
 
   Flickable {
     id: flickable
@@ -35,7 +57,7 @@ Item {
     Column {
       id: contentCol
       width: parent.width
-      spacing: Style.space(16)
+      spacing: Style.space(14)
 
       // Right Header: Preview Title
       Text {
@@ -64,7 +86,7 @@ Item {
         readonly property real columnSpacing: Style.space(14)
         readonly property real rowSpacing: Style.space(12)
 
-        readonly property int columns: Model.previewColumns(width, cardWidth, columnSpacing, paddingHorizontal)
+        readonly property int columns: Model.previewColumns(width, cardWidth, columnSpacing, paddingHorizontal, root.visibleRoles.length)
 
         Grid {
           id: roleGrid
@@ -74,7 +96,7 @@ Item {
           rowSpacing: previewContainer.rowSpacing
 
           Repeater {
-            model: root.roleList
+            model: root.visibleRoles
             delegate: Column {
               id: roleCol
               required property int index
@@ -88,32 +110,39 @@ Item {
                 width: previewContainer.cardWidth
                 height: previewContainer.cardHeight
                 radius: Style.cornerRadius - 2
-                color: roleMouse.containsMouse ? Util.alpha(Color.accent, 0.12) : Util.alpha(Color.popups.text, 0.06)
+                color: roleMouse.containsMouse ? Util.alpha(Color.accent, 0.12) : Util.alpha(Color.popups.text, 0.05)
                 border.color: roleMouse.containsMouse ? Color.accent : Util.alpha(Color.popups.text, 0.14)
                 border.width: 1
 
-                readonly property string rolePath: root.previewRoles ? String(root.previewRoles[roleCol.modelData.key] || "") : ""
-                readonly property string effectivePath: rolePath
-
-                Image {
-                  id: roleImg
+                Item {
+                  id: imageBox
                   anchors.centerIn: parent
                   width: Style.space(48)
                   height: Style.space(48)
-                  source: iconBox.effectivePath !== "" ? "file://" + iconBox.effectivePath : ""
-                  fillMode: Image.PreserveAspectFit
-                  asynchronous: true
-                  smooth: true
-                  visible: source !== ""
-                }
 
-                Text {
-                  visible: !roleImg.visible
-                  anchors.centerIn: parent
-                  text: "—"
-                  color: Color.muted
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.body
+                  Image {
+                    id: roleImg
+                    anchors.fill: parent
+                    source: roleCol.modelData.path !== "" ? "file://" + roleCol.modelData.path : ""
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    smooth: true
+                    visible: source !== ""
+                  }
+
+                  // Understated Hotspot Indicator (only visible on hover when coordinates are valid)
+                  Rectangle {
+                    visible: roleMouse.containsMouse && roleCol.modelData.hotspotX >= 0 && roleCol.modelData.hotspotY >= 0
+                    x: Math.round(roleCol.modelData.hotspotX * parent.width) - width / 2
+                    y: Math.round(roleCol.modelData.hotspotY * parent.height) - height / 2
+                    width: 5
+                    height: 5
+                    radius: 2.5
+                    color: Color.accent
+                    border.color: Color.popups.background
+                    border.width: 1
+                    z: 10
+                  }
                 }
 
                 MouseArea {
@@ -144,11 +173,11 @@ Item {
         onSizeActivated: function(size) { root.sizeActivated(size) }
       }
 
-      // Metadata / Details Card
+      // Compact Metadata / Details Card
       Rectangle {
         id: detailsCard
         width: parent.width
-        implicitHeight: detailsCol.implicitHeight + Style.space(24)
+        implicitHeight: detailsCol.implicitHeight + Style.space(20)
         height: implicitHeight
         radius: Style.cornerRadius
         color: Util.alpha(Color.popups.text, 0.03)
@@ -160,129 +189,142 @@ Item {
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.top: parent.top
-          anchors.margins: Style.space(12)
-          spacing: Style.space(8)
+          anchors.margins: Style.space(10)
+          spacing: Style.space(6)
 
+          // Line 1: Title & Author / Subtitle
+          Row {
+            width: parent.width
+            spacing: Style.space(8)
+
+            Text {
+              text: root.theme ? (root.theme.displayName || root.theme.id) : "No theme selected"
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+              font.bold: true
+              elide: Text.ElideRight
+            }
+
+            Text {
+              visible: Boolean(root.theme && root.theme.subtitle)
+              anchors.verticalCenter: parent.verticalCenter
+              text: "• " + (root.theme ? root.theme.subtitle : "")
+              color: Color.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+          }
+
+          // Line 2: Format & Source Badges
           Item {
             width: parent.width
-            height: Style.space(26)
+            height: Style.space(22)
 
+            // Format Badges on left
             Row {
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(8)
+              spacing: Style.space(6)
 
-              Text {
-                text: root.theme ? (root.theme.displayName || root.theme.id) : "No theme selected"
-                color: Color.popups.text
-                font.family: Style.font.family
-                font.pixelSize: Style.font.body
-                font.bold: true
-              }
+              Repeater {
+                model: root.theme && root.theme.formats ? root.theme.formats : ["xcursor"]
+                Rectangle {
+                  required property var modelData
+                  height: Style.space(20)
+                  radius: Style.space(3)
+                  color: Util.alpha(Color.popups.text, 0.06)
+                  border.color: Util.alpha(Color.popups.text, 0.16)
+                  border.width: 1
+                  implicitWidth: fmtLabel.implicitWidth + Style.space(10)
 
-              Text {
-                visible: Boolean(root.theme && root.theme.subtitle)
-                text: "•  " + (root.theme ? root.theme.subtitle : "")
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
+                  Text {
+                    id: fmtLabel
+                    anchors.centerIn: parent
+                    text: modelData === "hyprcursor" ? "Hyprcursor" : "XCursor"
+                    color: Color.popups.text
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption - 2
+                  }
+                }
               }
             }
 
-            // Remove Button for Imported themes
-            Rectangle {
-              id: removeBtn
-              visible: Boolean(root.theme && (root.theme.imported === true || root.theme.sourceType === "imported"))
+            // Source Badge and Context Menu on right
+            Row {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              height: Style.space(26)
-              radius: Style.cornerRadius - 2
-              color: removeMouse.containsMouse ? Util.alpha(Color.urgent, 0.25) : Util.alpha(Color.urgent, 0.12)
-              border.color: Util.alpha(Color.urgent, 0.4)
-              border.width: 1
-              implicitWidth: removeLabel.implicitWidth + Style.space(14)
+              spacing: Style.space(6)
 
-              Row {
-                id: removeLabel
-                anchors.centerIn: parent
-                spacing: Style.space(4)
+              // Source Badge
+              Rectangle {
+                height: Style.space(20)
+                radius: Style.space(3)
+                color: root.theme && (root.theme.imported || root.theme.sourceType === "imported")
+                  ? Util.alpha(Color.accent, 0.15)
+                  : Util.alpha(Color.popups.text, 0.06)
+                border.color: root.theme && (root.theme.imported || root.theme.sourceType === "imported")
+                  ? Util.alpha(Color.accent, 0.4)
+                  : Util.alpha(Color.popups.text, 0.16)
+                border.width: 1
+                implicitWidth: srcLabel.implicitWidth + Style.space(10)
+
                 Text {
-                  text: "󰆴"
-                  color: Color.urgent
+                  id: srcLabel
+                  anchors.centerIn: parent
+                  text: root.theme ? (root.theme.imported || root.theme.sourceType === "imported" ? "Imported" : (root.theme.bundled ? "Bundled" : "System")) : "System"
+                  color: root.theme && (root.theme.imported || root.theme.sourceType === "imported") ? Color.accent : Color.muted
                   font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
-                }
-                Text {
-                  text: "Remove Theme"
-                  color: Color.urgent
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: Style.font.caption - 2
                   font.bold: true
                 }
               }
 
-              MouseArea {
-                id: removeMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  if (root.theme) root.removeThemeRequested(root.theme)
+              // Context Action Menu Button [⋯] (For Imported Themes)
+              Rectangle {
+                id: contextBtn
+                visible: Boolean(root.theme && (root.theme.imported === true || root.theme.sourceType === "imported"))
+                height: Style.space(20)
+                width: Style.space(24)
+                radius: Style.space(3)
+                color: contextMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : Util.alpha(Color.popups.text, 0.08)
+                border.color: Util.alpha(Color.popups.text, 0.18)
+                border.width: 1
+
+                Text {
+                  anchors.centerIn: parent
+                  text: "⋯"
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
                 }
-              }
-            }
-          }
 
-          // Details items
-          Row {
-            spacing: Style.space(24)
+                MouseArea {
+                  id: contextMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: contextMenu.open()
+                }
 
-            Column {
-              spacing: Style.space(2)
-              Text {
-                text: "Format"
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption - 1
-              }
-              Text {
-                text: root.theme ? (root.theme.formats && root.theme.formats.length === 2 ? "Hyprcursor + XCursor" : (root.theme.formats && root.theme.formats[0] === "hyprcursor" ? "Hyprcursor" : "XCursor")) : "—"
-                color: Color.popups.text
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-              }
-            }
-
-            Column {
-              spacing: Style.space(2)
-              Text {
-                text: "Source"
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption - 1
-              }
-              Text {
-                text: root.theme ? (root.theme.imported ? "Imported locally" : (root.theme.bundled ? "Bundled" : "System")) : "—"
-                color: Color.popups.text
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-              }
-            }
-
-            Column {
-              visible: Boolean(root.theme && root.theme.license && root.theme.license !== "Unknown")
-              spacing: Style.space(2)
-              Text {
-                text: "License"
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption - 1
-              }
-              Text {
-                text: root.theme ? root.theme.license : "—"
-                color: Color.popups.text
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
+                Menu {
+                  id: contextMenu
+                  y: contextBtn.height + 4
+                  MenuItem {
+                    text: "Open folder"
+                    onTriggered: if (root.theme) root.openFolderRequested(root.theme)
+                  }
+                  MenuItem {
+                    text: "Rename"
+                    onTriggered: if (root.theme) root.renameThemeRequested(root.theme)
+                  }
+                  MenuItem {
+                    text: "Remove"
+                    onTriggered: if (root.theme) root.removeThemeRequested(root.theme)
+                  }
+                }
               }
             }
           }

@@ -15,6 +15,7 @@ Item {
   property bool closingFromHost: false
   property string focusSection: "themes"
   property int themeIndex: 0
+  property var hoveredTheme: null
   readonly property bool opened: window.visible
 
   function open(payloadJson) {
@@ -49,7 +50,7 @@ Item {
     if (root.service && root.service.previewActive) root.service.cancelPreview()
     window.visible = false
     if (root.shell && typeof root.shell.hide === "function") {
-      root.shell.hide("goblin.cursor-switcher")
+      root.shell.hide("sanjyay.cursor-switcher")
     }
   }
 
@@ -77,7 +78,7 @@ Item {
 
     onVisibleChanged: {
       if (!visible && !root.closingFromHost && root.shell && typeof root.shell.hide === "function") {
-        root.shell.hide("goblin.cursor-switcher")
+        root.shell.hide("sanjyay.cursor-switcher")
       }
     }
 
@@ -287,21 +288,40 @@ Item {
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 themes: root.service ? root.service.themes : []
+                committedTheme: root.service ? root.service.committedTheme : null
                 committedIndex: root.service ? root.service.indexOfCommitted() : -1
                 cursorIndex: root.themeIndex
                 cursorActive: root.focusSection === "themes"
 
                 onThemeActivated: function(theme, index) {
+                  root.hoveredTheme = null
                   root.themeIndex = index
                   root.focusSection = "themes"
                   root.service.commitTheme(theme)
                 }
 
-                onThemeHovered: function(theme, index, hovered) {
-                  if (hovered && root.service) {
-                    root.themeIndex = index
+                onThemeHovered: function(theme, active) {
+                  root.hoveredTheme = active ? theme : null
+                  if (active && theme && root.service) {
                     root.service.fetchRoles(theme.displayName || theme.id, theme.path || "")
+                  } else if (!active && root.service) {
+                    var cur = (root.service.themes && root.themeIndex >= 0 && root.themeIndex < root.service.themes.length) ? root.service.themes[root.themeIndex] : root.service.committedTheme
+                    if (cur) {
+                      root.service.fetchRoles(cur.displayName || cur.id, cur.path || "")
+                    }
                   }
+                }
+
+                onOpenFolderRequested: function(theme) {
+                  if (root.service) root.service.openThemeFolder(theme)
+                }
+
+                onRenameThemeRequested: function(theme) {
+                  renameDialog.open(theme)
+                }
+
+                onRemoveThemeRequested: function(theme) {
+                  if (root.service) root.service.removeImportedTheme(theme)
                 }
               }
             }
@@ -325,7 +345,7 @@ Item {
               anchors.left: dividerLine.right
               anchors.leftMargin: Style.space(14)
               anchors.right: parent.right
-              theme: (root.service && root.service.themes && root.themeIndex >= 0 && root.themeIndex < root.service.themes.length) ? root.service.themes[root.themeIndex] : (root.service ? root.service.committedTheme : null)
+              theme: root.hoveredTheme || ((root.service && root.service.themes && root.themeIndex >= 0 && root.themeIndex < root.service.themes.length) ? root.service.themes[root.themeIndex] : (root.service ? root.service.committedTheme : null))
               committedSize: root.service ? root.service.committedSize : 16
               previewRoles: root.service ? root.service.currentRoles : ({})
               sizeCursorActive: root.focusSection === "sizes"
@@ -335,8 +355,16 @@ Item {
                 root.service.commitSize(size)
               }
 
+              onOpenFolderRequested: function(theme) {
+                if (root.service) root.service.openThemeFolder(theme)
+              }
+
+              onRenameThemeRequested: function(theme) {
+                renameDialog.open(theme)
+              }
+
               onRemoveThemeRequested: function(theme) {
-                root.service.removeImportedTheme(theme)
+                if (root.service) root.service.removeImportedTheme(theme)
               }
             }
           }
@@ -403,6 +431,17 @@ Item {
       // In-App Import Modal Dialog
       ImportDialog {
         id: importDialog
+        anchors.fill: parent
+        service: root.service
+        z: 50
+        onClosed: {
+          if (panelScope) panelScope.forceActiveFocus()
+        }
+      }
+
+      // In-App Rename Modal Dialog
+      RenameDialog {
+        id: renameDialog
         anchors.fill: parent
         service: root.service
         z: 50

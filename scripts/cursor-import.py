@@ -426,6 +426,66 @@ def run_remove(theme_id: str):
     return {"ok": True, "removed": theme_id}
 
 
+def run_rename(theme_id: str, new_name: str):
+    if not theme_id or not new_name:
+        return {"ok": False, "error": "Missing theme ID or new name"}
+
+    clean_name = re.sub(r'[\r\n\t]+', ' ', new_name).strip()
+    if not clean_name or len(clean_name) > 100:
+        return {"ok": False, "error": "Invalid theme name"}
+
+    # Security check: theme_id must be safe
+    if not theme_id.startswith("CursorSwitcher-Imported-") or "/" in theme_id or ".." in theme_id:
+        return {"ok": False, "error": "Refusing to rename theme: not a valid imported theme ID"}
+
+    home = os.environ.get("HOME", "")
+    data_home = os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local/share"))
+    icons_dir = os.path.join(data_home, "icons")
+    target = os.path.join(icons_dir, theme_id)
+
+    if not os.path.isdir(target):
+        return {"ok": False, "error": f"Imported theme directory not found: {target}"}
+
+    marker = os.path.join(target, ".omarchy-cursor-switcher-imported")
+    if not os.path.isfile(marker):
+        return {"ok": False, "error": f"Directory is not managed by Cursor Switcher import: {target}"}
+
+    # Update index.theme if present
+    idx_path = os.path.join(target, "index.theme")
+    if os.path.isfile(idx_path):
+        try:
+            lines = []
+            with open(idx_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.strip().startswith("Name="):
+                        lines.append(f"Name={clean_name}\n")
+                    else:
+                        lines.append(line)
+            with open(idx_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+        except Exception as e:
+            return {"ok": False, "error": f"Failed to update index.theme: {e}"}
+
+    # Update manifest.hl / manifest.toml if present
+    for mname in ["manifest.hl", "manifest.toml"]:
+        mpath = os.path.join(target, mname)
+        if os.path.isfile(mpath):
+            try:
+                lines = []
+                with open(mpath, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if line.strip().startswith("name =") or line.strip().startswith("name="):
+                            lines.append(f"name = {clean_name}\n")
+                        else:
+                            lines.append(line)
+                with open(mpath, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+            except Exception:
+                pass
+
+    return {"ok": True, "theme_id": theme_id, "displayName": clean_name}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Cursor Switcher Import Engine")
     subparsers = parser.add_subparsers(dest="action", required=True)
@@ -439,6 +499,11 @@ def main():
     p_remove = subparsers.add_parser("remove")
     p_remove.add_argument("--id", required=True, help="Imported theme ID")
 
+    # rename
+    p_rename = subparsers.add_parser("rename")
+    p_rename.add_argument("--id", required=True, help="Imported theme ID")
+    p_rename.add_argument("--name", required=True, help="New theme display name")
+
     args = parser.parse_args()
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -450,6 +515,11 @@ def main():
         result = run_remove(args.id)
         print(json.dumps(result, indent=2))
         sys.exit(0 if result.get("ok") else 1)
+    elif args.action == "rename":
+        result = run_rename(args.id, args.name)
+        print(json.dumps(result, indent=2))
+        sys.exit(0 if result.get("ok") else 1)
+
 
 
 if __name__ == "__main__":
