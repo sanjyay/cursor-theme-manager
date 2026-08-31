@@ -33,7 +33,7 @@ https://github.com/user-attachments/assets/365f9cf4-a422-4385-a559-150a68cded5c
 ### Via Omarchy CLI
 
 ```bash
-omarchy plugin add https://github.com/sanjyay/cursor-switcher --enable
+omarchy plugin add https://github.com/sanjyay/cursor-theme-manager --enable
 ```
 
 ### Manual / Local Development
@@ -41,9 +41,9 @@ omarchy plugin add https://github.com/sanjyay/cursor-switcher --enable
 Clone or symlink the repository into your Omarchy plugins directory:
 
 ```bash
-git clone https://github.com/sanjyay/cursor-switcher.git ~/.config/omarchy/plugins/sanjyay.cursor-switcher
+git clone https://github.com/sanjyay/cursor-theme-manager.git ~/.config/omarchy/plugins/sanjyay.cursor-theme-manager
 omarchy-shell shell rescanPlugins
-omarchy plugin enable sanjyay.cursor-switcher
+omarchy plugin enable sanjyay.cursor-theme-manager
 ```
 
 ---
