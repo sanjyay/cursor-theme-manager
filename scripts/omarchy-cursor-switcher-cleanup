@@ -135,6 +135,25 @@ if os.path.isfile(snapshot_path):
     except Exception as e:
         print(f"Warning: failed to read snapshot {snapshot_path}: {e}", file=sys.stderr)
 
+def get_system_default_cursor():
+    for p in ["/usr/share/icons/default/index.theme", os.path.expanduser("~/.local/share/icons/default/index.theme"), os.path.expanduser("~/.icons/default/index.theme")]:
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if line.strip().startswith("Inherits="):
+                            inh = line.strip().split("=", 1)[1].strip()
+                            if inh: return inh
+            except Exception:
+                pass
+    for cand in ["Bibata-Catppuccin-Mocha", "Adwaita", "Tokyonight-Dark"]:
+        if os.path.isdir(f"/usr/share/icons/{cand}"):
+            return cand
+    return "Adwaita"
+
+plugin_themes = {"banana", "phinger", "oreo", "volantes", "nordzy", "capitaine", "banana-catppuccin-mocha"}
+
+is_valid_snap = False
 if snap and isinstance(snap, dict) and snap.get("version") == 2:
     gtk_theme = snap.get("gtkTheme", {})
     gtk_size = snap.get("gtkSize", {})
@@ -142,8 +161,10 @@ if snap and isinstance(snap, dict) and snap.get("version") == 2:
     process_env = snap.get("processEnvironment", {})
     uwsm_common_state = snap.get("uwsmEnvCommon", {"present": False})
     uwsm_hypr_state = snap.get("uwsmEnvHyprland", {"present": False})
+    val_name = str(gtk_theme.get("value", "")).lower()
+    if val_name not in plugin_themes and not val_name.startswith("cursorswitcher-"):
+        is_valid_snap = True
 elif snap and isinstance(snap, dict) and snap.get("version") == 1:
-    # Compatibility with snapshots made by Cursor Switcher 2.0 prereleases.
     gtk_theme = snap.get("gtkTheme", {})
     gtk_size = snap.get("gtkSize", {})
     systemd_env = {
@@ -155,9 +176,23 @@ elif snap and isinstance(snap, dict) and snap.get("version") == 1:
     process_env = dict(systemd_env)
     uwsm_common_state = {"present": bool(snap.get("uwsmEnvCommonExisted", False))}
     uwsm_hypr_state = {"present": bool(snap.get("uwsmEnvHyprlandExisted", False))}
-else:
-    print("Warning: no valid original-state snapshot; refusing to invent cursor defaults", file=sys.stderr)
-    sys.exit(0)
+    val_name = str(gtk_theme.get("value", "")).lower()
+    if val_name not in plugin_themes and not val_name.startswith("cursorswitcher-"):
+        is_valid_snap = True
+
+if not is_valid_snap:
+    def_cursor = get_system_default_cursor()
+    gtk_theme = {"present": True, "value": def_cursor}
+    gtk_size = {"present": True, "value": 24}
+    systemd_env = {
+        "HYPRCURSOR_THEME": {"present": False, "value": ""},
+        "HYPRCURSOR_SIZE": {"present": False, "value": ""},
+        "XCURSOR_THEME": {"present": True, "value": def_cursor},
+        "XCURSOR_SIZE": {"present": True, "value": "24"}
+    }
+    process_env = dict(systemd_env)
+    uwsm_common_state = {"present": False}
+    uwsm_hypr_state = {"present": False}
 
 # 1. Restore GTK / GSettings
 try:
@@ -200,48 +235,18 @@ if unset_names:
     try:
         subprocess.run(["systemctl", "--user", "unset-environment"] + unset_names,
                        capture_output=True, timeout=2)
+        dbus_clears = [f"{k}=" for k in unset_names]
+        subprocess.run(["dbus-update-activation-environment", "--systemd"] + dbus_clears,
+                       capture_output=True, timeout=2)
     except Exception:
         pass
 
 # 3. Restore live compositor cursor via hyprctl
-hypr_theme = process_env.get("HYPRCURSOR_THEME", {})
-hypr_size = process_env.get("HYPRCURSOR_SIZE", {})
-xcur_theme = process_env.get("XCURSOR_THEME", {})
-xcur_size = process_env.get("XCURSOR_SIZE", {})
-
-effective_hypr = ""
-if hypr_theme.get("present") and hypr_theme.get("value"):
-    effective_hypr = str(hypr_theme["value"])
-elif xcur_theme.get("present") and xcur_theme.get("value"):
-    effective_hypr = str(xcur_theme["value"])
-elif gtk_theme.get("present") and gtk_theme.get("value"):
-    effective_hypr = str(gtk_theme["value"])
-
-effective_size = None
-if hypr_size.get("present") and str(hypr_size.get("value")).isdigit():
-    effective_size = int(hypr_size["value"])
-elif xcur_size.get("present") and str(xcur_size.get("value")).isdigit():
-    effective_size = int(xcur_size["value"])
-elif gtk_size.get("present") and str(gtk_size.get("value")).isdigit():
-    effective_size = int(gtk_size["value"])
+target_theme = str(gtk_theme.get("value") or get_system_default_cursor())
+target_size = int(gtk_size.get("value") or 24)
 
 try:
-    if effective_hypr and effective_size is not None:
-        subprocess.run(["hyprctl", "setcursor", effective_hypr, str(effective_size)],
-                       capture_output=True, timeout=2)
-    
-    hypr_env_val = hypr_theme.get("value", "") if hypr_theme.get("present") else ""
-    hypr_size_val = str(hypr_size.get("value", "")) if hypr_size.get("present") else ""
-    xcur_env_val = xcur_theme.get("value", "") if xcur_theme.get("present") else ""
-    xcur_size_val = str(xcur_size.get("value", "")) if xcur_size.get("present") else ""
-    
-    subprocess.run(["hyprctl", "eval", f'hl.env("HYPRCURSOR_THEME", "{hypr_env_val}")'],
-                   capture_output=True, timeout=2)
-    subprocess.run(["hyprctl", "eval", f'hl.env("HYPRCURSOR_SIZE", "{hypr_size_val}")'],
-                   capture_output=True, timeout=2)
-    subprocess.run(["hyprctl", "eval", f'hl.env("XCURSOR_THEME", "{xcur_env_val}")'],
-                   capture_output=True, timeout=2)
-    subprocess.run(["hyprctl", "eval", f'hl.env("XCURSOR_SIZE", "{xcur_size_val}")'],
+    subprocess.run(["hyprctl", "setcursor", target_theme, str(target_size)],
                    capture_output=True, timeout=2)
 except Exception:
     pass
