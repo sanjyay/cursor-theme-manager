@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import qs.Commons
 
 Rectangle {
@@ -32,8 +33,8 @@ Rectangle {
         anchors.left: parent.left
         anchors.top: parent.top
         radius: Style.space(4)
-        color: Style.alpha(Color.popups.text, 0.14)
-        border.color: Style.alpha(Color.popups.text, 0.25)
+        color: Util.alpha(Color.popups.text, 0.14)
+        border.color: Util.alpha(Color.popups.text, 0.25)
         border.width: 1
         implicitWidth: badgeText.implicitWidth + Style.space(8)
         implicitHeight: badgeText.implicitHeight + Style.space(4)
@@ -51,18 +52,19 @@ Rectangle {
       }
 
       Image {
-        visible: root.theme.previewPath !== ""
+        id: previewImg
+        visible: root.theme && root.theme.previewPath !== ""
         anchors.centerIn: parent
         width: Style.space(54)
         height: width
-        source: root.theme.previewPath === "" ? "" : "file://" + root.theme.previewPath
+        source: root.theme && root.theme.previewPath !== "" ? "file://" + root.theme.previewPath : ""
         fillMode: Image.PreserveAspectFit
         asynchronous: true
         smooth: true
       }
 
       Text {
-        visible: root.theme.previewPath === ""
+        visible: !root.theme || root.theme.previewPath === ""
         anchors.centerIn: parent
         text: "↖"
         color: Color.popups.text

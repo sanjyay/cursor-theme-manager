@@ -61,7 +61,7 @@ chmod +x "$MOCK_BIN/dbus-update-activation-environment"
 PATH="$MOCK_BIN:/usr/bin:/bin"
 
 # 1. Step 1: Initialize plugin environment
-PLUGIN_DIR="$TEST_DIR/mock_plugins/sanjyay.cursor-switcher"
+PLUGIN_DIR="$TEST_DIR/mock_plugins/goblin.cursor-switcher"
 mkdir -p "$PLUGIN_DIR"
 cp -a "$ROOT"/. "$PLUGIN_DIR"/
 
@@ -78,13 +78,14 @@ SNAPSHOT_FILE="$XDG_CONFIG_HOME/omarchy/cursor-switcher-original-state.json"
 python3 - "$SNAPSHOT_FILE" <<PY
 import json, sys
 snap = json.load(open(sys.argv[1]))
-assert snap["version"] == 1
+assert snap["version"] == 2
 assert snap["gtkTheme"]["present"] == True and snap["gtkTheme"]["value"] == "CustomTheme"
 assert snap["gtkSize"]["present"] == True and snap["gtkSize"]["value"] == 48
-assert snap["xcursorTheme"]["present"] == True and snap["xcursorTheme"]["value"] == "CustomTheme"
-assert snap["xcursorSize"]["present"] == True and snap["xcursorSize"]["value"] == "48"
-assert snap["hyprcursorTheme"]["present"] == False
-assert snap["hyprcursorSize"]["present"] == False
+env = snap["systemdEnvironment"]
+assert env["XCURSOR_THEME"] == {"present": True, "value": "CustomTheme"}
+assert env["XCURSOR_SIZE"] == {"present": True, "value": "48"}
+assert env["HYPRCURSOR_THEME"]["present"] == False
+assert env["HYPRCURSOR_SIZE"]["present"] == False
 PY
 
 # Verify active artifacts

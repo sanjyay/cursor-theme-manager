@@ -7,6 +7,7 @@ export TEST_DIR
 trap 'rm -rf -- "$TEST_DIR"' EXIT
 export HOME="$TEST_DIR/home"
 export XDG_DATA_HOME="$HOME/.local/share"
+export XDG_CACHE_HOME="$HOME/.cache"
 export XDG_DATA_DIRS="$TEST_DIR/system/share"
 mkdir -p "$XDG_DATA_HOME/icons/XOnly/cursors" "$XDG_DATA_HOME/icons/Both/cursors" \
   "$XDG_DATA_HOME/icons/Both/hyprcursors" "$XDG_DATA_HOME/icons/IconsOnly/32x32/apps" \
@@ -75,6 +76,24 @@ PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" \
 grep -qx "export XCURSOR_THEME='XOnly'" "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
 grep -q "export HYPRCURSOR_THEME='CursorSwitcher-XCursor-XOnly-" "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
 
+# Test cursorctl import & remove-imported CLI commands
+IMPORT_TEST_SRC="$TEST_DIR/cli_import_src"
+mkdir -p "$IMPORT_TEST_SRC/cursors"
+cp "$ROOT/themes/banana/generated/Banana/cursors/left_ptr" "$IMPORT_TEST_SRC/cursors/left_ptr"
+cp "$ROOT/themes/banana/generated/Banana/cursors/default" "$IMPORT_TEST_SRC/cursors/default"
+printf '[Icon Theme]\nName=CliImported\n' > "$IMPORT_TEST_SRC/index.theme"
+printf 'MIT License\n' > "$IMPORT_TEST_SRC/LICENSE"
+
+IMPORT_RES=$(PATH="$MOCK_BIN:/usr/bin:/bin" "$ROOT/scripts/cursorctl" import --source "$IMPORT_TEST_SRC")
+IMPORTED_ID=$(python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data.get("ok"); print(data["theme"]["id"])' "$IMPORT_RES")
+[[ -d "$XDG_DATA_HOME/icons/$IMPORTED_ID" ]]
+[[ -f "$XDG_DATA_HOME/icons/$IMPORTED_ID/.omarchy-cursor-switcher-imported" ]]
+
+# Test remove-imported CLI command
+REMOVE_RES=$(PATH="$MOCK_BIN:/usr/bin:/bin" "$ROOT/scripts/cursorctl" remove-imported --id "$IMPORTED_ID")
+python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data.get("ok")' "$REMOVE_RES"
+[[ ! -e "$XDG_DATA_HOME/icons/$IMPORTED_ID" ]]
+
 # App registration & unregistration tests
 "$ROOT/scripts/cursorctl" register-app --source "$ROOT"
 [[ -x "$HOME/.local/bin/omarchy-cursor-switcher" ]]
@@ -102,6 +121,13 @@ CLEANUP_HELPER="$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-c
 [[ -x "$CLEANUP_HELPER" ]]
 
 # Test snapshot-original-state
+# Earlier apply tests intentionally created plugin fragments; a first activation
+# starts without those files.
+rm -f "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher" \
+  "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
+mkdir -p "$TEST_DIR/config/uwsm/env.d"
+printf '%s\n' '# pre-existing user fragment' "export XCURSOR_THEME='MyPriorTheme'" \
+  > "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
 MOCK_CALLS="$TEST_DIR/mock_calls.log"
 cat <<EOF > "$MOCK_BIN/gsettings"
 #!/bin/sh
@@ -140,12 +166,16 @@ SNAPSHOT_FILE="$TEST_DIR/config/omarchy/cursor-switcher-original-state.json"
 python3 - "$SNAPSHOT_FILE" <<'PY'
 import json, sys
 snap = json.load(open(sys.argv[1]))
-assert snap["version"] == 1
+assert snap["version"] == 2
 assert snap["gtkTheme"]["present"] == True and snap["gtkTheme"]["value"] == "MyPriorTheme"
 assert snap["gtkSize"]["present"] == True and snap["gtkSize"]["value"] == 32
-assert snap["xcursorTheme"]["present"] == True and snap["xcursorTheme"]["value"] == "MyPriorTheme"
-assert snap["xcursorSize"]["present"] == True and snap["xcursorSize"]["value"] == "32"
-assert snap["hyprcursorTheme"]["present"] == False
+env = snap["systemdEnvironment"]
+assert env["XCURSOR_THEME"] == {"present": True, "value": "MyPriorTheme"}
+assert env["XCURSOR_SIZE"] == {"present": True, "value": "32"}
+assert env["HYPRCURSOR_THEME"]["present"] == False
+assert snap["uwsmEnvCommon"]["present"] == True
+assert "pre-existing user fragment" in snap["uwsmEnvCommon"]["content"]
+assert snap["uwsmEnvHyprland"]["present"] == False
 PY
 
 # Verify snapshot is NOT overwritten on subsequent runs
@@ -172,7 +202,7 @@ PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" \
 [[ ! -e "$HOME/.local/bin/omarchy-cursor-switcher" ]]
 [[ ! -e "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
 [[ ! -e "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg" ]]
-[[ ! -e "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher" ]]
+grep -q '^# pre-existing user fragment$' "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
 [[ ! -e "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher" ]]
 [[ -f "$TEST_DIR/config/omarchy/cursor-switcher.json" ]]
 [[ -f "$SNAPSHOT_FILE" ]]
@@ -209,4 +239,3 @@ AUDIT_JSON_CLEAN=$(PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/con
 python3 -c 'import sys, json; rep = json.loads(sys.argv[1]); assert rep["is_clean"] == True, rep' "$AUDIT_JSON_CLEAN"
 
 echo "cursorctl tests: ok"
-

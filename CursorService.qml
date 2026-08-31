@@ -3,7 +3,6 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import "CursorModel.js" as Model
-import "ThemeCursorMappings.js" as Mappings
 
 Item {
   id: root
@@ -12,29 +11,15 @@ Item {
   property var manifest: null
   readonly property string pluginRoot: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
   readonly property string helperPath: pluginRoot + "/scripts/cursorctl"
-  readonly property string bananaPackage: pluginRoot + "/themes/banana/generated/Banana"
-  readonly property string bananaPreview: pluginRoot + "/themes/banana/upstream/svg/left_ptr.svg"
   readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || ((Quickshell.env("HOME") || "") + "/.config")
   readonly property string stateDir: configHome + "/omarchy"
   readonly property string statePath: stateDir + "/cursor-switcher.json"
 
-  // Mode: "manual" | "follow-omarchy"
-  property string mode: "manual"
   property var themes: []
   property var committedTheme: null
   property int committedSize: 16
-
-  // Independent manual and follow states
-  property var manualTheme: null
-  property int manualSize: 16
-  property int followSize: 16
-  property var followMappings: ({})
   property var importedThemes: []
-
-  // Active Omarchy Theme tracking
-  property string currentOmarchyTheme: ""
-  property string currentOmarchyThemeDisplay: ""
-  property var activeMappingInfo: null
+  property var currentRoles: ({})
 
   // Preview & Operation State
   property var previewTheme: null
@@ -49,7 +34,7 @@ Item {
   property bool _started: false
   property bool _stateLoaded: false
   property bool _scanLoaded: false
-  property var _loadedState: ({ ok: false, reason: "missing", mode: "manual", theme: null, size: 16 })
+  property var _loadedState: ({ ok: false, reason: "missing", theme: null, size: 16 })
   property string _installError: ""
   property var _queuedApply: null
   property var _activeApply: null
@@ -60,9 +45,18 @@ Item {
   property string _discoverError: ""
   property bool _savePending: false
 
-  readonly property bool previewActive: previewTheme !== null
-  readonly property var sizes: Model.SupportedSizes
   signal themesChangedByScan()
+  signal importCompleted(var theme, string message)
+  signal importFailed(string error)
+
+  // In-App File Browser State
+  property string browserPath: ""
+  property var browserEntries: []
+  property var browserBreadcrumbs: []
+  property bool browserCanGoUp: false
+  property string browserParent: ""
+  property bool browserLoading: false
+  property string browserError: ""
 
   function elide(value) {
     var text = String(value || "").replace(/\s+/g, " ").trim()
@@ -84,7 +78,7 @@ Item {
   Component.onDestruction: {
     var isEnabled = false
     if (shell && shell.pluginRegistry && typeof shell.pluginRegistry.isEnabled === "function") {
-      isEnabled = shell.pluginRegistry.isEnabled("sanjyay.cursor-switcher")
+      isEnabled = shell.pluginRegistry.isEnabled(manifest && manifest.id ? manifest.id : "goblin.cursor-switcher")
     } else if (manifest && manifest.id && shell && shell.pluginRegistry) {
       isEnabled = shell.pluginRegistry.isEnabled(manifest.id)
     }
@@ -117,58 +111,43 @@ Item {
       themes = Model.normalizeThemes(parsed.themes)
       lastScanMs = Date.now()
       _scanLoaded = true
+      lastError = ""
       themesChangedByScan()
-      initialize(parsed.currentXcursor || "")
+      if (!ready) {
+        initialize(parsed.currentXcursor || "")
+      } else if (committedTheme) {
+        fetchRoles(committedTheme.displayName || committedTheme.id, committedTheme.path || "")
+      }
     } catch (error) {
       lastError = "Cursor discovery returned invalid data"
-      console.warn("sanjyay.cursor-switcher: discovery parse failed:", error)
+      console.warn("goblin.cursor-switcher: discovery parse failed:", error)
     }
   }
 
-  function onOmarchyThemeChanged(rawThemeName) {
-    var raw = String(rawThemeName || "").trim()
-    root.currentOmarchyTheme = raw
-    root.currentOmarchyThemeDisplay = Mappings.formatOmarchyThemeName(raw)
-    var res = Mappings.resolveMappedTheme(raw, root.followMappings, root.themes, "Adwaita")
-    root.activeMappingInfo = res
-
-    if (root.mode === "follow-omarchy" && root.ready && res && res.theme) {
-      if (root.committedTheme !== res.theme || root.committedSize !== root.followSize) {
-        root.enqueueApply(res.theme, root.followSize, "commit")
-      }
+  function fetchRoles(themeIdentifier, themePath) {
+    if (!themeIdentifier || fetchRolesProcess.running) return
+    var args = [helperPath, "get-preview-roles", "--theme", String(themeIdentifier)]
+    if (themePath) {
+      args.push("--path", String(themePath))
     }
+    fetchRolesProcess.command = args
+    fetchRolesProcess.running = true
   }
 
   function initialize(currentXcursor) {
     if (ready || !_stateLoaded || !_scanLoaded) return
 
-    mode = _loadedState.mode || "manual"
-    manualSize = Model.validSize(_loadedState.manualSize)
-    followSize = Model.validSize(_loadedState.followSize)
-    followMappings = _loadedState.follow && _loadedState.follow.mappings ? _loadedState.follow.mappings : ({})
+    committedSize = Model.validSize(_loadedState.size)
     importedThemes = _loadedState.importedThemes || []
 
-    var manual = _loadedState.ok ? Model.findTheme(themes, _loadedState.manualTheme || _loadedState.theme) : null
-    if (!manual) manual = Model.fallbackTheme(themes, currentXcursor)
-    manualTheme = manual
-
-    // Read current Omarchy theme
-    var res = Mappings.resolveMappedTheme(currentOmarchyTheme, followMappings, themes, "Adwaita")
-    activeMappingInfo = res
-
-    if (mode === "follow-omarchy") {
-      var mapped = res && res.theme ? res.theme : manual
-      committedTheme = mapped
-      committedSize = followSize
-    } else {
-      committedTheme = manual
-      committedSize = manualSize
-    }
+    var found = _loadedState.ok ? Model.findTheme(themes, _loadedState.theme) : null
+    if (!found) found = Model.fallbackTheme(themes, currentXcursor)
+    committedTheme = found
 
     ready = true
     statusText = themes.length ? themes.length + " cursor themes" : "No cursor themes found"
 
-    if (_loadedState.ok && !manual) {
+    if (_loadedState.ok && !found) {
       lastError = "The saved cursor theme is no longer installed"
     } else if (_loadedState.reason === "corrupt" || _loadedState.reason === "invalid") {
       lastError = "The saved cursor settings were invalid; using a safe fallback"
@@ -176,29 +155,8 @@ Item {
 
     if (committedTheme) {
       enqueueApply(committedTheme, committedSize, "restore")
+      fetchRoles(committedTheme.displayName || committedTheme.id, committedTheme.path || "")
     }
-  }
-
-  function setMode(newMode) {
-    if (newMode !== "manual" && newMode !== "follow-omarchy") return
-    if (newMode === mode) return
-    mode = newMode
-
-    if (mode === "follow-omarchy") {
-      var res = Mappings.resolveMappedTheme(currentOmarchyTheme, followMappings, themes, "Adwaita")
-      activeMappingInfo = res
-      var targetTheme = (res && res.theme) ? res.theme : (manualTheme || committedTheme)
-      if (targetTheme) {
-        enqueueApply(targetTheme, followSize, "commit")
-      }
-    } else {
-      // Switching back to manual mode: restore manualTheme at manualSize
-      var targetTheme = manualTheme || committedTheme
-      if (targetTheme) {
-        enqueueApply(targetTheme, manualSize, "commit")
-      }
-    }
-    persistState()
   }
 
   function requestPreview(theme, size) {
@@ -218,35 +176,18 @@ Item {
     if (!theme) return
     previewTimer.stop()
     _debouncedPreview = null
-
-    if (mode === "manual") {
-      manualTheme = theme
-      enqueueApply(theme, manualSize, "commit")
-    } else {
-      // In follow mode: clicking a theme card sets mapping for active Omarchy theme
-      var normId = Mappings.normalizeOmarchyThemeId(currentOmarchyTheme)
-      var nextMappings = Object.assign({}, followMappings)
-      nextMappings[normId] = theme.displayName
-      followMappings = nextMappings
-      var res = Mappings.resolveMappedTheme(currentOmarchyTheme, followMappings, themes, "Adwaita")
-      activeMappingInfo = res
-      enqueueApply(theme, followSize, "commit")
-    }
+    committedTheme = theme
+    enqueueApply(theme, committedSize, "commit")
+    fetchRoles(theme.displayName || theme.id, theme.path || "")
+    persistState()
   }
 
   function commitSize(size) {
-    if (!committedTheme) return
     previewTimer.stop()
     _debouncedPreview = null
-    var valid = Model.validSize(size)
-
-    if (mode === "manual") {
-      manualSize = valid
-      enqueueApply(committedTheme, manualSize, "commit")
-    } else {
-      followSize = valid
-      enqueueApply(committedTheme, followSize, "commit")
-    }
+    committedSize = Model.validSize(size)
+    if (committedTheme) enqueueApply(committedTheme, committedSize, "commit")
+    persistState()
   }
 
   function enqueueApply(theme, size, kind) {
@@ -271,21 +212,18 @@ Item {
     if (!stateDirReady) { _savePending = true; return }
     _savePending = false
     var doc = Model.stateDocument(
-      mode,
-      manualTheme || committedTheme,
-      manualSize,
-      followSize,
-      followMappings,
-      importedThemes,
-      committedTheme
+      committedTheme,
+      committedSize,
+      importedThemes
     )
     stateFile.setText(doc)
   }
 
   function indexOfCommitted() {
     if (!committedTheme) return -1
-    for (var i = 0; i < themes.length; i++)
-      if (Model.findTheme([themes[i]], committedTheme)) return i
+    for (var i = 0; i < themes.length; i++) {
+      if (Model.themeEquals(themes[i], committedTheme)) return i
+    }
     return -1
   }
 
@@ -303,15 +241,12 @@ Item {
   // File Chooser & Import API
   function chooseAndImportFile() {
     if (chooseFileProcess.running || importProcess.running) return
-    chooseFileStdout.text = ""
     chooseFileProcess.running = true
   }
 
   function importTheme(sourcePath, optionalName) {
     if (!sourcePath || importProcess.running) return
     lastError = ""
-    importStdout.text = ""
-    importStderr.text = ""
     statusText = "Importing theme…"
     var args = [helperPath, "import", "--source", sourcePath]
     if (optionalName) {
@@ -325,9 +260,8 @@ Item {
     if (!theme || !theme.id || removeImportProcess.running) return
     if (!theme.imported && theme.sourceType !== "imported") return
     lastError = ""
-    // If active, switch safely to fallback first
     if (committedTheme && (committedTheme.id === theme.id || committedTheme.displayName === theme.displayName)) {
-      var fb = Model.fallbackTheme(themes, "Adwaita")
+      var fb = Model.fallbackTheme(themes, "Banana")
       if (fb) enqueueApply(fb, committedSize, "commit")
     }
     removeImportProcess.command = [helperPath, "remove-imported", "--id", theme.id]
@@ -346,15 +280,6 @@ Item {
     }
   }
   property bool stateDirReady: false
-
-  FileView {
-    id: omarchyThemeFile
-    path: (Quickshell.env("HOME") || "") + "/.local/state/omarchy/current/theme.name"
-    watchChanges: true
-    printErrors: false
-    onLoaded: function(t) { root.onOmarchyThemeChanged(t) }
-    onFileChanged: function(t) { root.onOmarchyThemeChanged(t) }
-  }
 
   FileView {
     id: stateFile
@@ -405,7 +330,7 @@ Item {
       if (exitCode !== 0) {
         root._installError = root.elide(installStderr.text || "Bundled theme installation failed")
         root.lastError = root._installError
-        console.warn("sanjyay.cursor-switcher:", root._installError)
+        console.warn("goblin.cursor-switcher:", root._installError)
       }
       registerAppProcess.command = [root.helperPath, "register-app",
         "--source", root.pluginRoot]
@@ -420,7 +345,7 @@ Item {
     stderr: StdioCollector { id: registerAppStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        console.warn("sanjyay.cursor-switcher: app registration failed:",
+        console.warn("goblin.cursor-switcher: app registration failed:",
           root.elide(registerAppStderr.text || "unknown error"))
       }
       root.refresh(true)
@@ -438,7 +363,66 @@ Item {
       if (exitCode === 0) root.parseDiscovery(discoverStdout.text || root._discoverOutput)
       else {
         root.lastError = root.elide(discoverStderr.text || root._discoverError || "Cursor discovery failed")
-        console.warn("sanjyay.cursor-switcher:", root.lastError)
+        console.warn("goblin.cursor-switcher:", root.lastError)
+      }
+    }
+  }
+
+  Process {
+    id: fetchRolesProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: fetchRolesStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        try {
+          var res = JSON.parse(fetchRolesStdout.text || "{}")
+          if (res && typeof res === "object") {
+            root.currentRoles = res
+          }
+        } catch (e) {
+          console.warn("goblin.cursor-switcher: failed to parse preview roles output:", e)
+        }
+      }
+    }
+  }
+
+  function browseDirectory(path) {
+    if (listDirProcess.running) return
+    browserLoading = true
+    browserError = ""
+    var target = path ? String(path) : (browserPath || "")
+    listDirProcess.command = [helperPath, "list-dir", "--path", target]
+    listDirProcess.running = true
+  }
+
+  Process {
+    id: listDirProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: listDirStdout; waitForEnd: true }
+    stderr: StdioCollector { id: listDirStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      root.browserLoading = false
+      var raw = String(listDirStdout.text || "").trim()
+      if (exitCode === 0 && raw) {
+        try {
+          var parsed = JSON.parse(raw)
+          if (parsed.ok) {
+            root.browserPath = parsed.path || ""
+            root.browserParent = parsed.parent || ""
+            root.browserCanGoUp = Boolean(parsed.can_go_up)
+            root.browserBreadcrumbs = parsed.breadcrumbs || []
+            root.browserEntries = parsed.entries || []
+            root.browserError = ""
+          } else {
+            root.browserError = parsed.error || "Cannot read directory"
+          }
+        } catch (e) {
+          root.browserError = "Failed to parse directory listing"
+        }
+      } else {
+        root.browserError = root.elide(listDirStderr.text || "Cannot access folder")
       }
     }
   }
@@ -467,20 +451,26 @@ Item {
       try {
         var parsed = JSON.parse(raw)
         if (parsed.ok && parsed.theme) {
-          root.statusText = parsed.alreadyImported ? "Already imported: " + parsed.theme.displayName : "Successfully imported " + parsed.theme.displayName
+          var msg = parsed.alreadyImported ? "Already imported: " + parsed.theme.displayName : "Successfully imported " + parsed.theme.displayName
+          root.statusText = msg
+          root.lastError = ""
           root.refresh(true)
-          // Automatically select/commit imported theme
           var importedObj = Model.normalizedTheme(parsed.theme)
           if (importedObj) {
             root.commitTheme(importedObj)
           }
+          root.importCompleted(parsed.theme, msg)
         } else {
-          root.lastError = parsed.error || "Failed to import cursor theme"
+          var err = parsed.error || "Failed to import cursor theme"
+          root.lastError = err
           root.statusText = "Import failed"
+          root.importFailed(err)
         }
       } catch (e) {
-        root.lastError = root.elide(importStderr.text || raw || "Import failed")
+        var errText = root.elide(importStderr.text || raw || "Import failed")
+        root.lastError = errText
         root.statusText = "Import failed"
+        root.importFailed(errText)
       }
     }
   }
@@ -521,7 +511,7 @@ Item {
       root.applying = false
       if (exitCode !== 0) {
         root.lastError = root.elide(applyStderr.text || root._applyStderr || applyStdout.text || root._applyStdout || "Cursor could not be applied")
-        console.warn("sanjyay.cursor-switcher: apply failed:", root.lastError)
+        console.warn("goblin.cursor-switcher:", root.lastError)
         if (request && request.kind === "commit") {
           root.statusText = "Failed to switch to " + request.theme.displayName
         } else if (request && request.kind === "preview") {

@@ -3,9 +3,9 @@ set -euo pipefail
 ROOT=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd)
 cd "$ROOT"
 node tests/model.test.js
-node tests/mappings.test.js
-tests/follow_mode.test.sh
+python3 tests/preview_roles.test.py
 python3 tests/import_security.test.py
+python3 tests/file_browser.test.py
 tests/cursorctl.test.sh
 tests/removal_lifecycle.test.sh
 python3 tests/third_party_registry.test.py

@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""
+Multi-Role Cursor Preview Extractor for Omarchy Cursor Switcher.
+Resolves generic semantic cursor roles (default, pointer, text, move, resize, wait)
+against Hyprcursor and XCursor theme assets and caches rendered role previews.
+"""
+
+import sys
+import os
+import json
+import shutil
+import zipfile
+import subprocess
+import hashlib
+from pathlib import Path
+
+HOME = Path(os.path.expanduser("~"))
+CACHE_DIR = HOME / ".cache" / "omarchy-cursor-switcher"
+ROLES_DIR = CACHE_DIR / "roles"
+LOCAL_ICONS = HOME / ".local" / "share" / "icons"
+SCRIPT_DIR = Path(__file__).resolve().parent
+PLUGIN_ROOT = SCRIPT_DIR.parent
+THEMES_ROOT = PLUGIN_ROOT / "themes"
+BANANA_UPSTREAM_SVG = THEMES_ROOT / "banana" / "upstream" / "svg"
+
+# Canonical Semantic Preview Roles with prioritized alias candidate lists
+SEMANTIC_ROLE_ALIASES = {
+    "default": [
+        "default", "left_ptr", "arrow", "top_left_arrow", "left-arrow"
+    ],
+    "pointer": [
+        "pointer", "pointing_hand", "hand2", "hand", "hand1", "link", "openhand"
+    ],
+    "text": [
+        "text", "xterm", "ibeam", "vertical-text"
+    ],
+    "move": [
+        "all-scroll", "fleur", "size_all", "all-resize", "grab", "move", "dnd-move"
+    ],
+    "resize": [
+        "ew-resize", "col-resize", "sb_h_double_arrow", "h_double_arrow", "left_right", "size_hor",
+        "nwse-resize", "se-resize", "row-resize", "ns-resize"
+    ],
+    "wait": [
+        "wait", "watch", "progress", "half-busy", "left_ptr_watch"
+    ]
+}
+
+def find_theme_directory(theme_input, theme_path_hint=None):
+    if theme_path_hint and os.path.isdir(theme_path_hint):
+        return Path(theme_path_hint)
+    
+    s = str(theme_input).strip()
+    if not s:
+        return None
+    if os.path.isabs(s) and os.path.isdir(s):
+        return Path(s)
+
+    candidates = [
+        LOCAL_ICONS / s,
+        LOCAL_ICONS / f"{s}-cursors",
+        LOCAL_ICONS / s.lower(),
+        THEMES_ROOT / s.lower() / "generated" / s,
+        Path("/usr/share/icons") / s,
+        Path("/usr/share/icons") / f"{s}-cursors",
+        Path("/usr/share/icons") / s.lower(),
+    ]
+    for c in candidates:
+        if c.is_dir():
+            return c
+
+    for base in [LOCAL_ICONS, Path("/usr/share/icons")]:
+        if base.is_dir():
+            for d in base.iterdir():
+                if not d.is_dir():
+                    continue
+                if d.name.lower() == s.lower():
+                    return d
+                idx = d / "index.theme"
+                if idx.is_file():
+                    try:
+                        content = idx.read_text(encoding="utf-8", errors="ignore")
+                        for line in content.splitlines():
+                            if line.startswith("Name=") and line[5:].strip().lower() == s.lower():
+                                return d
+                    except Exception:
+                        pass
+    return None
+
+def extract_role_from_hlc(hlc_path, out_file_base):
+    try:
+        with zipfile.ZipFile(hlc_path, "r") as zf:
+            names = zf.namelist()
+            svgs = [n for n in names if n.endswith(".svg")]
+            if svgs:
+                out_path = out_file_base.with_suffix(".svg")
+                out_path.write_bytes(zf.read(svgs[0]))
+                return str(out_path)
+            pngs = [n for n in names if n.endswith(".png")]
+            if pngs:
+                pngs.sort(key=lambda n: len(n))
+                out_path = out_file_base.with_suffix(".png")
+                out_path.write_bytes(zf.read(pngs[-1]))
+                return str(out_path)
+    except Exception:
+        pass
+    return None
+
+def extract_role_from_xcursor(cursor_file, out_file_base):
+    try:
+        temp_dir = out_file_base.parent / f"_tmp_{out_file_base.name}"
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        res = subprocess.run(["xcur2png", "-d", str(temp_dir), str(cursor_file)], cwd=str(temp_dir), capture_output=True, text=True)
+        if res.returncode == 0:
+            pngs = list(temp_dir.glob("*.png"))
+            if pngs:
+                pngs.sort(key=lambda p: p.stat().st_size, reverse=True)
+                target_png = out_file_base.with_suffix(".png")
+                shutil.copy2(pngs[0], target_png)
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return str(target_png)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception:
+        pass
+    return None
+
+def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
+    ROLES_DIR.mkdir(parents=True, exist_ok=True)
+    theme_dir = find_theme_directory(theme_name_or_path, theme_path_hint)
+    if not theme_dir or not theme_dir.is_dir():
+        return {}
+
+    theme_id = theme_dir.name
+    cache_target_dir = ROLES_DIR / theme_id
+    cache_target_dir.mkdir(parents=True, exist_ok=True)
+
+    is_banana = theme_id.lower() == "banana" or theme_id.lower() == "banana-catppuccin-mocha"
+    roles_found = {}
+
+    for role_key, aliases in SEMANTIC_ROLE_ALIASES.items():
+        cached_svg = cache_target_dir / f"{role_key}.svg"
+        cached_png = cache_target_dir / f"{role_key}.png"
+        if cached_svg.is_file():
+            roles_found[role_key] = str(cached_svg)
+            continue
+        if cached_png.is_file():
+            roles_found[role_key] = str(cached_png)
+            continue
+
+        resolved_file = None
+
+        # 1. Upstream vector SVGs (e.g. Banana)
+        if is_banana and BANANA_UPSTREAM_SVG.is_dir():
+            for alias in aliases:
+                cand = BANANA_UPSTREAM_SVG / f"{alias}.svg"
+                if cand.is_file():
+                    shutil.copy2(cand, cached_svg)
+                    resolved_file = str(cached_svg)
+                    break
+            if not resolved_file and role_key == "wait":
+                wait_cand = BANANA_UPSTREAM_SVG / "wait" / "wait-01.svg"
+                if wait_cand.is_file():
+                    shutil.copy2(wait_cand, cached_svg)
+                    resolved_file = str(cached_svg)
+
+        # 2. Hyprcursor shapes in hyprcursors/*.hlc
+        if not resolved_file and (theme_dir / "hyprcursors").is_dir():
+            for alias in aliases:
+                hlc = theme_dir / "hyprcursors" / f"{alias}.hlc"
+                if hlc.is_file():
+                    resolved_file = extract_role_from_hlc(hlc, cache_target_dir / role_key)
+                    if resolved_file:
+                        break
+
+        # 3. XCursor shapes in cursors/* (resolving symlinks safely)
+        if not resolved_file and (theme_dir / "cursors").is_dir():
+            for alias in aliases:
+                cur = theme_dir / "cursors" / alias
+                if cur.is_file():
+                    resolved_file = extract_role_from_xcursor(cur, cache_target_dir / role_key)
+                    if resolved_file:
+                        break
+
+        if resolved_file:
+            roles_found[role_key] = resolved_file
+
+    return roles_found
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: cursor_theming.py get-preview-roles [--theme <name>] [--path <path>]", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+    if cmd == "get-preview-roles":
+        theme = "Banana"
+        path_hint = None
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--theme" and i + 1 < len(sys.argv):
+                theme = sys.argv[i+1]
+                i += 2
+            elif sys.argv[i] == "--path" and i + 1 < len(sys.argv):
+                path_hint = sys.argv[i+1]
+                i += 2
+            elif not sys.argv[i].startswith("--"):
+                theme = sys.argv[i]
+                i += 1
+            else:
+                i += 1
+        roles = get_theme_role_previews(theme, path_hint)
+        print(json.dumps(roles))
+    else:
+        print(f"Unknown command: {cmd}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

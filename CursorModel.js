@@ -6,7 +6,6 @@ var DefaultSize = 16
 var VisibleThemes = [
   "Banana",
   "Banana-Catppuccin-Mocha",
-  "Banana-Green",
   "Adwaita",
   "Bibata-Catppuccin-Mocha",
   "Phinger",
@@ -54,8 +53,19 @@ function canDecreaseSize(currentSize) {
   return idx !== -1 && idx > 0
 }
 
+function isInternalTheme(name, path) {
+  var s = (safeString(name) + " " + safeString(path)).toLowerCase()
+  return s.indexOf("cursorswitcher-themed-") !== -1 ||
+         s.indexOf("cursorswitcher-xcursor-") !== -1 ||
+         s.indexOf("cursorswitcher-preview-") !== -1 ||
+         s.indexOf(".omarchy-cursor-switcher-themed") !== -1
+}
+
 function visibleThemeIndex(theme) {
   if (!theme) return -1
+  if (isInternalTheme(theme.id, theme.path) || isInternalTheme(theme.displayName, theme.hyprcursor) || isInternalTheme(theme.xcursor, "")) {
+    return -1
+  }
   if (theme.imported === true || theme.sourceType === "imported") return 9999
   var hypr = safeString(theme.hyprcursor).toLowerCase()
   var xcur = safeString(theme.xcursor).toLowerCase()
@@ -74,6 +84,9 @@ function visibleThemeIndex(theme) {
 
 function isThemeVisible(theme) {
   if (!theme) return false
+  if (isInternalTheme(theme.id, theme.path) || isInternalTheme(theme.displayName, theme.hyprcursor) || isInternalTheme(theme.xcursor, "")) {
+    return false
+  }
   if (theme.imported === true || theme.sourceType === "imported") return true
   return visibleThemeIndex(theme) !== -1
 }
@@ -93,9 +106,15 @@ function normalizedTheme(raw) {
   var subtitle = safeString(raw.subtitle)
   if (!subtitle && isImported) subtitle = "Imported"
 
+  var id = safeString(raw.id) || hypr || xcursor
+  var displayName = safeString(raw.displayName) || hypr || xcursor
+  var nameLower = (displayName || id || hypr).toLowerCase()
+  if (nameLower === "banana-green") return null
+
   return {
-    id: safeString(raw.id) || hypr || xcursor,
-    displayName: safeString(raw.displayName) || hypr || xcursor,
+    id: id,
+    displayName: displayName,
+    family: safeString(raw.family) || displayName || id,
     subtitle: subtitle,
     hyprcursor: hypr,
     xcursor: xcursor,
@@ -112,8 +131,22 @@ function normalizedTheme(raw) {
   }
 }
 
+function canonicalFamily(name) {
+  var s = safeString(name).toLowerCase().trim()
+  if (s === "nordzy" || s === "nordzy-cursors") return "nordzy"
+  if (s === "capitaine" || s === "capitaine-cursors") return "capitaine"
+  if (s === "phinger" || s === "phinger-cursors-dark") return "phinger"
+  if (s === "oreo" || s === "oreo_black_cursors") return "oreo"
+  if (s === "volantes" || s === "volantes_cursors") return "volantes"
+  if (s === "banana" || s === "omarchy-banana") return "banana"
+  return s
+}
+
 function themeKey(theme) {
   if (!theme) return ""
+  var family = safeString(theme.family || theme.displayName || theme.id)
+  var canon = canonicalFamily(family)
+  if (canon) return canon
   return (safeString(theme.id) || safeString(theme.hyprcursor) || safeString(theme.xcursor) || safeString(theme.displayName)).toLowerCase()
 }
 
@@ -125,6 +158,7 @@ function mergeTheme(a, b) {
   return {
     id: preferred.id || other.id,
     displayName: preferred.displayName || other.displayName,
+    family: preferred.family || other.family || preferred.displayName,
     subtitle: preferred.subtitle || other.subtitle,
     hyprcursor: preferred.hyprcursor || other.hyprcursor,
     xcursor: preferred.xcursor || other.xcursor,
@@ -169,114 +203,57 @@ function parseState(text) {
   var fallback = {
     ok: false,
     reason: "missing",
-    mode: "manual",
     theme: null,
     size: DefaultSize,
-    manualTheme: null,
-    manualSize: DefaultSize,
-    followSize: DefaultSize,
-    follow: { defaultTheme: "Adwaita", mappings: {} },
     importedThemes: []
   }
   if (!safeString(text).trim()) return fallback
   try {
     var raw = JSON.parse(text)
-    if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid", mode: "manual", theme: null, size: DefaultSize, manualTheme: null, manualSize: DefaultSize, followSize: DefaultSize, follow: { defaultTheme: "Adwaita", mappings: {} }, importedThemes: [] }
+    if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid", theme: null, size: DefaultSize, importedThemes: [] }
 
-    var mode = raw.mode === "follow-omarchy" ? "follow-omarchy" : "manual"
-    var manualTheme = raw.manualTheme ? normalizedTheme(raw.manualTheme) : (raw.theme ? normalizedTheme(raw.theme) : null)
-    var manualSize = validSize(raw.manualSize !== undefined ? raw.manualSize : raw.size, DefaultSize)
-    var followSize = validSize(raw.followSize !== undefined ? raw.followSize : raw.size, DefaultSize)
-
-    var follow = {
-      defaultTheme: (raw.follow && raw.follow.defaultTheme) || "Adwaita",
-      mappings: (raw.follow && typeof raw.follow.mappings === "object" && raw.follow.mappings) ? raw.follow.mappings : {}
-    }
+    var theme = raw.theme ? normalizedTheme(raw.theme) : (raw.manualTheme ? normalizedTheme(raw.manualTheme) : null)
+    var size = validSize(raw.size !== undefined ? raw.size : raw.manualSize, DefaultSize)
     var importedThemes = Array.isArray(raw.importedThemes) ? raw.importedThemes : []
-
-    var effectiveTheme = manualTheme
-    var effectiveSize = mode === "follow-omarchy" ? followSize : manualSize
 
     return {
       ok: true,
       reason: "",
-      mode: mode,
-      theme: effectiveTheme,
-      size: effectiveSize,
-      manualTheme: manualTheme,
-      manualSize: manualSize,
-      followSize: followSize,
-      follow: follow,
+      theme: theme,
+      size: size,
       importedThemes: importedThemes
     }
   } catch (error) {
-    return { ok: false, reason: "corrupt", mode: "manual", theme: null, size: DefaultSize, manualTheme: null, manualSize: DefaultSize, followSize: DefaultSize, follow: { defaultTheme: "Adwaita", mappings: {} }, importedThemes: [] }
+    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [] }
   }
 }
 
-function stateDocument(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+function stateDocument(arg1, arg2, arg3) {
   var doc = { version: 2 }
   if (typeof arg1 === "object" && arg1 !== null && !arg1.displayName && !arg1.hyprcursor && !arg1.xcursor) {
     var s = arg1
-    doc.mode = s.mode === "follow-omarchy" ? "follow-omarchy" : "manual"
-    doc.manualTheme = s.manualTheme ? {
-      displayName: s.manualTheme.displayName,
-      hyprcursor: s.manualTheme.hyprcursor,
-      xcursor: s.manualTheme.xcursor
-    } : null
-    doc.manualSize = validSize(s.manualSize, DefaultSize)
-    doc.followSize = validSize(s.followSize, DefaultSize)
     doc.theme = s.theme ? {
       displayName: s.theme.displayName,
       hyprcursor: s.theme.hyprcursor,
       xcursor: s.theme.xcursor
-    } : doc.manualTheme
-    doc.size = validSize(s.size, (doc.mode === "follow-omarchy" ? doc.followSize : doc.manualSize))
-    doc.follow = s.follow || { defaultTheme: "Adwaita", mappings: {} }
+    } : (s.manualTheme ? {
+      displayName: s.manualTheme.displayName,
+      hyprcursor: s.manualTheme.hyprcursor,
+      xcursor: s.manualTheme.xcursor
+    } : null)
+    doc.size = validSize(s.size !== undefined ? s.size : s.manualSize, DefaultSize)
     doc.importedThemes = s.importedThemes || []
-  } else if (typeof arg1 === "string" && (arg1 === "manual" || arg1 === "follow-omarchy")) {
-    var mode = arg1
-    var manualTheme = arg2
-    var manualSize = validSize(arg3, DefaultSize)
-    var followSize = validSize(arg4, DefaultSize)
-    var followMappings = arg5 || {}
-    var importedThemes = arg6 || []
-    var activeTheme = arg7 || manualTheme
-
-    doc.mode = mode
-    doc.manualTheme = manualTheme ? {
-      displayName: manualTheme.displayName,
-      hyprcursor: manualTheme.hyprcursor,
-      xcursor: manualTheme.xcursor
-    } : null
-    doc.manualSize = manualSize
-    doc.followSize = followSize
-    doc.theme = activeTheme ? {
-      displayName: activeTheme.displayName,
-      hyprcursor: activeTheme.hyprcursor,
-      xcursor: activeTheme.xcursor
-    } : doc.manualTheme
-    doc.size = mode === "follow-omarchy" ? followSize : manualSize
-    doc.follow = {
-      defaultTheme: "Adwaita",
-      mappings: followMappings
-    }
-    doc.importedThemes = importedThemes
   } else {
     var theme = arg1
     var size = validSize(arg2, DefaultSize)
-    doc.mode = "manual"
+    var importedThemes = Array.isArray(arg3) ? arg3 : []
     doc.theme = theme ? {
       displayName: theme.displayName,
       hyprcursor: theme.hyprcursor,
       xcursor: theme.xcursor
     } : null
     doc.size = size
-    doc.manualTheme = doc.theme
-    doc.manualSize = size
-    doc.followSize = size
-    doc.follow = { defaultTheme: "Adwaita", mappings: {} }
-    doc.importedThemes = []
+    doc.importedThemes = importedThemes
   }
   return JSON.stringify(doc, null, 2) + "\n"
 }
@@ -319,6 +296,14 @@ function fallbackTheme(themes, currentXcursor) {
   return themes.length ? themes[0] : null
 }
 
+function themeEquals(a, b) {
+  if (!a || !b) return false
+  return (safeString(a.id) === safeString(b.id) && safeString(a.id) !== "") ||
+         (safeString(a.displayName) === safeString(b.displayName) && safeString(a.displayName) !== "") ||
+         (safeString(a.hyprcursor) === safeString(b.hyprcursor) && safeString(a.hyprcursor) !== "") ||
+         (safeString(a.xcursor) === safeString(b.xcursor) && safeString(a.xcursor) !== "")
+}
+
 function applyArguments(scriptPath, theme, size, preview) {
   if (!theme) return []
   var args = [scriptPath, "apply",
@@ -358,10 +343,77 @@ function commitPreview(state, theme, size) {
   return initialPreviewState(theme, size)
 }
 
+function previewColumns(containerWidth, cardWidth, columnSpacing, paddingHorizontal) {
+  var pad = paddingHorizontal !== undefined ? paddingHorizontal : 16
+  var cw = cardWidth !== undefined ? cardWidth : 72
+  var cs = columnSpacing !== undefined ? columnSpacing : 14
+  var avail = (Number(containerWidth) || 0) - pad * 2
+
+  var w6 = 6 * cw + 5 * cs
+  var w3 = 3 * cw + 2 * cs
+  var w2 = 2 * cw + 1 * cs
+
+  if (avail >= w6) return 6
+  if (avail >= w3) return 3
+  if (avail >= w2) return 2
+  return 1
+}
+
+function previewRows(totalCount, columns) {
+  var count = Math.max(0, Number(totalCount) || 0)
+  var cols = Math.max(1, Number(columns) || 1)
+  return Math.ceil(count / cols)
+}
+
+function previewGridGeometry(totalCount, containerWidth, cardWidth, itemHeight, columnSpacing, rowSpacing, paddingHorizontal, paddingVertical) {
+  var count = Math.max(0, Number(totalCount) || 0)
+  var width = Math.max(0, Number(containerWidth) || 0)
+  var cw = cardWidth !== undefined ? cardWidth : 72
+  var ih = itemHeight !== undefined ? itemHeight : 92
+  var cs = columnSpacing !== undefined ? columnSpacing : 14
+  var rs = rowSpacing !== undefined ? rowSpacing : 12
+  var padH = paddingHorizontal !== undefined ? paddingHorizontal : 16
+  var padV = paddingVertical !== undefined ? paddingVertical : 14
+
+  var cols = previewColumns(width, cw, cs, padH)
+  var rows = previewRows(count, cols)
+
+  var gridWidth = cols * cw + Math.max(0, cols - 1) * cs
+  var gridHeight = rows * ih + Math.max(0, rows - 1) * rs
+  var gridX = (width - gridWidth) / 2
+  var gridY = padV
+
+  var cards = []
+  var fitsInside = true
+
+  for (var i = 0; i < count; i++) {
+    var col = i % cols
+    var row = Math.floor(i / cols)
+    var cx = gridX + col * (cw + cs)
+    var cy = gridY + row * (ih + rs)
+    var inBounds = cx >= 0 && (cx + cw) <= width
+    if (!inBounds) fitsInside = false
+    cards.push({ index: i, col: col, row: row, x: cx, y: cy, inBounds: inBounds })
+  }
+
+  return {
+    columns: cols,
+    rows: rows,
+    gridWidth: gridWidth,
+    gridHeight: gridHeight,
+    gridX: gridX,
+    gridY: gridY,
+    containerHeight: gridHeight + padV * 2,
+    fitsInside: fitsInside,
+    cards: cards
+  }
+}
+
 if (typeof module !== "undefined") module.exports = {
   SupportedSizes: SupportedSizes,
   DefaultSize: DefaultSize,
   VisibleThemes: VisibleThemes,
+  isInternalTheme: isInternalTheme,
   isThemeVisible: isThemeVisible,
   visibleThemeIndex: visibleThemeIndex,
   validSize: validSize,
@@ -375,9 +427,14 @@ if (typeof module !== "undefined") module.exports = {
   stateDocument: stateDocument,
   findTheme: findTheme,
   fallbackTheme: fallbackTheme,
+  themeEquals: themeEquals,
   applyArguments: applyArguments,
   initialPreviewState: initialPreviewState,
   startPreview: startPreview,
   cancelPreview: cancelPreview,
-  commitPreview: commitPreview
+  commitPreview: commitPreview,
+  previewColumns: previewColumns,
+  previewRows: previewRows,
+  previewGridGeometry: previewGridGeometry
 }
+

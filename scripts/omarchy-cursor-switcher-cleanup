@@ -14,6 +14,7 @@ APP_DIR="$DATA_HOME/applications"
 BIN_DIR="$HOME_DIR/.local/bin"
 APP_ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
 CLEANUP_DIR="$DATA_HOME/omarchy-cursor-switcher"
+LEGACY_CLEANUP_DIR="$DATA_HOME/omarchy/cursor-switcher"
 
 die() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; exit 1; }
 log() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; }
@@ -21,7 +22,7 @@ log() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; }
 snapshot_original_state() {
   mkdir -p "$STATE_DIR"
   if [[ -f $SNAPSHOT_FILE ]]; then
-    if python3 -c 'import sys, json; d = json.load(open(sys.argv[1])); assert d.get("version") == 1' "$SNAPSHOT_FILE" 2>/dev/null; then
+    if python3 -c 'import sys, json; d = json.load(open(sys.argv[1])); assert d.get("version") in (1, 2)' "$SNAPSHOT_FILE" 2>/dev/null; then
       return 0
     fi
   fi
@@ -59,10 +60,12 @@ except Exception:
     pass
 
 sysd_env = {}
+systemd_probe_succeeded = False
 try:
     res = subprocess.run(["systemctl", "--user", "show-environment"],
                          capture_output=True, text=True, timeout=2)
     if res.returncode == 0:
+        systemd_probe_succeeded = True
         for line in res.stdout.splitlines():
             if "=" in line:
                 k, v = line.split("=", 1)
@@ -70,25 +73,27 @@ try:
 except Exception:
     pass
 
-def probe_var(var_name):
-    if sysd_env:
-        if var_name in sysd_env and sysd_env[var_name]:
-            return True, sysd_env[var_name]
-        return False, ""
-    if var_name in os.environ and os.environ[var_name]:
-        return True, os.environ[var_name]
-    return False, ""
+cursor_vars = ("HYPRCURSOR_THEME", "HYPRCURSOR_SIZE", "XCURSOR_THEME", "XCURSOR_SIZE")
 
-hypr_theme_present, hypr_theme_val = probe_var("HYPRCURSOR_THEME")
-hypr_size_present, hypr_size_val = probe_var("HYPRCURSOR_SIZE")
-xcur_theme_present, xcur_theme_val = probe_var("XCURSOR_THEME")
-xcur_size_present, xcur_size_val = probe_var("XCURSOR_SIZE")
+def capture(mapping, name):
+    return {"present": name in mapping, "value": mapping.get(name, "")}
+
+def capture_file(path):
+    result = {"present": os.path.isfile(path)}
+    if result["present"]:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                result["content"] = f.read()
+            result["mode"] = os.stat(path).st_mode & 0o777
+        except Exception as exc:
+            result["readError"] = str(exc)
+    return result
 
 uwsm_common = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
 uwsm_hypr = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
 
 data = {
-    "version": 1,
+    "version": 2,
     "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "gtkTheme": {
         "present": gtk_theme_present,
@@ -98,24 +103,11 @@ data = {
         "present": gtk_size_present,
         "value": gtk_size_val
     },
-    "hyprcursorTheme": {
-        "present": hypr_theme_present,
-        "value": hypr_theme_val
-    },
-    "hyprcursorSize": {
-        "present": hypr_size_present,
-        "value": hypr_size_val
-    },
-    "xcursorTheme": {
-        "present": xcur_theme_present,
-        "value": xcur_theme_val
-    },
-    "xcursorSize": {
-        "present": xcur_size_present,
-        "value": xcur_size_val
-    },
-    "uwsmEnvCommonExisted": os.path.exists(uwsm_common),
-    "uwsmEnvHyprlandExisted": os.path.exists(uwsm_hypr)
+    "systemdProbeSucceeded": systemd_probe_succeeded,
+    "systemdEnvironment": {name: capture(sysd_env, name) for name in cursor_vars},
+    "processEnvironment": {name: capture(os.environ, name) for name in cursor_vars},
+    "uwsmEnvCommon": capture_file(uwsm_common),
+    "uwsmEnvHyprland": capture_file(uwsm_hypr)
 }
 
 tmp_path = snapshot_path + f".tmp.{os.getpid()}"
@@ -143,34 +135,29 @@ if os.path.isfile(snapshot_path):
     except Exception as e:
         print(f"Warning: failed to read snapshot {snapshot_path}: {e}", file=sys.stderr)
 
-def_theme = "Adwaita"
-def_size = 24
-
-if os.path.isfile("/usr/share/icons/default/index.theme"):
-    try:
-        with open("/usr/share/icons/default/index.theme") as f:
-            for line in f:
-                if line.strip().startswith("Inherits="):
-                    val = line.strip().split("=", 1)[1].strip()
-                    if val:
-                        def_theme = val
-    except Exception:
-        pass
-
-if snap and isinstance(snap, dict) and snap.get("version") == 1:
+if snap and isinstance(snap, dict) and snap.get("version") == 2:
     gtk_theme = snap.get("gtkTheme", {})
     gtk_size = snap.get("gtkSize", {})
-    hypr_theme = snap.get("hyprcursorTheme", {})
-    hypr_size = snap.get("hyprcursorSize", {})
-    xcur_theme = snap.get("xcursorTheme", {})
-    xcur_size = snap.get("xcursorSize", {})
+    systemd_env = snap.get("systemdEnvironment", {})
+    process_env = snap.get("processEnvironment", {})
+    uwsm_common_state = snap.get("uwsmEnvCommon", {"present": False})
+    uwsm_hypr_state = snap.get("uwsmEnvHyprland", {"present": False})
+elif snap and isinstance(snap, dict) and snap.get("version") == 1:
+    # Compatibility with snapshots made by Cursor Switcher 2.0 prereleases.
+    gtk_theme = snap.get("gtkTheme", {})
+    gtk_size = snap.get("gtkSize", {})
+    systemd_env = {
+        "HYPRCURSOR_THEME": snap.get("hyprcursorTheme", {}),
+        "HYPRCURSOR_SIZE": snap.get("hyprcursorSize", {}),
+        "XCURSOR_THEME": snap.get("xcursorTheme", {}),
+        "XCURSOR_SIZE": snap.get("xcursorSize", {}),
+    }
+    process_env = dict(systemd_env)
+    uwsm_common_state = {"present": bool(snap.get("uwsmEnvCommonExisted", False))}
+    uwsm_hypr_state = {"present": bool(snap.get("uwsmEnvHyprlandExisted", False))}
 else:
-    gtk_theme = {"present": True, "value": def_theme}
-    gtk_size = {"present": True, "value": def_size}
-    hypr_theme = {"present": False, "value": ""}
-    hypr_size = {"present": False, "value": ""}
-    xcur_theme = {"present": True, "value": def_theme}
-    xcur_size = {"present": True, "value": str(def_size)}
+    print("Warning: no valid original-state snapshot; refusing to invent cursor defaults", file=sys.stderr)
+    sys.exit(0)
 
 # 1. Restore GTK / GSettings
 try:
@@ -193,12 +180,8 @@ except Exception:
 set_assignments = []
 unset_names = []
 
-for key, obj in [
-    ("HYPRCURSOR_THEME", hypr_theme),
-    ("HYPRCURSOR_SIZE", hypr_size),
-    ("XCURSOR_THEME", xcur_theme),
-    ("XCURSOR_SIZE", xcur_size),
-]:
+for key in ("HYPRCURSOR_THEME", "HYPRCURSOR_SIZE", "XCURSOR_THEME", "XCURSOR_SIZE"):
+    obj = systemd_env.get(key, {})
     if obj.get("present") and obj.get("value") is not None and str(obj.get("value")) != "":
         set_assignments.append(f"{key}={obj['value']}")
     else:
@@ -221,6 +204,11 @@ if unset_names:
         pass
 
 # 3. Restore live compositor cursor via hyprctl
+hypr_theme = process_env.get("HYPRCURSOR_THEME", {})
+hypr_size = process_env.get("HYPRCURSOR_SIZE", {})
+xcur_theme = process_env.get("XCURSOR_THEME", {})
+xcur_size = process_env.get("XCURSOR_SIZE", {})
+
 effective_hypr = ""
 if hypr_theme.get("present") and hypr_theme.get("value"):
     effective_hypr = str(hypr_theme["value"])
@@ -228,10 +216,8 @@ elif xcur_theme.get("present") and xcur_theme.get("value"):
     effective_hypr = str(xcur_theme["value"])
 elif gtk_theme.get("present") and gtk_theme.get("value"):
     effective_hypr = str(gtk_theme["value"])
-else:
-    effective_hypr = def_theme
 
-effective_size = 24
+effective_size = None
 if hypr_size.get("present") and str(hypr_size.get("value")).isdigit():
     effective_size = int(hypr_size["value"])
 elif xcur_size.get("present") and str(xcur_size.get("value")).isdigit():
@@ -240,8 +226,9 @@ elif gtk_size.get("present") and str(gtk_size.get("value")).isdigit():
     effective_size = int(gtk_size["value"])
 
 try:
-    subprocess.run(["hyprctl", "setcursor", effective_hypr, str(effective_size)],
-                   capture_output=True, timeout=2)
+    if effective_hypr and effective_size is not None:
+        subprocess.run(["hyprctl", "setcursor", effective_hypr, str(effective_size)],
+                       capture_output=True, timeout=2)
     
     hypr_env_val = hypr_theme.get("value", "") if hypr_theme.get("present") else ""
     hypr_size_val = str(hypr_size.get("value", "")) if hypr_size.get("present") else ""
@@ -259,17 +246,28 @@ try:
 except Exception:
     pass
 
-# 4. Remove UWSM env override files created by cursor-switcher
+# 4. Restore exact pre-plugin UWSM fragment state.
 uwsm_common = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
 uwsm_hypr = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
-try:
-    if os.path.exists(uwsm_common): os.unlink(uwsm_common)
-except Exception:
-    pass
-try:
-    if os.path.exists(uwsm_hypr): os.unlink(uwsm_hypr)
-except Exception:
-    pass
+
+def restore_file(path, state):
+    try:
+        if state.get("present") and "content" in state:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + f".restore.{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(state["content"])
+            os.chmod(tmp, int(state.get("mode", 0o600)))
+            os.replace(tmp, path)
+        elif not state.get("present") and os.path.lexists(path):
+            os.unlink(path)
+        elif state.get("present") and "content" not in state:
+            print(f"Warning: cannot restore unread pre-existing UWSM fragment: {path}", file=sys.stderr)
+    except Exception as exc:
+        print(f"Warning: failed restoring UWSM fragment {path}: {exc}", file=sys.stderr)
+
+restore_file(uwsm_common, uwsm_common_state)
+restore_file(uwsm_hypr, uwsm_hypr_state)
 PY
 }
 
@@ -295,13 +293,26 @@ deactivate() {
 purge() {
   deactivate
 
+  local errors=0
+
+  remove_owned_theme() {
+    local target=$1 marker=$2 canonical_root canonical_target
+    canonical_root=$(realpath -m -- "$ICONS_DIR") || return 1
+    canonical_target=$(realpath -m -- "$target") || return 1
+    if [[ $canonical_target != "$canonical_root"/* || ! -f $target/$marker ]]; then
+      log "refusing unsafe or unowned theme removal: $target"
+      return 1
+    fi
+    rm -rf -- "$target" || return 1
+  }
+
   # Remove plugin-owned bundled themes (verify marker .omarchy-cursor-switcher-theme)
   if [[ -d $ICONS_DIR ]]; then
     local d
     for d in "$ICONS_DIR"/*; do
       [[ -d $d ]] || continue
       if [[ -f $d/.omarchy-cursor-switcher-theme ]]; then
-        rm -rf -- "$d"
+        remove_owned_theme "$d" .omarchy-cursor-switcher-theme || errors=1
       fi
     done
   fi
@@ -312,7 +323,7 @@ purge() {
     for c in "$ICONS_DIR"/CursorSwitcher-XCursor-*; do
       [[ -d $c ]] || continue
       if [[ -f $c/.omarchy-cursor-switcher-converted ]]; then
-        rm -rf -- "$c"
+        remove_owned_theme "$c" .omarchy-cursor-switcher-converted || errors=1
       fi
     done
   fi
@@ -323,7 +334,7 @@ purge() {
     for imp in "$ICONS_DIR"/CursorSwitcher-Imported-*; do
       [[ -d $imp ]] || continue
       if [[ -f $imp/.omarchy-cursor-switcher-imported ]]; then
-        rm -rf -- "$imp"
+        remove_owned_theme "$imp" .omarchy-cursor-switcher-imported || errors=1
       fi
     done
   fi
@@ -335,8 +346,12 @@ purge() {
   rm -f -- "$STATE_FILE"
   rm -f -- "$SNAPSHOT_FILE"
 
-  # Remove cleanup helper directory and self
+  # Remove current and prerelease cleanup-helper locations. Deleting the
+  # running script is safe on Linux; its open file remains readable to bash.
+  rm -rf -- "$LEGACY_CLEANUP_DIR"
   rm -rf -- "$CLEANUP_DIR"
+
+  return "$errors"
 }
 
 on_destroy() {
@@ -392,19 +407,41 @@ if os.path.isdir(icons_dir):
         elif os.path.isfile(os.path.join(d, ".omarchy-cursor-switcher-imported")):
             imported_themes.append(os.path.basename(d))
 
+icon_assets = []
+for pattern in (
+    os.path.join(data_home, "icons", "hicolor", "*", "apps", "omarchy-cursor-switcher.*"),
+    os.path.join(data_home, "pixmaps", "omarchy-cursor-switcher.*"),
+):
+    icon_assets.extend(glob.glob(pattern))
+
+# Keep the ownership check deliberately strict enough to ignore a user's
+# pre-existing file restored from the snapshot, while recognizing old IDs.
+def managed_fragment(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            first = f.readline().strip()
+        return first.startswith("# Managed by ") and first.endswith("cursor-switcher.")
+    except OSError:
+        return False
+
+uwsm_common_path = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
+uwsm_hypr_path = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
+
 report = {
     "snapshot": os.path.isfile(os.path.join(config_home, "omarchy", "cursor-switcher-original-state.json")),
     "state": os.path.isfile(os.path.join(config_home, "omarchy", "cursor-switcher.json")),
     "desktop_entry": os.path.isfile(os.path.join(data_home, "applications", "omarchy-cursor-switcher.desktop")),
     "launcher": os.path.isfile(os.path.join(home, ".local", "bin", "omarchy-cursor-switcher")),
-    "icon": os.path.isfile(os.path.join(data_home, "icons", "hicolor", "scalable", "apps", "omarchy-cursor-switcher.svg")),
-    "uwsm_env_common": os.path.isfile(os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")),
-    "uwsm_env_hyprland": os.path.isfile(os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")),
+    "icon": bool(icon_assets),
+    "icon_assets": sorted(icon_assets),
+    "uwsm_env_common": managed_fragment(uwsm_common_path),
+    "uwsm_env_hyprland": managed_fragment(uwsm_hypr_path),
     "bundled_themes": bundled_themes,
     "converted_themes": converted_themes,
     "imported_themes": imported_themes,
     "cache_previews": os.path.isdir(os.path.join(cache_home, "omarchy-cursor-switcher")),
-    "cleanup_helper": os.path.isfile(os.path.join(data_home, "omarchy-cursor-switcher", "omarchy-cursor-switcher-cleanup"))
+    "cleanup_helper": os.path.isfile(os.path.join(data_home, "omarchy-cursor-switcher", "omarchy-cursor-switcher-cleanup")),
+    "legacy_cleanup_helper": os.path.lexists(os.path.join(data_home, "omarchy", "cursor-switcher"))
 }
 
 is_clean = not (
@@ -412,7 +449,7 @@ is_clean = not (
     report["launcher"] or report["icon"] or report["uwsm_env_common"] or
     report["uwsm_env_hyprland"] or bool(report["bundled_themes"]) or
     bool(report["converted_themes"]) or bool(report["imported_themes"]) or
-    report["cache_previews"] or report["cleanup_helper"]
+    report["cache_previews"] or report["cleanup_helper"] or report["legacy_cleanup_helper"]
 )
 report["is_clean"] = is_clean
 

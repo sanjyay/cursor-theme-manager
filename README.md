@@ -6,25 +6,68 @@ A native Omarchy Quattro / `omarchy-shell` panel for discovering, previewing, ap
 
 ## Features
 
-- Discovers real cursor themes in `~/.local/share/icons`, `~/.icons`, and `XDG_DATA_DIRS/icons` (normally `/usr/share/icons`).
-- **Live switching for all themes:** Native Hyprcursor themes apply directly via `hyprctl setcursor`. Legacy XCursor-only themes (such as Adwaita, Yaru, Bibata, etc.) are automatically and transparently converted to Hyprcursor packages on-the-fly and cached locally under `~/.local/share/icons/CursorSwitcher-XCursor-<name>-<hash>`.
+- **Compact Split-Pane Layout:** Designed like a native desktop settings panel featuring a vertical cursor theme list on the left (~38% width) and a multi-role cursor preview strip, size stepper, and metadata details on the right (~62% width).
+- **Representative Multi-Role Previews:** High-resolution preview strip showcasing standard cursor roles (`Default`, `Pointer`, `Text`, `Move`, `Resize`, `Wait`).
+- **Cursor Size Stepper:** Discrete size stepper (`[ − ] 64 px [ + ]`).
+- **Import Local Cursor Themes:** Import local XCursor or Hyprcursor theme directories or archives securely with automatic Hyprcursor conversion for XCursor themes, deduplication, and symlink protection.
+- **Internal Theme Filtering:** Discovers real installed and imported cursor themes while strictly filtering out internal build artifacts, conversion caches, and temporary helper themes.
+- **Live switching for all themes:** Native Hyprcursor themes apply directly via `hyprctl setcursor`. Legacy XCursor-only themes are automatically converted to Hyprcursor packages on-the-fly.
 - Uses `hyprctl setcursor` for instant compositor cursor changes and `gsettings` for GTK/XCursor compatibility.
 - Updates the systemd/D-Bus activation environment and Quattro's live Hyprland Lua environment for newly launched applications.
 - Persists the selection in `~/.config/omarchy/cursor-switcher.json` and UWSM-owned environment fragments (`~/.config/uwsm/env.d/90-omarchy-cursor-switcher` and `~/.config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher`).
-- Strict commit/preview transactions: the UI checkmark only moves after backend cursor application is verified successful.
+- Strict commit/preview transactions: the UI selection only moves after backend cursor application is verified successful.
 - Debounced live hover previews with clean restoration when hover ends or Escape is pressed.
 - Idempotent application launcher integration (`omarchy-cursor-switcher.desktop`, launcher wrapper, SVG icon).
-- Installs the bundled Banana theme idempotently at `~/.local/share/icons/Banana` without sudo.
+- Installs bundled cursor themes idempotently without sudo.
 - Has no polling loop and does not scan cursor directories continuously.
+
+## Import Local Cursor Themes
+
+Cursor Switcher enables users to import local cursor themes directly into their personal cursor library.
+
+### Supported Formats & Sources
+
+- **Formats:** Hyprcursor themes (with `manifest.hl`/`manifest.toml`), XCursor themes (with a `cursors/` directory), or hybrid themes containing both formats.
+- **Source Types:** Local directories or safe archive files (`.tar.gz`, `.tgz`, `.tar.xz`, `.txz`, `.tar.bz2`, `.tbz2`, `.tar`, `.zip`).
+- **Install Location:** Plugin-managed directory in `~/.local/share/icons/CursorSwitcher-Imported-<name>-<hash>/`.
+
+### XCursor → Hyprcursor Conversion
+
+If an imported cursor theme is XCursor-only, Cursor Switcher automatically compiles and extracts a native Hyprcursor companion package using `hyprcursor-util`. The generated package is cached and linked, enabling instantaneous live switching in Hyprland without requiring user intervention.
+
+### Security Model
+
+All local imports are treated as untrusted data input:
+
+- **No Script Execution:** Cursor Switcher never executes `install.sh`, `build.sh`, `Makefile`, Python, Node, or shell scripts inside imported themes.
+- **Symlink & Path Protection:** Path traversal (`..`), absolute paths, device files, FIFOs, and escaping symlinks (symlinks pointing outside the theme root) are strictly validated and rejected before staging or installation.
+- **Archive Size & Count Limits:** Extraction strictly enforces maximum archive size (50 MB), extracted size (150 MB), and file count limits (5,000 files) to prevent decompression bombs.
+- **Deduplication:** Importing identical content multiple times detects the existing content hash and reuses the existing installation without creating redundant copies.
+- **Collision Avoidance:** Imported themes are installed under unique namespaced directories (`CursorSwitcher-Imported-*`) and will never overwrite existing distro or user packages.
+
+### Licenses & Removal
+
+- **License Preservation:** All `LICENSE`, `COPYING`, or copyright notice files inside imported themes are preserved in the installed directory. Standard open-source licenses (such as GPL, MIT, Apache, Creative Commons, MPL, BSD) are detected and displayed; unrecognized licenses are displayed as `Unknown`. Imported themes remain subject to their original licenses.
+- **Safe Removal:** Imported themes can be removed with one click in the UI (`Remove Theme`) or via CLI (`cursorctl remove-imported --id <id>`). If the theme to be removed is currently active, the system safely switches to a fallback cursor before deleting the theme files and generated Hyprcursor caches. System and bundled themes cannot be removed via the import removal API.
+
+### CLI Import & Removal
+
+```bash
+# Import a local cursor directory or archive
+cursorctl import --source /path/to/theme-dir-or-archive
+
+# Remove an imported theme
+cursorctl remove-imported --id CursorSwitcher-Imported-MyTheme-1a2b3c4d5e6f
+```
 
 ## Install
 
 This repository is already usable as a local plugin. From its root:
 
 ```bash
-ln -s "$PWD" ~/.config/omarchy/plugins/sanjyay.cursor-switcher
+ln -s "$PWD" ~/.config/omarchy/plugins/goblin.cursor-switcher
 omarchy-shell shell rescanPlugins
-omarchy plugin enable sanjyay.cursor-switcher
+omarchy plugin enable goblin.cursor-switcher
 ```
 
 For a normal published Git checkout, Omarchy's standard `omarchy plugin add <git-url> --enable` flow may be used instead. No install hook or sudo command is required. The service installs/updates the bundled cursor package on first load.
@@ -32,14 +75,14 @@ For a normal published Git checkout, Omarchy's standard `omarchy plugin add <git
 Open or toggle the selector:
 
 ```bash
-omarchy-shell shell toggle sanjyay.cursor-switcher '{}'
+omarchy-shell shell toggle goblin.cursor-switcher '{}'
 ```
 
 A Hyprland shortcut can run that exact command. The panel also supports `summon` and `hide`:
 
 ```bash
-omarchy-shell shell summon sanjyay.cursor-switcher '{}'
-omarchy-shell shell hide sanjyay.cursor-switcher
+omarchy-shell shell summon goblin.cursor-switcher '{}'
+omarchy-shell shell hide goblin.cursor-switcher
 ```
 
 Arrow keys (or `h/j/k/l`) navigate, Tab switches between the theme grid and size row, Enter/Space commits, `r` refreshes, and Escape cancels any preview and closes the panel.
@@ -63,13 +106,13 @@ The desktop entry invokes `omarchy-cursor-switcher`, which sends an IPC `summon`
 Through the loaded plugin service:
 
 ```bash
-omarchy-shell shell call sanjyay.cursor-switcher applyTheme '{"theme":"Banana","size":24}'
+omarchy-shell shell call goblin.cursor-switcher applyTheme '{"theme":"Banana","size":24}'
 ```
 
 Or directly through the backend helper:
 
 ```bash
-~/.config/omarchy/plugins/sanjyay.cursor-switcher/scripts/cursorctl apply \
+~/.config/omarchy/plugins/goblin.cursor-switcher/scripts/cursorctl apply \
   --hyprcursor Banana --xcursor Banana --size 24 --commit
 ```
 
@@ -141,27 +184,13 @@ Coverage includes cursor directory/format detection, normalization and deduplica
 
 ## Removal
 
-Disable/remove the plugin with Omarchy's normal command, or remove the local development symlink:
+Remove the plugin with Omarchy's normal command:
 
 ```bash
-omarchy plugin disable sanjyay.cursor-switcher
-rm ~/.config/omarchy/plugins/sanjyay.cursor-switcher
+omarchy plugin remove goblin.cursor-switcher
 ```
 
-To clean up the application launcher entries:
-
-```bash
-~/.config/omarchy/plugins/sanjyay.cursor-switcher/scripts/cursorctl unregister-app
-```
-
-Or remove only these plugin-owned paths manually:
-
-```text
-~/.local/bin/omarchy-cursor-switcher
-~/.local/share/applications/omarchy-cursor-switcher.desktop
-~/.local/share/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg
-~/.local/share/icons/Banana
-~/.config/omarchy/cursor-switcher.json
-~/.config/uwsm/env.d/90-omarchy-cursor-switcher
-~/.config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher
-```
+Removal restores the cursor state captured before Cursor Switcher first took
+control and removes Cursor Switcher's generated application, cache, imported
+theme, converted theme, and bundled theme files. A plain disable performs the
+same cursor and launcher deactivation while retaining preferences for re-enable.

@@ -127,9 +127,10 @@ discover() {
       base=${dir##*/}; valid_name "$base" || continue
 
       # Skip internal generated converted themes in discovery list
-      [[ $base == CursorSwitcher-XCursor-* ]] && continue
+      [[ $base == CursorSwitcher-XCursor-* || $base == CursorSwitcher-Themed-* ]] && continue
 
       hypr=""; xcursor=""; formats=""; display=""; is_bundled=false; subtitle=""
+      local supports_palette=false palette_gen="" family=""
       if has_hyprcursor "$dir"; then
         manifest_name=$(read_key "$dir/manifest.hl" name)
         [[ -n $manifest_name ]] || manifest_name=$(read_key "$dir/manifest.toml" name)
@@ -146,6 +147,7 @@ discover() {
       fi
       [[ -n $formats ]] || continue
       path=$(readlink -f -- "$dir")
+      family=$display
 
       local script_dir
       script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -159,27 +161,34 @@ discover() {
         [[ -n $imp_name ]] && display="$imp_name"
         import_license="${imp_lic:-Unknown}"
         subtitle="Imported • $import_license"
+        family=$display
       elif [[ $base == Banana || $base == Omarchy-Banana ]]; then
-        is_bundled=true; display="Banana"; subtitle="ful1e5"
+        is_bundled=true; display="Banana"; subtitle="ful1e5"; family="Banana"
+        supports_palette=true
         bundled_preview="$script_dir/../themes/banana/preview.svg"
       elif [[ $base == Banana-Catppuccin-Mocha ]]; then
-        display="Banana-Catppuccin-Mocha"; subtitle="ful1e5"
-      elif [[ $base == Banana-Green ]]; then
-        display="Banana-Green"; subtitle="ful1e5"
+        display="Banana-Catppuccin-Mocha"; subtitle="ful1e5"; family="Banana-Catppuccin-Mocha"
+        supports_palette=true
       elif [[ $base == Phinger || $base == phinger-cursors-dark || $base == phinger ]]; then
-        is_bundled=true; display="Phinger"; subtitle="phisch"
+        is_bundled=true; display="Phinger"; subtitle="phisch"; family="Phinger"
+        supports_palette=true
         bundled_preview="$script_dir/../themes/phinger/preview.svg"
       elif [[ $base == Oreo || $base == oreo_black_cursors || $base == oreo ]]; then
-        is_bundled=true; display="Oreo"; subtitle="varlesh"
+        is_bundled=true; display="Oreo"; subtitle="varlesh"; family="Oreo"
+        supports_palette=true
         bundled_preview="$script_dir/../themes/oreo/preview.svg"
       elif [[ $base == Volantes || $base == volantes_cursors || $base == volantes ]]; then
-        is_bundled=true; display="Volantes"; subtitle="varlesh"
+        is_bundled=true; display="Volantes"; subtitle="varlesh"; family="Volantes"
+        supports_palette=true
         bundled_preview="$script_dir/../themes/volantes/preview.svg"
       elif [[ $base == Nordzy || $base == Nordzy-cursors || $base == nordzy ]]; then
-        is_bundled=true; display="Nordzy"; subtitle="gboehm"
+        is_bundled=true; display="Nordzy"; subtitle="gboehm"; family="Nordzy"
+        hypr="Nordzy-cursors"; xcursor="Nordzy-cursors"
+        supports_palette=true
         bundled_preview="$script_dir/../themes/nordzy/preview.svg"
       elif [[ $base == Capitaine || $base == capitaine-cursors || $base == capitaine ]]; then
-        is_bundled=true; display="Capitaine"; subtitle="Keefer Rourke"
+        is_bundled=true; display="Capitaine"; subtitle="Keefer Rourke"; family="Capitaine"
+        supports_palette=true
         bundled_preview="$script_dir/../themes/capitaine/preview.svg"
       fi
 
@@ -188,12 +197,15 @@ discover() {
 
       (( first )) || printf ','
       first=0
-      printf '{"displayName":'; json_string "$display"
+      printf '{"id":'; json_string "$base"
+      printf ',"displayName":'; json_string "$display"
+      printf ',"family":'; json_string "$family"
       printf ',"subtitle":'; json_string "$subtitle"
       printf ',"hyprcursor":'; json_string "$hypr"
       printf ',"xcursor":'; json_string "$xcursor"
       printf ',"path":'; json_string "$path"
-      printf ',"formats":[%s],"bundled":%s,"imported":%s,"license":' "$formats" "$is_bundled" "$is_imported"
+      printf ',"formats":[%s],"bundled":%s,"imported":%s,"supportsThemePalette":%s' "$formats" "$is_bundled" "$is_imported" "$supports_palette"
+      printf ',"license":'
       json_string "$import_license"
       printf ',"previewPath":'
       json_string "$theme_preview"
@@ -412,12 +424,12 @@ apply_theme() {
     common_tmp=$(mktemp --tmpdir="$common_dir" .cursor-switcher.XXXXXX)
     hypr_tmp=$(mktemp --tmpdir="$hypr_dir" .cursor-switcher.XXXXXX)
     {
-      printf '# Managed by sanjyay.cursor-switcher.\n'
+      printf '# Managed by goblin.cursor-switcher.\n'
       [[ $xcursor == - ]] || printf "export XCURSOR_THEME='%s'\n" "$xcursor"
       printf "export XCURSOR_SIZE='%s'\n" "$size"
     } > "$common_tmp"
     {
-      printf '# Managed by sanjyay.cursor-switcher.\n'
+      printf '# Managed by goblin.cursor-switcher.\n'
       if [[ $effective_hypr == - ]]; then printf 'unset HYPRCURSOR_THEME\n'; else printf "export HYPRCURSOR_THEME='%s'\n" "$effective_hypr"; fi
       printf "export HYPRCURSOR_SIZE='%s'\n" "$size"
     } > "$hypr_tmp"
@@ -673,6 +685,16 @@ case ${1:-} in
     script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
     exec python3 "$script_dir/choose-file.py" "$@"
     ;;
+  list-dir)
+    shift
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    exec python3 "$script_dir/file_browser.py" "$@"
+    ;;
+  get-preview-roles)
+    shift
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    exec python3 "$script_dir/cursor_theming.py" get-preview-roles "$@"
+    ;;
   install-bundled) shift; install_bundled "$@" ;;
   install-cleanup-helper) shift; install_cleanup_helper "$@" ;;
   register-app) shift; register_app "$@" ;;
@@ -682,6 +704,5 @@ case ${1:-} in
   deactivate) shift; deactivate "$@" ;;
   purge) shift; purge "$@" ;;
   audit-installation) shift; audit_installation "$@" ;;
-  *) die "usage: $PROGRAM {discover|apply|ensure-hyprcursor|import|remove-imported|choose-file|install-bundled|install-cleanup-helper|register-app|unregister-app|snapshot-original-state|restore-original-state|deactivate|purge|audit-installation} ..." ;;
+  *) die "usage: $PROGRAM {discover|apply|ensure-hyprcursor|get-preview-roles|import|remove-imported|choose-file|install-bundled|install-cleanup-helper|register-app|unregister-app|snapshot-original-state|restore-original-state|deactivate|purge|audit-installation} ..." ;;
 esac
-
