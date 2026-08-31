@@ -50,7 +50,7 @@ Item {
     if (root.service && root.service.previewActive) root.service.cancelPreview()
     window.visible = false
     if (root.shell && typeof root.shell.hide === "function") {
-      root.shell.hide("sanjyay.cursor-switcher")
+      root.shell.hide("sanjyay.cursor-theme-manager")
     }
   }
 
@@ -78,7 +78,7 @@ Item {
 
     onVisibleChanged: {
       if (!visible && !root.closingFromHost && root.shell && typeof root.shell.hide === "function") {
-        root.shell.hide("sanjyay.cursor-switcher")
+        root.shell.hide("sanjyay.cursor-theme-manager")
       }
     }
 

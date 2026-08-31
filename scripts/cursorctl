@@ -424,12 +424,12 @@ apply_theme() {
     common_tmp=$(mktemp --tmpdir="$common_dir" .cursor-switcher.XXXXXX)
     hypr_tmp=$(mktemp --tmpdir="$hypr_dir" .cursor-switcher.XXXXXX)
     {
-      printf '# Managed by sanjyay.cursor-switcher.\n'
+      printf '# Managed by sanjyay.cursor-theme-manager.\n'
       [[ $xcursor == - ]] || printf "export XCURSOR_THEME='%s'\n" "$xcursor"
       printf "export XCURSOR_SIZE='%s'\n" "$size"
     } > "$common_tmp"
     {
-      printf '# Managed by sanjyay.cursor-switcher.\n'
+      printf '# Managed by sanjyay.cursor-theme-manager.\n'
       if [[ $effective_hypr == - ]]; then printf 'unset HYPRCURSOR_THEME\n'; else printf "export HYPRCURSOR_THEME='%s'\n" "$effective_hypr"; fi
       printf "export HYPRCURSOR_SIZE='%s'\n" "$size"
     } > "$hypr_tmp"

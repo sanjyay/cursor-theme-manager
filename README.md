@@ -56,9 +56,9 @@ Cursor Theme Manager installs as a standard graphical application on your system
 - **Command Line:** Run `omarchy-cursor-switcher` from any terminal.
 - **Omarchy Shell IPC:**
   ```bash
-  omarchy-shell shell summon sanjyay.cursor-switcher '{}'
-  omarchy-shell shell toggle sanjyay.cursor-switcher '{}'
-  omarchy-shell shell hide sanjyay.cursor-switcher
+  omarchy-shell shell summon sanjyay.cursor-theme-manager '{}'
+  omarchy-shell shell toggle sanjyay.cursor-theme-manager '{}'
+  omarchy-shell shell hide sanjyay.cursor-theme-manager
   ```
 
 ---
@@ -171,7 +171,7 @@ See [`THIRD_PARTY.md`](THIRD_PARTY.md) for full licensing architecture, audit lo
 To completely remove the plugin:
 
 ```bash
-omarchy plugin remove sanjyay.cursor-switcher
+omarchy plugin remove sanjyay.cursor-theme-manager
 ```
 
 Removal automatically:

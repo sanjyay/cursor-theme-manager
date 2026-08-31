@@ -1,4 +1,4 @@
 #!/bin/bash
-# Managed by sanjyay.cursor-switcher — do not edit.
-# Opens the Cursor Theme panel via the running Omarchy shell.
-exec omarchy-shell -q shell summon sanjyay.cursor-switcher '{}'
+# Managed by sanjyay.cursor-theme-manager — do not edit.
+# Opens the Cursor Theme Manager panel via the running Omarchy shell.
+exec omarchy-shell -q shell summon sanjyay.cursor-theme-manager '{}'

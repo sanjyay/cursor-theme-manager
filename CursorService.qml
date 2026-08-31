@@ -78,7 +78,7 @@ Item {
   Component.onDestruction: {
     var isEnabled = false
     if (shell && shell.pluginRegistry && typeof shell.pluginRegistry.isEnabled === "function") {
-      isEnabled = shell.pluginRegistry.isEnabled(manifest && manifest.id ? manifest.id : "sanjyay.cursor-switcher")
+      isEnabled = shell.pluginRegistry.isEnabled(manifest && manifest.id ? manifest.id : "sanjyay.cursor-theme-manager")
     } else if (manifest && manifest.id && shell && shell.pluginRegistry) {
       isEnabled = shell.pluginRegistry.isEnabled(manifest.id)
     }
@@ -121,7 +121,7 @@ Item {
       prefetchAllRoles()
     } catch (error) {
       lastError = "Cursor discovery returned invalid data"
-      console.warn("sanjyay.cursor-switcher: discovery parse failed:", error)
+      console.warn("sanjyay.cursor-theme-manager: discovery parse failed:", error)
     }
   }
 
@@ -371,7 +371,7 @@ Item {
       if (exitCode !== 0) {
         root._installError = root.elide(installStderr.text || "Bundled theme installation failed")
         root.lastError = root._installError
-        console.warn("sanjyay.cursor-switcher:", root._installError)
+        console.warn("sanjyay.cursor-theme-manager:", root._installError)
       }
       registerAppProcess.command = [root.helperPath, "register-app",
         "--source", root.pluginRoot]
@@ -386,7 +386,7 @@ Item {
     stderr: StdioCollector { id: registerAppStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        console.warn("sanjyay.cursor-switcher: app registration failed:",
+        console.warn("sanjyay.cursor-theme-manager: app registration failed:",
           root.elide(registerAppStderr.text || "unknown error"))
       }
       root.refresh(true)
@@ -404,7 +404,7 @@ Item {
       if (exitCode === 0) root.parseDiscovery(discoverStdout.text || root._discoverOutput)
       else {
         root.lastError = root.elide(discoverStderr.text || root._discoverError || "Cursor discovery failed")
-        console.warn("sanjyay.cursor-switcher:", root.lastError)
+        console.warn("sanjyay.cursor-theme-manager:", root.lastError)
       }
     }
   }
@@ -427,7 +427,7 @@ Item {
             root.currentRoles = res
           }
         } catch (e) {
-          console.warn("sanjyay.cursor-switcher: failed to parse preview roles output:", e)
+          console.warn("sanjyay.cursor-theme-manager: failed to parse preview roles output:", e)
         }
       }
       if (root._pendingFetchTheme) {
@@ -461,7 +461,7 @@ Item {
             }
           }
         } catch (e) {
-          console.warn("sanjyay.cursor-switcher: prefetch parse failed:", e)
+          console.warn("sanjyay.cursor-theme-manager: prefetch parse failed:", e)
         }
       }
     }
@@ -608,7 +608,7 @@ Item {
       root.applying = false
       if (exitCode !== 0) {
         root.lastError = root.elide(applyStderr.text || root._applyStderr || applyStdout.text || root._applyStdout || "Cursor could not be applied")
-        console.warn("sanjyay.cursor-switcher:", root.lastError)
+        console.warn("sanjyay.cursor-theme-manager:", root.lastError)
         if (request && request.kind === "commit") {
           root.statusText = "Failed to switch to " + request.theme.displayName
         } else if (request && request.kind === "preview") {
