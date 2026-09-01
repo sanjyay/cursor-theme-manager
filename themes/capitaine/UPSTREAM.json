@@ -1,8 +1,0 @@
-{
-  "name": "Capitaine",
-  "upstream": "https://github.com/keeferrourke/capitaine-cursors",
-  "commit": "06c88433662a4004cf56a6e471b523a0a8880be0",
-  "license": "LGPL-3.0-or-later",
-  "author": "Keefer Rourke <keefer.rourke@gmail.com>",
-  "modifiedByCursorSwitcher": true
-}

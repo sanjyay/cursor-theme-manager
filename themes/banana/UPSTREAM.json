@@ -1,8 +1,0 @@
-{
-  "name": "Banana",
-  "upstream": "https://github.com/ful1e5/banana-cursor",
-  "commit": "6d1f8ba67e1547bf1bf5ab6acb43eb3abb5bca9f",
-  "license": "GPL-3.0",
-  "author": "Abdulkaiz Khatri <ful1e5>",
-  "modifiedByCursorSwitcher": true
-}

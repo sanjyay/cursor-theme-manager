@@ -1,8 +1,0 @@
-{
-  "name": "Phinger",
-  "upstream": "https://github.com/phisch/phinger-cursors",
-  "commit": "1e674f9a86d768de9f7dc93bb6d9685e25ce9655",
-  "license": "CC-BY-SA-4.0",
-  "author": "Philipp Schaffrath <philipp.schaffrath@gmail.com>",
-  "modifiedByCursorSwitcher": true
-}

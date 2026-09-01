@@ -1,8 +1,0 @@
-{
-  "name": "Oreo",
-  "upstream": "https://github.com/varlesh/oreo-cursors",
-  "commit": "889d1469fbfebe64c4897f2aa2ee6fa620f34080",
-  "license": "GPL-2.0-only",
-  "author": "Alexey Varfolomeev <varlesh@gmail.com>",
-  "modifiedByCursorSwitcher": true
-}
