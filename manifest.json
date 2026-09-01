@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "sanjyay",
   "license": "GPL-3.0-or-later",
-  "description": "A native, keyboard-first cursor theme manager and previewer for Omarchy and Hyprland with automatic Hyprcursor/XCursor support, discrete scaling, and in-app theme importer.",
+  "description": "A local-first cursor theme manager and previewer for Omarchy and Hyprland with Hyprcursor/XCursor support, discrete scaling, and safe in-app theme importing.",
   "kinds": ["service", "panel"],
   "entryPoints": {
     "service": "CursorService.qml",
