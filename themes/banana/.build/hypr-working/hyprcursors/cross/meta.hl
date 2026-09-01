@@ -1,8 +1,0 @@
-resize_algorithm = bilinear
-hotspot_x = 0.500000
-hotspot_y = 0.500000
-define_override = cross_reverse
-define_override = diamond_cross
-define_override = tcross
-define_override = crosshair
-define_size = 256, image.svg

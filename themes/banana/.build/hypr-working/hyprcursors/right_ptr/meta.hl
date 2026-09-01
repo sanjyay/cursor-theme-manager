@@ -1,6 +1,0 @@
-resize_algorithm = bilinear
-hotspot_x = 0.796875
-hotspot_y = 0.191406
-define_override = draft_large
-define_override = draft_small
-define_size = 256, image.svg

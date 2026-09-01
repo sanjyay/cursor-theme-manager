@@ -70,7 +70,6 @@ def find_theme_directory(theme_input, theme_path_hint=None):
         LOCAL_ICONS / s,
         LOCAL_ICONS / f"{s}-cursors",
         LOCAL_ICONS / s.lower(),
-        THEMES_ROOT / s.lower() / "generated" / s,
         Path("/usr/share/icons") / s,
         Path("/usr/share/icons") / f"{s}-cursors",
         Path("/usr/share/icons") / s.lower(),
@@ -78,6 +77,25 @@ def find_theme_directory(theme_input, theme_path_hint=None):
     for c in candidates:
         if c.is_dir():
             return c
+
+    # If this is a bundled theme and not yet materialized into LOCAL_ICONS,
+    # safely materialize it from catalog.json
+    catalog_file = THEMES_ROOT / "bundled" / "catalog.json"
+    if not catalog_file.is_file():
+        catalog_file = THEMES_ROOT / "catalog.json"
+    if catalog_file.is_file():
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("cursor_import", SCRIPT_DIR / "cursor-import.py")
+            if spec and spec.loader:
+                ci = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(ci)
+                ci.install_bundled_themes(catalog_path=str(catalog_file), target_icons_dir=str(LOCAL_ICONS))
+                for c in candidates:
+                    if c.is_dir():
+                        return c
+        except Exception:
+            pass
 
     for base in [LOCAL_ICONS, Path("/usr/share/icons")]:
         if base.is_dir():
@@ -96,6 +114,7 @@ def find_theme_directory(theme_input, theme_path_hint=None):
                     except Exception:
                         pass
     return None
+
 
 
 def extract_role_from_hlc(hlc_path, out_file_base):

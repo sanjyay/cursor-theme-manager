@@ -1,6 +1,0 @@
-resize_algorithm = bilinear
-hotspot_x = 0.246094
-hotspot_y = 0.175781
-define_override = grab
-define_override = openhand
-define_size = 256, image.svg

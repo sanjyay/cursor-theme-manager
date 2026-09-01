@@ -1,6 +1,9 @@
 themes/*/.build/
+themes/*/generated/
 .build/
 __pycache__/
 *.pyc
 *.bak
 *~
+
+scripts/xcursor-pack

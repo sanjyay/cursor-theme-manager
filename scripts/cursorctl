@@ -439,74 +439,12 @@ apply_theme() {
   fi
 }
 
-install_single_theme() {
-  local source=$1 target=$2 version=$3 force_error=${4:-true}
-  [[ -d $source && -f $source/manifest.hl && -f $source/index.theme ]] || die "bundled theme is incomplete: $source"
-  local target_base=${target##*/}
-  valid_name "$target_base" || die "refusing invalid theme target: $target"
-
-  mkdir -p -- "${target%/*}"
-  if [[ -e $target ]]; then
-    if [[ ! -f $target/.omarchy-cursor-switcher-theme ]]; then
-      if [[ $force_error == true ]]; then
-        die "target exists and is not managed by cursor-switcher: $target"
-      else
-        return 0
-      fi
-    fi
-    local current_ver
-    current_ver=$(<"$target/.omarchy-cursor-switcher-theme")
-    if [[ $current_ver == "$version" ]]; then
-      return 0
-    fi
-  fi
-
-  local target_parent=${target%/*}
-  local tmp
-  tmp=$(mktemp -d --tmpdir="$target_parent" .theme.XXXXXX)
-  cp -a -- "$source"/* "$tmp"/
-  printf '%s\n' "$version" > "$tmp/.omarchy-cursor-switcher-theme"
-
-  if [[ -e $target ]]; then
-    rm -rf -- "$target"
-  fi
-  mv -f -- "$tmp" "$target"
-}
-
 install_bundled() {
-  local source="" target="" version="" themes_dir=""
-  while (($#)); do
-    case $1 in
-      --source) source=${2:-}; shift 2 ;;
-      --target) target=${2:-}; shift 2 ;;
-      --version) version=${2:-}; shift 2 ;;
-      --themes-dir) themes_dir=${2:-}; shift 2 ;;
-      *) die "unknown install-bundled argument: $1" ;;
-    esac
-  done
-
-  if [[ -n $source && -n $target ]]; then
-    install_single_theme "$source" "$target" "${version:-1.0}" true
-  elif [[ -n $themes_dir ]]; then
-    [[ -d $themes_dir ]] || die "themes directory not found: $themes_dir"
-    local home=${HOME:?HOME is not set}
-    local data_home=${XDG_DATA_HOME:-$home/.local/share}
-    local icons_parent="$data_home/icons"
-    mkdir -p -- "$icons_parent"
-
-    local tdir gdir sdir sbase
-    for tdir in "$themes_dir"/*; do
-      [[ -d $tdir ]] || continue
-      gdir="$tdir/generated"
-      [[ -d $gdir ]] || continue
-      for sdir in "$gdir"/*; do
-        [[ -d $sdir ]] || continue
-        sbase=${sdir##*/}
-        install_single_theme "$sdir" "$icons_parent/$sbase" "${version:-1.0}" false
-      done
-    done
-  fi
+  local script_dir
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  exec python3 "$script_dir/cursor-import.py" install-bundled "$@"
 }
+
 
 register_app() {
   local source_dir="" home=${HOME:?HOME is not set}

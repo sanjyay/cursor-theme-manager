@@ -31,7 +31,28 @@ assert "ful1e5" in attrib_content
 assert "banana-cursor" in attrib_content
 assert "GPL-3.0" in attrib_content
 
-generated = THEME / "generated" / "Banana"
+# Bundled archive and catalog integrity validation
+bundled_archive = ROOT / "themes" / "bundled" / "banana.tar.xz"
+catalog_file = ROOT / "themes" / "bundled" / "catalog.json"
+assert bundled_archive.is_file(), f"Bundled archive missing: {bundled_archive}"
+assert catalog_file.is_file(), f"Catalog missing: {catalog_file}"
+
+import hashlib, sys
+sys.path.insert(0, str(ROOT / "scripts"))
+import importlib.util
+spec_ci = importlib.util.spec_from_file_location("cursor_import", ROOT / "scripts" / "cursor-import.py")
+ci = importlib.util.module_from_spec(spec_ci)
+spec_ci.loader.exec_module(ci)
+
+catalog = json.loads(catalog_file.read_text(encoding="utf-8"))
+banana_entry = next((e for e in catalog if e["id"] == "banana"), None)
+assert banana_entry is not None, "banana entry in catalog.json required"
+assert hashlib.sha256(bundled_archive.read_bytes()).hexdigest() == banana_entry["sha256"]
+
+temp_extract_dir = tempfile.TemporaryDirectory()
+ci.extract_archive_safely(str(bundled_archive), temp_extract_dir.name)
+generated = Path(temp_extract_dir.name) / "Banana"
+
 assert (generated / "manifest.hl").is_file()
 assert (generated / "index.theme").is_file()
 for role, entry in spec["roles"].items():
@@ -52,6 +73,7 @@ def decode(role, expected_hotspot, size=24):
                                 cwd=temp, text=True, capture_output=True)
         assert result.returncode == 0, (role, result.stderr)
         assert f"{size}\t{expected_hotspot[0]}\t{expected_hotspot[1]}" in result.stdout, (role, size, result.stdout)
+
 
 
 for role in ("left_ptr", "arrow", "default", "top_left_arrow"):

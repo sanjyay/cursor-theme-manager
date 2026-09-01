@@ -62,20 +62,35 @@ class TestThirdPartyRegistry(unittest.TestCase):
             self.assertTrue(preview_path.exists(), f"preview.svg must exist in {theme_root}")
             self.assertGreater(preview_path.stat().st_size, 50, f"preview.svg in {theme_root} is too small")
             
-            # 5. Generated Package
-            gen_dir = theme_root / "generated"
-            self.assertTrue(gen_dir.exists(), f"generated/ must exist in {theme_root}")
-            subdirs = [d for d in gen_dir.iterdir() if d.is_dir()]
-            self.assertGreater(len(subdirs), 0, f"generated/ package required in {theme_root}")
-            pkg = subdirs[0]
-            self.assertTrue((pkg / "manifest.hl").exists(), f"manifest.hl required in {pkg}")
-            self.assertTrue((pkg / "hyprcursors").exists(), f"hyprcursors required in {pkg}")
-            self.assertTrue((pkg / "cursors").exists(), f"cursors required in {pkg}")
-            self.assertTrue((pkg / "index.theme").exists(), f"index.theme required in {pkg}")
+            # 5. Bundled Package Archive & Integrity
+            archive_rel = item.get("archive", f"themes/bundled/{tid}.tar.xz")
+            archive_path = ROOT / archive_rel
+            self.assertTrue(archive_path.is_file(), f"Archive required at {archive_path}")
+            
+            import hashlib, tempfile, sys
+            sys.path.insert(0, str(ROOT / "scripts"))
+            import importlib.util
+            spec_ci = importlib.util.spec_from_file_location("cursor_import", ROOT / "scripts" / "cursor-import.py")
+            ci = importlib.util.module_from_spec(spec_ci)
+            spec_ci.loader.exec_module(ci)
+            
+            actual_sha = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+            self.assertEqual(actual_sha, item["sha256"], f"SHA-256 mismatch for {tid}")
+            
+            with tempfile.TemporaryDirectory() as tmp:
+                ci.extract_archive_safely(str(archive_path), tmp)
+                expected_root = item.get("expectedRoot", item.get("displayName", tid))
+                pkg = Path(tmp) / expected_root
+                self.assertTrue(pkg.is_dir(), f"Expected root dir {pkg} inside archive")
+                self.assertTrue((pkg / "manifest.hl").exists(), f"manifest.hl required in {pkg}")
+                self.assertTrue((pkg / "hyprcursors").exists(), f"hyprcursors required in {pkg}")
+                self.assertTrue((pkg / "cursors").exists(), f"cursors required in {pkg}")
+                self.assertTrue((pkg / "index.theme").exists(), f"index.theme required in {pkg}")
             
             # 6. Source preservation in upstream/
             upstream_dir = theme_root / "upstream"
             self.assertTrue(upstream_dir.exists(), f"upstream source dir required in {theme_root}")
+
             
     def test_third_party_md_document(self):
         self.assertTrue(THIRD_PARTY_MD.exists(), "THIRD_PARTY.md must exist at repository root")

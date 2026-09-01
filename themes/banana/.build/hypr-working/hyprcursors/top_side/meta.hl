@@ -1,4 +1,0 @@
-resize_algorithm = bilinear
-hotspot_x = 0.503906
-hotspot_y = 0.265625
-define_size = 256, image.svg

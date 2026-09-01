@@ -61,6 +61,62 @@ def write_hlc(zip_path, meta_hl, images_dict):
                 data = data.encode("utf-8")
             zf.writestr(name, data)
 
+def package_theme_archive(theme_id, root_name, build_theme_dir):
+    import tarfile, hashlib
+    bundled_dir = THEMES_DIR / "bundled"
+    bundled_dir.mkdir(parents=True, exist_ok=True)
+    tar_path = bundled_dir / f"{theme_id}.tar.xz"
+    if tar_path.exists():
+        tar_path.unlink()
+
+    with tarfile.open(tar_path, "w:xz", preset=6) as tf:
+        for root, dirs, files in os.walk(build_theme_dir):
+            dirs.sort()
+            files.sort()
+            for d in dirs:
+                full_d = os.path.join(root, d)
+                rel_d = os.path.relpath(full_d, build_theme_dir)
+                arc_d = f"{root_name}/{rel_d}"
+                info = tf.gettarinfo(full_d, arcname=arc_d)
+                info.uid = 0
+                info.gid = 0
+                info.uname = "root"
+                info.gname = "root"
+                info.mtime = 1700000000
+                info.mode = 0o755
+                tf.addfile(info)
+            for f in files:
+                full_f = os.path.join(root, f)
+                rel_f = os.path.relpath(full_f, build_theme_dir)
+                arc_f = f"{root_name}/{rel_f}"
+                info = tf.gettarinfo(full_f, arcname=arc_f)
+                info.uid = 0
+                info.gid = 0
+                info.uname = "root"
+                info.gname = "root"
+                info.mtime = 1700000000
+                if os.path.islink(full_f):
+                    tf.addfile(info)
+                else:
+                    info.mode = 0o644
+                    with open(full_f, "rb") as fh:
+                        tf.addfile(info, fh)
+
+    actual_sha = hashlib.sha256(tar_path.read_bytes()).hexdigest()
+    actual_size = tar_path.stat().st_size
+    for cat_file in [bundled_dir / "catalog.json", THEMES_DIR / "catalog.json"]:
+        if cat_file.exists():
+            cat_data = json.loads(cat_file.read_text(encoding="utf-8"))
+            for entry in cat_data:
+                if entry["id"] == theme_id:
+                    entry["sha256"] = actual_sha
+                    entry["sizeBytes"] = actual_size
+                    entry["archive"] = f"themes/bundled/{theme_id}.tar.xz"
+            cat_file.write_text(json.dumps(cat_data, indent=2) + "\n", encoding="utf-8")
+
+    print(f"Packaged {theme_id} -> {tar_path} (sha256: {actual_sha}, size: {actual_size})")
+
+
 # -------------------------------------------------------------
 # 1. PHINGER BUILDER
 # -------------------------------------------------------------
@@ -197,6 +253,8 @@ def build_phinger():
             shutil.copy2(gen_dir / "hyprcursors" / f"{dst}.hlc", gen_dir / "hyprcursors" / f"{src}.hlc")
 
     shutil.copy2(src_dir / "theme/dark/default_24.svg", dest_dir / "preview.svg")
+    package_theme_archive("phinger", "Phinger", gen_dir)
+    shutil.rmtree(dest_dir / "generated", ignore_errors=True)
     print("Phinger build complete.")
 
 # -------------------------------------------------------------
@@ -294,6 +352,8 @@ def build_oreo():
             shutil.copy2(gen_dir / "hyprcursors" / f"{dst}.hlc", gen_dir / "hyprcursors" / f"{src}.hlc")
 
     (dest_dir / "preview.svg").write_text(svg_map["default"])
+    package_theme_archive("oreo", "Oreo", gen_dir)
+    shutil.rmtree(dest_dir / "generated", ignore_errors=True)
     print("Oreo build complete.")
 
 # -------------------------------------------------------------
@@ -386,6 +446,8 @@ def build_volantes():
             shutil.copy2(gen_dir / "hyprcursors" / f"{dst}.hlc", gen_dir / "hyprcursors" / f"{src}.hlc")
 
     shutil.copy2(svg_dir / "default.svg", dest_dir / "preview.svg")
+    package_theme_archive("volantes", "Volantes", gen_dir)
+    shutil.rmtree(dest_dir / "generated", ignore_errors=True)
     print("Volantes build complete.")
 
 # -------------------------------------------------------------
@@ -411,6 +473,8 @@ def build_nordzy():
         # extract SVG from default.hlc
         with zipfile.ZipFile(gen_dir / "hyprcursors" / "left_ptr.hlc") as zf:
             (dest_dir / "preview.svg").write_bytes(zf.read("left_ptr.svg"))
+    package_theme_archive("nordzy", "Nordzy", gen_dir)
+    shutil.rmtree(dest_dir / "generated", ignore_errors=True)
     print("Nordzy build complete.")
 
 # -------------------------------------------------------------
@@ -494,6 +558,8 @@ def build_capitaine():
             shutil.copy2(gen_dir / "hyprcursors" / f"{dst}.hlc", gen_dir / "hyprcursors" / f"{src}.hlc")
 
     shutil.copy2(svg_dir / "default.svg", dest_dir / "preview.svg")
+    package_theme_archive("capitaine", "Capitaine", gen_dir)
+    shutil.rmtree(dest_dir / "generated", ignore_errors=True)
     print("Capitaine build complete.")
 
 if __name__ == "__main__":
@@ -503,3 +569,4 @@ if __name__ == "__main__":
     build_nordzy()
     build_capitaine()
     print("All bundled cursor themes built successfully.")
+

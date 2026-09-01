@@ -18,7 +18,7 @@ mkdir -p "$XDG_DATA_HOME/icons/CustomTheme/cursors" \
   "$MOCK_BIN" \
   "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
 
-cp "$ROOT/themes/banana/generated/Banana/cursors/left_ptr" "$XDG_DATA_HOME/icons/CustomTheme/cursors/left_ptr"
+printf 'Xcur\0\0\0\1\0\0\0\0' > "$XDG_DATA_HOME/icons/CustomTheme/cursors/left_ptr"
 printf "[Icon Theme]\nName=CustomTheme\n" > "$XDG_DATA_HOME/icons/CustomTheme/index.theme"
 
 MOCK_LOG="$TEST_DIR/mock_calls.log"
@@ -67,9 +67,10 @@ cp -a "$ROOT"/. "$PLUGIN_DIR"/
 
 "$PLUGIN_DIR/scripts/cursorctl" snapshot-original-state
 "$PLUGIN_DIR/scripts/cursorctl" install-cleanup-helper --source "$PLUGIN_DIR"
-"$PLUGIN_DIR/scripts/cursorctl" install-bundled --source "$PLUGIN_DIR/themes/banana/generated/Banana" --target "$XDG_DATA_HOME/icons/Banana" --version 2.0.0
+"$PLUGIN_DIR/scripts/cursorctl" install-bundled --source "$PLUGIN_DIR/themes/bundled/banana.tar.xz" --target "$XDG_DATA_HOME/icons/Banana" --version 2.0.0
 "$PLUGIN_DIR/scripts/cursorctl" register-app --source "$PLUGIN_DIR"
 "$PLUGIN_DIR/scripts/cursorctl" apply --hyprcursor Banana --xcursor Banana --size 96 --commit
+
 
 # Verify snapshot recorded CustomTheme and 48px, with absent HYPRCURSOR
 SNAPSHOT_FILE="$XDG_CONFIG_HOME/omarchy/cursor-switcher-original-state.json"

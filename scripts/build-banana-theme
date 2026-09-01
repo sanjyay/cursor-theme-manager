@@ -150,7 +150,64 @@ def main():
     for archive in sorted((GENERATED / "hyprcursors").glob("*.hlc")):
         normalize_hlc(archive)
 
-    print(f"built combined cursor package: {GENERATED}")
+    # Package into deterministic bundled archive
+    import hashlib, tarfile
+    bundled_dir = ROOT / "themes" / "bundled"
+    bundled_dir.mkdir(parents=True, exist_ok=True)
+    tar_path = bundled_dir / "banana.tar.xz"
+    if tar_path.exists():
+        tar_path.unlink()
+
+    with tarfile.open(tar_path, "w:xz", preset=6) as tf:
+        for root, dirs, files in os.walk(GENERATED):
+            dirs.sort()
+            files.sort()
+            for d in dirs:
+                full_d = os.path.join(root, d)
+                rel_d = os.path.relpath(full_d, GENERATED)
+                arc_d = f"Banana/{rel_d}"
+                info = tf.gettarinfo(full_d, arcname=arc_d)
+                info.uid = 0
+                info.gid = 0
+                info.uname = "root"
+                info.gname = "root"
+                info.mtime = 1700000000
+                info.mode = 0o755
+                tf.addfile(info)
+            for f in files:
+                full_f = os.path.join(root, f)
+                rel_f = os.path.relpath(full_f, GENERATED)
+                arc_f = f"Banana/{rel_f}"
+                info = tf.gettarinfo(full_f, arcname=arc_f)
+                info.uid = 0
+                info.gid = 0
+                info.uname = "root"
+                info.gname = "root"
+                info.mtime = 1700000000
+                if os.path.islink(full_f):
+                    tf.addfile(info)
+                else:
+                    info.mode = 0o644
+                    with open(full_f, "rb") as fh:
+                        tf.addfile(info, fh)
+
+    actual_sha = hashlib.sha256(tar_path.read_bytes()).hexdigest()
+    actual_size = tar_path.stat().st_size
+    for cat_file in [bundled_dir / "catalog.json", ROOT / "themes" / "catalog.json"]:
+        if cat_file.exists():
+            cat_data = json.loads(cat_file.read_text(encoding="utf-8"))
+            for entry in cat_data:
+                if entry["id"] == "banana":
+                    entry["sha256"] = actual_sha
+                    entry["sizeBytes"] = actual_size
+                    entry["archive"] = "themes/bundled/banana.tar.xz"
+            cat_file.write_text(json.dumps(cat_data, indent=2) + "\n", encoding="utf-8")
+
+    # Clean up build and generated staging
+    shutil.rmtree(BUILD, ignore_errors=True)
+    shutil.rmtree(GENERATED.parent, ignore_errors=True)
+
+    print(f"built deterministic bundled archive: {tar_path} (sha256: {actual_sha}, size: {actual_size} bytes)")
 
 
 if __name__ == "__main__":
@@ -158,3 +215,4 @@ if __name__ == "__main__":
         main()
     except subprocess.CalledProcessError as error:
         raise SystemExit(f"build command failed ({error.returncode}): {' '.join(map(str, error.cmd))}")
+
