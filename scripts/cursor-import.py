@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Secure Import and Bundled Theme Materialization Engine for Omarchy Cursor Switcher.
-Imports local cursor theme directories or safe archives into ~/.local/share/icons,
-and safely materializes verified bundled theme archives from catalog.json.
+Secure Import and Management Engine for Omarchy Cursor Switcher.
+Imports local cursor theme directories or safe archives chosen by the user into ~/.local/share/icons.
 """
 
 import sys
@@ -18,6 +17,7 @@ import argparse
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+
 
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024   # 100 MB
 MAX_EXTRACTED_BYTES = 750 * 1024 * 1024  # 750 MB
@@ -111,22 +111,8 @@ def compute_content_hash(theme_root: str) -> str:
     return hasher.hexdigest()
 
 
-def verify_archive_sha256(archive_path: str, expected_sha256: str) -> bool:
-    if not os.path.isfile(archive_path):
-        raise FileNotFoundError(f"Archive file not found: {archive_path}")
-    hasher = hashlib.sha256()
-    with open(archive_path, "rb") as f:
-        while chunk := f.read(65536):
-            hasher.update(chunk)
-    actual_sha = hasher.hexdigest()
-    if expected_sha256 and actual_sha.lower() != expected_sha256.lower():
-        raise ValueError(
-            f"Integrity check failed for {os.path.basename(archive_path)}: expected SHA-256 {expected_sha256}, got {actual_sha}"
-        )
-    return True
-
-
 def validate_theme_security(theme_root: str):
+
     """Ensures no dangerous installer scripts, forbidden extensions, or executable binaries exist in theme."""
     for root, _, files in os.walk(theme_root, followlinks=False):
         for name in files:
@@ -390,10 +376,10 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
             "displayName": display_name,
             "sourceType": "imported",
             "imported": True,
-            "bundled": False,
             "contentHash": content_hash,
             "importedAt": datetime.now(timezone.utc).isoformat(),
             "formats": meta["formats"],
+
             "xcursor": internal_id if "xcursor" in meta["formats"] else "",
             "hyprcursor": internal_id if "hyprcursor" in meta["formats"] else "",
             "path": install_path,
@@ -555,190 +541,16 @@ def run_rename(theme_id: str, new_name: str):
         except Exception:
             pass
 
-    return {"ok": True, "theme_id": theme_id, "displayName": clean_name}
+    return {
+        "ok": True,
+        "id": theme_id,
+        "displayName": clean_name
+    }
 
-
-# --------------------------------------------------------------------------
-# Bundled Theme Materialization & Installation Engine
-# --------------------------------------------------------------------------
-
-def install_single_theme_archive(archive_path: str, target_dir: str, version: str = "1.0", expected_sha: str = None, force_error: bool = True):
-    if not os.path.isfile(archive_path):
-        raise FileNotFoundError(f"Bundled archive not found: {archive_path}")
-    if expected_sha:
-        verify_archive_sha256(archive_path, expected_sha)
-
-    parent_dir = os.path.dirname(target_dir)
-    os.makedirs(parent_dir, exist_ok=True)
-
-    # Collision check: if target directory exists but is unmanaged by cursor-switcher
-    if os.path.exists(target_dir):
-        marker = os.path.join(target_dir, ".omarchy-cursor-switcher-theme")
-        if not os.path.isfile(marker):
-            if force_error:
-                raise ValueError(f"Target exists and is not managed by cursor-switcher: {target_dir}")
-            return {"id": os.path.basename(target_dir), "status": "skipped", "path": target_dir}
-
-    stage_temp = tempfile.mkdtemp(prefix=".install-stage-", dir=parent_dir)
-    try:
-        extract_archive_safely(archive_path, stage_temp)
-        theme_root = find_theme_root(stage_temp)
-        validate_symlinks(theme_root)
-        validate_theme_security(theme_root)
-        meta = detect_theme_metadata(theme_root)
-        if not meta["formats"]:
-            raise ValueError(f"Theme at {archive_path} contains no valid cursor formats")
-
-        marker_theme = os.path.join(theme_root, ".omarchy-cursor-switcher-theme")
-        with open(marker_theme, "w", encoding="utf-8") as f:
-            f.write(f"{version}\n")
-
-        if expected_sha:
-            marker_sha = os.path.join(theme_root, ".omarchy-cursor-switcher-sha256")
-            with open(marker_sha, "w", encoding="utf-8") as f:
-                f.write(f"{expected_sha}\n")
-
-        temp_dst = tempfile.mkdtemp(prefix=".theme-atomic-", dir=parent_dir)
-        try:
-            shutil.copytree(theme_root, temp_dst, dirs_exist_ok=True, symlinks=True)
-            if os.path.exists(target_dir):
-                shutil.rmtree(target_dir)
-            os.rename(temp_dst, target_dir)
-        finally:
-            if os.path.exists(temp_dst):
-                shutil.rmtree(temp_dst, ignore_errors=True)
-
-        return {"id": os.path.basename(target_dir), "status": "installed", "path": target_dir}
-    finally:
-        if os.path.exists(stage_temp):
-            shutil.rmtree(stage_temp, ignore_errors=True)
-
-
-def install_single_theme_dir(src_dir: str, target_dir: str, version: str = "1.0", force_error: bool = True):
-    if not os.path.isdir(src_dir):
-        raise ValueError(f"Source directory not found: {src_dir}")
-    validate_symlinks(src_dir)
-    validate_theme_security(src_dir)
-
-    parent_dir = os.path.dirname(target_dir)
-    os.makedirs(parent_dir, exist_ok=True)
-
-    if os.path.exists(target_dir):
-        marker = os.path.join(target_dir, ".omarchy-cursor-switcher-theme")
-        if not os.path.isfile(marker):
-            if force_error:
-                raise ValueError(f"Target exists and is not managed by cursor-switcher: {target_dir}")
-            return {"id": os.path.basename(target_dir), "status": "skipped", "path": target_dir}
-        with open(marker, "r", encoding="utf-8") as f:
-            curr_ver = f.read().strip()
-        if curr_ver == str(version):
-            return {"id": os.path.basename(target_dir), "status": "up-to-date", "path": target_dir}
-
-    temp_dst = tempfile.mkdtemp(prefix=".theme-atomic-", dir=parent_dir)
-    try:
-        shutil.copytree(src_dir, temp_dst, dirs_exist_ok=True, symlinks=True)
-        marker_theme = os.path.join(temp_dst, ".omarchy-cursor-switcher-theme")
-        with open(marker_theme, "w", encoding="utf-8") as f:
-            f.write(f"{version}\n")
-        if os.path.exists(target_dir):
-            shutil.rmtree(target_dir)
-        os.rename(temp_dst, target_dir)
-        return {"id": os.path.basename(target_dir), "status": "installed", "path": target_dir}
-    finally:
-        if os.path.exists(temp_dst):
-            shutil.rmtree(temp_dst, ignore_errors=True)
-
-
-def install_bundled_themes(catalog_path: str = None, themes_dir: str = None, version: str = None, target_icons_dir: str = None):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    plugin_root = os.path.dirname(script_dir)
-
-    if not catalog_path:
-        candidates = [
-            os.path.join(plugin_root, "themes", "bundled", "catalog.json"),
-            os.path.join(plugin_root, "themes", "catalog.json"),
-        ]
-        if themes_dir:
-            candidates.insert(0, os.path.join(themes_dir, "bundled", "catalog.json"))
-            candidates.insert(1, os.path.join(themes_dir, "catalog.json"))
-        for c in candidates:
-            if os.path.isfile(c):
-                catalog_path = c
-                break
-
-    if not catalog_path or not os.path.isfile(catalog_path):
-        raise FileNotFoundError(f"Catalog file not found: {catalog_path or 'themes/bundled/catalog.json'}")
-
-    with open(catalog_path, "r", encoding="utf-8") as f:
-        catalog = json.load(f)
-
-    home = os.environ.get("HOME", "")
-    data_home = os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local/share"))
-    if not target_icons_dir:
-        target_icons_dir = os.path.join(data_home, "icons")
-    os.makedirs(target_icons_dir, exist_ok=True)
-
-    results = []
-    catalog_root = os.path.dirname(os.path.abspath(catalog_path))
-    repo_root = os.path.dirname(catalog_root) if os.path.basename(catalog_root) == "bundled" else catalog_root
-
-    for entry in catalog:
-        theme_id = entry.get("id")
-        archive_rel = entry.get("archive")
-        expected_sha = entry.get("sha256")
-        expected_root = entry.get("expectedRoot", entry.get("displayName", theme_id))
-        theme_version = version or entry.get("version", "1.0")
-
-        # Resolve archive full path
-        if os.path.isabs(archive_rel):
-            archive_path = archive_rel
-        else:
-            candidates = [
-                os.path.join(plugin_root, archive_rel),
-                os.path.join(repo_root, archive_rel),
-                os.path.join(catalog_root, os.path.basename(archive_rel)),
-                os.path.join(plugin_root, "themes", "bundled", os.path.basename(archive_rel))
-            ]
-            archive_path = None
-            for cand in candidates:
-                if os.path.isfile(cand):
-                    archive_path = cand
-                    break
-            if not archive_path:
-                archive_path = candidates[0]
-
-        target_dir = os.path.join(target_icons_dir, expected_root)
-
-        # Check if already up to date
-        marker_theme = os.path.join(target_dir, ".omarchy-cursor-switcher-theme")
-        marker_sha = os.path.join(target_dir, ".omarchy-cursor-switcher-sha256")
-        if os.path.isdir(target_dir) and os.path.isfile(marker_theme) and os.path.isfile(marker_sha):
-            try:
-                with open(marker_theme, "r", encoding="utf-8") as f:
-                    curr_ver = f.read().strip()
-                with open(marker_sha, "r", encoding="utf-8") as f:
-                    curr_sha = f.read().strip()
-                if curr_ver == str(theme_version) and curr_sha.lower() == expected_sha.lower():
-                    if os.path.isfile(os.path.join(target_dir, "manifest.hl")) or os.path.isdir(os.path.join(target_dir, "cursors")):
-                        results.append({"id": theme_id, "status": "up-to-date", "path": target_dir})
-                        continue
-            except Exception:
-                pass
-
-        res = install_single_theme_archive(
-            archive_path=archive_path,
-            target_dir=target_dir,
-            version=theme_version,
-            expected_sha=expected_sha,
-            force_error=False
-        )
-        results.append(res)
-
-    return {"ok": True, "installed": results}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Cursor Switcher Import & Bundled Theme Engine")
+    parser = argparse.ArgumentParser(description="Cursor Switcher User Theme Import & Management Engine")
     subparsers = parser.add_subparsers(dest="action", required=True)
 
     # import
@@ -755,15 +567,6 @@ def main():
     p_rename.add_argument("--id", required=True, help="Imported theme ID")
     p_rename.add_argument("--name", required=True, help="New theme display name")
 
-    # install-bundled
-    p_bundle = subparsers.add_parser("install-bundled")
-    p_bundle.add_argument("--catalog", default=None, help="Path to catalog.json")
-    p_bundle.add_argument("--themes-dir", default=None, help="Path to themes directory")
-    p_bundle.add_argument("--source", default=None, help="Path to source archive or directory")
-    p_bundle.add_argument("--target", default=None, help="Path to target theme directory")
-    p_bundle.add_argument("--target-dir", default=None, help="Path to parent icons directory")
-    p_bundle.add_argument("--version", default="1.0", help="Theme version string")
-
     args = parser.parse_args()
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -779,32 +582,9 @@ def main():
         result = run_rename(args.id, args.name)
         print(json.dumps(result, indent=2))
         sys.exit(0 if result.get("ok") else 1)
-    elif args.action == "install-bundled":
-        try:
-            if args.source and args.target:
-                if os.path.isfile(args.source):
-                    res = install_single_theme_archive(args.source, args.target, args.version, force_error=True)
-                elif os.path.isdir(args.source):
-                    res = install_single_theme_dir(args.source, args.target, args.version, force_error=True)
-                else:
-                    raise FileNotFoundError(f"Source not found: {args.source}")
-                print(json.dumps({"ok": True, "theme": res}, indent=2))
-                sys.exit(0)
-            else:
-                res = install_bundled_themes(
-                    catalog_path=args.catalog,
-                    themes_dir=args.themes_dir,
-                    version=args.version,
-                    target_icons_dir=args.target_dir
-                )
-                print(json.dumps(res, indent=2))
-                sys.exit(0)
-        except Exception as e:
-            sys.stderr.write(f"install-bundled failed: {e}\n")
-            print(json.dumps({"ok": False, "error": str(e)}, indent=2))
-            sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
+
 

@@ -3,18 +3,6 @@
 var SupportedSizes = [16, 20, 24, 28, 32, 40, 48, 64, 80, 96, 128, 160, 192, 224, 256]
 var DefaultSize = 16
 
-var VisibleThemes = [
-  "Banana",
-  "Banana-Catppuccin-Mocha",
-  "Adwaita",
-  "Bibata-Catppuccin-Mocha",
-  "Phinger",
-  "Oreo",
-  "Volantes",
-  "Nordzy",
-  "Capitaine"
-]
-
 function safeString(value) {
   return value === undefined || value === null ? "" : String(value)
 }
@@ -58,37 +46,15 @@ function isInternalTheme(name, path) {
   return s.indexOf("cursorswitcher-themed-") !== -1 ||
          s.indexOf("cursorswitcher-xcursor-") !== -1 ||
          s.indexOf("cursorswitcher-preview-") !== -1 ||
-         s.indexOf(".omarchy-cursor-switcher-themed") !== -1
-}
-
-function visibleThemeIndex(theme) {
-  if (!theme) return -1
-  if (isInternalTheme(theme.id, theme.path) || isInternalTheme(theme.displayName, theme.hyprcursor) || isInternalTheme(theme.xcursor, "")) {
-    return -1
-  }
-  if (theme.imported === true || theme.sourceType === "imported") return 9999
-  var hypr = safeString(theme.hyprcursor).toLowerCase()
-  var xcur = safeString(theme.xcursor).toLowerCase()
-  var name = safeString(theme.displayName).toLowerCase()
-  for (var i = 0; i < VisibleThemes.length; i++) {
-    var target = VisibleThemes[i].toLowerCase()
-    if (hypr === target || xcur === target || name === target) return i
-    if (target === "nordzy" && (hypr === "nordzy-cursors" || xcur === "nordzy-cursors" || name === "nordzy-cursors")) return i
-    if (target === "capitaine" && (hypr === "capitaine-cursors" || xcur === "capitaine-cursors" || name === "capitaine-cursors")) return i
-    if (target === "phinger" && (hypr === "phinger-cursors-dark" || xcur === "phinger-cursors-dark")) return i
-    if (target === "oreo" && (hypr === "oreo_black_cursors" || xcur === "oreo_black_cursors")) return i
-    if (target === "volantes" && (hypr === "volantes_cursors" || xcur === "volantes_cursors")) return i
-  }
-  return -1
+         s.indexOf(".omarchy-cursor-switcher-themed") !== -1 ||
+         s.indexOf(".omarchy-cursor-switcher-converted") !== -1
 }
 
 function isThemeVisible(theme) {
   if (!theme) return false
-  if (isInternalTheme(theme.id, theme.path) || isInternalTheme(theme.displayName, theme.hyprcursor) || isInternalTheme(theme.xcursor, "")) {
-    return false
-  }
-  if (theme.imported === true || theme.sourceType === "imported") return true
-  return visibleThemeIndex(theme) !== -1
+  return !isInternalTheme(theme.id, theme.path) &&
+         !isInternalTheme(theme.displayName, theme.hyprcursor) &&
+         !isInternalTheme(theme.xcursor, "")
 }
 
 function normalizedTheme(raw) {
@@ -103,13 +69,14 @@ function normalizedTheme(raw) {
   if (formats.length === 0) return null
 
   var isImported = raw.imported === true || raw.sourceType === "imported" || String(raw.path || "").indexOf("CursorSwitcher-Imported-") !== -1
+  var sourceType = isImported ? "imported" : (raw.sourceType === "system" ? "system" : "user")
   var subtitle = safeString(raw.subtitle)
-  if (!subtitle && isImported) subtitle = "Imported"
+  if (!subtitle) {
+    subtitle = isImported ? "Imported" : (sourceType === "system" ? "System" : "User")
+  }
 
   var id = safeString(raw.id) || hypr || xcursor
   var displayName = safeString(raw.displayName) || hypr || xcursor
-  var nameLower = (displayName || id || hypr).toLowerCase()
-  if (nameLower === "banana-green") return null
 
   return {
     id: id,
@@ -121,9 +88,8 @@ function normalizedTheme(raw) {
     path: safeString(raw.path),
     formats: formats,
     previewPath: safeString(raw.previewPath),
-    bundled: raw.bundled === true,
     imported: isImported,
-    sourceType: isImported ? "imported" : (raw.bundled ? "bundled" : "system"),
+    sourceType: sourceType,
     contentHash: safeString(raw.contentHash),
     importedAt: safeString(raw.importedAt),
     license: safeString(raw.license),
@@ -132,26 +98,16 @@ function normalizedTheme(raw) {
 }
 
 function canonicalFamily(name) {
-  var s = safeString(name).toLowerCase().trim()
-  if (s === "nordzy" || s === "nordzy-cursors") return "nordzy"
-  if (s === "capitaine" || s === "capitaine-cursors") return "capitaine"
-  if (s === "phinger" || s === "phinger-cursors-dark") return "phinger"
-  if (s === "oreo" || s === "oreo_black_cursors") return "oreo"
-  if (s === "volantes" || s === "volantes_cursors") return "volantes"
-  if (s === "banana" || s === "omarchy-banana") return "banana"
-  return s
+  return safeString(name).toLowerCase().trim()
 }
 
 function themeKey(theme) {
   if (!theme) return ""
-  var family = safeString(theme.family || theme.displayName || theme.id)
-  var canon = canonicalFamily(family)
-  if (canon) return canon
   return (safeString(theme.id) || safeString(theme.hyprcursor) || safeString(theme.xcursor) || safeString(theme.displayName)).toLowerCase()
 }
 
 function mergeTheme(a, b) {
-  var preferred = b.bundled || (!a.bundled && b.path.indexOf("/.local/share/icons/") !== -1) || b.imported ? b : a
+  var preferred = b.imported || (a.sourceType === "system" && b.sourceType === "user") ? b : a
   var other = preferred === a ? b : a
   var formats = preferred.formats.slice()
   other.formats.forEach(function(format) { if (formats.indexOf(format) === -1) formats.push(format) })
@@ -165,7 +121,6 @@ function mergeTheme(a, b) {
     path: preferred.path || other.path,
     formats: formats,
     previewPath: preferred.previewPath || other.previewPath,
-    bundled: preferred.bundled || other.bundled,
     imported: preferred.imported || other.imported,
     sourceType: preferred.sourceType || other.sourceType,
     contentHash: preferred.contentHash || other.contentHash,
@@ -191,13 +146,14 @@ function normalizeThemes(rawThemes) {
     return isThemeVisible(theme)
   })
   filtered.sort(function(a, b) {
-    var idxA = visibleThemeIndex(a)
-    var idxB = visibleThemeIndex(b)
-    if (idxA !== idxB) return idxA - idxB
+    var typeOrderA = a.sourceType === "imported" ? 0 : (a.sourceType === "user" ? 1 : 2)
+    var typeOrderB = b.sourceType === "imported" ? 0 : (b.sourceType === "user" ? 1 : 2)
+    if (typeOrderA !== typeOrderB) return typeOrderA - typeOrderB
     return safeString(a.displayName).localeCompare(safeString(b.displayName))
   })
   return filtered
 }
+
 
 function parseState(text) {
   var fallback = {
@@ -277,23 +233,16 @@ function findTheme(themes, wanted) {
 
 function fallbackTheme(themes, currentXcursor) {
   var current = safeString(currentXcursor).toLowerCase()
-  if (current) {
+  if (current && Array.isArray(themes)) {
     for (var i = 0; i < themes.length; i++) {
-      if (themes[i].xcursor.toLowerCase() === current ||
-          themes[i].hyprcursor.toLowerCase() === current ||
-          themes[i].displayName.toLowerCase() === current) {
+      if (safeString(themes[i].xcursor).toLowerCase() === current ||
+          safeString(themes[i].hyprcursor).toLowerCase() === current ||
+          safeString(themes[i].displayName).toLowerCase() === current) {
         return themes[i]
       }
     }
   }
-  for (var k = 0; k < themes.length; k++) {
-    if (themes[k].displayName.toLowerCase() === "banana" ||
-        themes[k].hyprcursor.toLowerCase() === "banana" ||
-        themes[k].xcursor.toLowerCase() === "banana") {
-      return themes[k]
-    }
-  }
-  return themes.length ? themes[0] : null
+  return (Array.isArray(themes) && themes.length > 0) ? themes[0] : null
 }
 
 function themeEquals(a, b) {
@@ -436,10 +385,8 @@ function previewGridGeometry(totalCount, containerWidth, cardWidth, itemHeight, 
 if (typeof module !== "undefined") module.exports = {
   SupportedSizes: SupportedSizes,
   DefaultSize: DefaultSize,
-  VisibleThemes: VisibleThemes,
   isInternalTheme: isInternalTheme,
   isThemeVisible: isThemeVisible,
-  visibleThemeIndex: visibleThemeIndex,
   validSize: validSize,
   nextSize: nextSize,
   prevSize: prevSize,
@@ -461,4 +408,5 @@ if (typeof module !== "undefined") module.exports = {
   previewRows: previewRows,
   previewGridGeometry: previewGridGeometry
 }
+
 

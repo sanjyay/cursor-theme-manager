@@ -18,8 +18,9 @@ mkdir -p "$XDG_DATA_HOME/icons/CustomTheme/cursors" \
   "$MOCK_BIN" \
   "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
 
-printf 'Xcur\0\0\0\1\0\0\0\0' > "$XDG_DATA_HOME/icons/CustomTheme/cursors/left_ptr"
+cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_HOME/icons/CustomTheme/cursors/left_ptr"
 printf "[Icon Theme]\nName=CustomTheme\n" > "$XDG_DATA_HOME/icons/CustomTheme/index.theme"
+
 
 MOCK_LOG="$TEST_DIR/mock_calls.log"
 
@@ -67,10 +68,8 @@ cp -a "$ROOT"/. "$PLUGIN_DIR"/
 
 "$PLUGIN_DIR/scripts/cursorctl" snapshot-original-state
 "$PLUGIN_DIR/scripts/cursorctl" install-cleanup-helper --source "$PLUGIN_DIR"
-"$PLUGIN_DIR/scripts/cursorctl" install-bundled --source "$PLUGIN_DIR/themes/bundled/banana.tar.xz" --target "$XDG_DATA_HOME/icons/Banana" --version 2.0.0
 "$PLUGIN_DIR/scripts/cursorctl" register-app --source "$PLUGIN_DIR"
-"$PLUGIN_DIR/scripts/cursorctl" apply --hyprcursor Banana --xcursor Banana --size 96 --commit
-
+"$PLUGIN_DIR/scripts/cursorctl" apply --hyprcursor CustomTheme --xcursor CustomTheme --size 96 --commit
 
 # Verify snapshot recorded CustomTheme and 48px, with absent HYPRCURSOR
 SNAPSHOT_FILE="$XDG_CONFIG_HOME/omarchy/cursor-switcher-original-state.json"
@@ -91,10 +90,10 @@ PY
 
 # Verify active artifacts
 AUDIT_ACTIVE=$("$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup" audit-installation)
-python3 -c "import sys, json; rep = json.loads(sys.argv[1]); assert rep['is_clean'] == False; assert rep['desktop_entry'] == True; assert 'Banana' in rep['bundled_themes']" "$AUDIT_ACTIVE"
+python3 -c "import sys, json; rep = json.loads(sys.argv[1]); assert rep['is_clean'] == False; assert rep['desktop_entry'] == True" "$AUDIT_ACTIVE"
 
 # 2. Test DISABLE lifecycle (plugin dir still exists)
-# on-destroy should deactivate cursor, unregister app, but keep bundled themes & state
+# on-destroy should deactivate cursor, unregister app, but keep snapshot & state
 "$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup" on-destroy --plugin-dir "$PLUGIN_DIR"
 
 [[ ! -e "$HOME/.local/bin/omarchy-cursor-switcher" ]]
@@ -108,13 +107,12 @@ grep -q "gsettings set org.gnome.desktop.interface cursor-theme CustomTheme" "$M
 grep -q "gsettings set org.gnome.desktop.interface cursor-size 48" "$MOCK_LOG"
 grep -q "systemctl --user unset-environment HYPRCURSOR_THEME" "$MOCK_LOG"
 
-# Verify bundled theme and snapshot were preserved during disable
-[[ -d "$XDG_DATA_HOME/icons/Banana" ]]
+# Verify snapshot was preserved during disable
 [[ -f "$SNAPSHOT_FILE" ]]
 
 # 3. Re-enable plugin (re-register app)
 "$PLUGIN_DIR/scripts/cursorctl" register-app --source "$PLUGIN_DIR"
-"$PLUGIN_DIR/scripts/cursorctl" apply --hyprcursor Banana --xcursor Banana --size 96 --commit
+"$PLUGIN_DIR/scripts/cursorctl" apply --hyprcursor CustomTheme --xcursor CustomTheme --size 96 --commit
 [[ -f "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
 
 # 4. Test REMOVAL lifecycle (plugin dir deleted)
@@ -128,7 +126,6 @@ rm -rf -- "$PLUGIN_DIR"
 [[ ! -e "$HOME/.local/bin/omarchy-cursor-switcher" ]]
 [[ ! -e "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
 [[ ! -e "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg" ]]
-[[ ! -e "$XDG_DATA_HOME/icons/Banana" ]]
 [[ ! -e "$XDG_CONFIG_HOME/uwsm/env.d/90-omarchy-cursor-switcher" ]]
 [[ ! -e "$XDG_CONFIG_HOME/uwsm/env-hyprland.d/90-omarchy-cursor-switcher" ]]
 [[ ! -e "$XDG_CONFIG_HOME/omarchy/cursor-switcher.json" ]]
@@ -140,3 +137,4 @@ rm -rf -- "$PLUGIN_DIR"
 [[ -d "$XDG_DATA_HOME/icons/CustomTheme" ]]
 
 echo "removal_lifecycle tests: ok"
+

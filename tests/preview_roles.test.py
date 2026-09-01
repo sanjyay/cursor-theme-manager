@@ -31,27 +31,7 @@ class TestPreviewRoles(unittest.TestCase):
         cursor_theming.ROLES_DIR = self.orig_roles_dir
         shutil.rmtree(self.temp_cache, ignore_errors=True)
 
-    def test_01_banana_resolves_all_roles_with_distinct_hashes(self):
-        roles = cursor_theming.get_theme_role_previews("Banana")
-        self.assertIn("default", roles)
-        self.assertIn("pointer", roles)
-        self.assertIn("text", roles)
-        self.assertIn("move", roles)
-        self.assertIn("resize", roles)
-        self.assertIn("wait", roles)
-
-        hashes = {}
-        for r in ["default", "pointer", "text", "move", "resize", "wait"]:
-            p = roles[r]
-            self.assertTrue(os.path.isfile(p), f"Preview file missing: {p}")
-            data = Path(p).read_bytes()
-            hashes[r] = hashlib.md5(data).hexdigest()
-
-        # Verify all 6 roles have unique artwork
-        distinct_count = len(set(hashes.values()))
-        self.assertEqual(distinct_count, 6, f"Expected 6 distinct artwork hashes for Banana, got {distinct_count}")
-
-    def test_02_adwaita_xcursor_resolves_distinct_roles(self):
+    def test_01_adwaita_xcursor_resolves_distinct_roles(self):
         roles = cursor_theming.get_theme_role_previews("Adwaita")
         self.assertIn("default", roles)
         self.assertIn("pointer", roles)
@@ -72,55 +52,18 @@ class TestPreviewRoles(unittest.TestCase):
         self.assertNotEqual(hashes["default"], hashes["pointer"])
         self.assertNotEqual(hashes["default"], hashes["text"])
 
-    def test_03_bibata_xcursor_resolves_distinct_roles(self):
-        roles = cursor_theming.get_theme_role_previews("Bibata-Catppuccin-Mocha")
-        self.assertIn("default", roles)
-        self.assertIn("pointer", roles)
-        self.assertIn("text", roles)
-        self.assertIn("move", roles)
-        self.assertIn("resize", roles)
-        self.assertIn("wait", roles)
+    def test_02_hotspot_metadata_is_extracted(self):
+        roles = cursor_theming.get_theme_role_previews("Adwaita")
+        self.assertIn("_meta", roles)
+        meta = roles["_meta"]
+        self.assertIn("default", meta)
+        def_meta = meta["default"]
+        self.assertIn("hotspot_x", def_meta)
+        self.assertIn("hotspot_y", def_meta)
+        self.assertGreaterEqual(def_meta["hotspot_x"], 0.0)
+        self.assertGreaterEqual(def_meta["hotspot_y"], 0.0)
 
-        hashes = {}
-        for r in ["default", "pointer", "text", "move", "resize", "wait"]:
-            p = roles[r]
-            self.assertTrue(os.path.isfile(p))
-            data = Path(p).read_bytes()
-            hashes[r] = hashlib.md5(data).hexdigest()
-
-        distinct_count = len(set(hashes.values()))
-        self.assertEqual(distinct_count, 6)
-
-    def test_04_phinger_hyprcursor_resolves_distinct_roles(self):
-        roles = cursor_theming.get_theme_role_previews("Phinger")
-        self.assertIn("default", roles)
-        self.assertIn("pointer", roles)
-        self.assertIn("text", roles)
-        self.assertIn("move", roles)
-        self.assertIn("resize", roles)
-        self.assertIn("wait", roles)
-
-        hashes = {}
-        for r in ["default", "pointer", "text", "move", "resize", "wait"]:
-            p = roles[r]
-            self.assertTrue(os.path.isfile(p))
-            data = Path(p).read_bytes()
-            hashes[r] = hashlib.md5(data).hexdigest()
-
-        distinct_count = len(set(hashes.values()))
-        self.assertEqual(distinct_count, 6)
-
-    def test_05_volantes_resolves_5_roles_without_empty_wait(self):
-        roles = cursor_theming.get_theme_role_previews("Volantes")
-        self.assertIn("default", roles)
-        self.assertIn("pointer", roles)
-        self.assertIn("text", roles)
-        self.assertIn("move", roles)
-        self.assertIn("resize", roles)
-        # Volantes contains no wait cursor; it must NOT be in roles
-        self.assertNotIn("wait", roles)
-
-    def test_06_watch_alias_resolves_semantic_wait_role(self):
+    def test_03_watch_alias_resolves_semantic_wait_role(self):
         # Create a mock theme that only has 'watch' and no 'wait'
         fixture_dir = Path(self.temp_cache) / "WatchTheme"
         cursors_dir = fixture_dir / "cursors"
@@ -132,18 +75,7 @@ class TestPreviewRoles(unittest.TestCase):
         self.assertIn("wait", roles, "Semantic wait must resolve from 'watch' alias")
         self.assertTrue(os.path.isfile(roles["wait"]))
 
-    def test_07_hotspot_metadata_is_extracted(self):
-        roles = cursor_theming.get_theme_role_previews("Adwaita")
-        self.assertIn("_meta", roles)
-        meta = roles["_meta"]
-        self.assertIn("default", meta)
-        def_meta = meta["default"]
-        self.assertIn("hotspot_x", def_meta)
-        self.assertIn("hotspot_y", def_meta)
-        self.assertGreaterEqual(def_meta["hotspot_x"], 0.0)
-        self.assertGreaterEqual(def_meta["hotspot_y"], 0.0)
-
-    def test_08_unsupported_role_does_not_silently_fallback_to_default(self):
+    def test_04_unsupported_role_does_not_silently_fallback_to_default(self):
         fixture_dir = Path(self.temp_cache) / "MockTheme"
         cursors_dir = fixture_dir / "cursors"
         cursors_dir.mkdir(parents=True)
@@ -156,6 +88,22 @@ class TestPreviewRoles(unittest.TestCase):
         self.assertIn("text", roles)
         self.assertNotIn("pointer", roles)
         self.assertNotIn("wait", roles)
+
+    def test_05_multi_role_dynamic_reflow(self):
+        """Themes with 5 roles vs 6 roles have exact role subsets."""
+        # 5 roles mock theme (no wait)
+        fixture_dir = Path(self.temp_cache) / "FiveRoleTheme"
+        cursors_dir = fixture_dir / "cursors"
+        cursors_dir.mkdir(parents=True)
+        adwaita_cursors = Path("/usr/share/icons/Adwaita/cursors")
+        for alias in ["left_ptr", "hand2", "xterm", "all-scroll", "ew-resize"]:
+            if (adwaita_cursors / alias).is_file():
+                shutil.copy2(adwaita_cursors / alias, cursors_dir / alias)
+
+        roles = cursor_theming.get_theme_role_previews("FiveRoleTheme", theme_path_hint=str(fixture_dir))
+        found_roles = [k for k in roles if not k.startswith("_")]
+        self.assertEqual(len(found_roles), 5)
+        self.assertNotIn("wait", found_roles)
 
 
 if __name__ == "__main__":

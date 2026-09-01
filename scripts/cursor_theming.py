@@ -17,11 +17,9 @@ from pathlib import Path
 HOME = Path(os.path.expanduser("~"))
 CACHE_DIR = HOME / ".cache" / "omarchy-cursor-switcher"
 ROLES_DIR = CACHE_DIR / "roles"
-LOCAL_ICONS = HOME / ".local" / "share" / "icons"
+LOCAL_ICONS = Path(os.environ.get("XDG_DATA_HOME", str(HOME / ".local" / "share"))) / "icons"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = SCRIPT_DIR.parent
-THEMES_ROOT = PLUGIN_ROOT / "themes"
-BANANA_UPSTREAM_SVG = THEMES_ROOT / "banana" / "upstream" / "svg"
 
 # Canonical Semantic Preview Roles with prioritized alias candidate lists
 SEMANTIC_ROLE_ALIASES = {
@@ -66,38 +64,23 @@ def find_theme_directory(theme_input, theme_path_hint=None):
     if os.path.isabs(s) and os.path.isdir(s):
         return Path(s)
 
-    candidates = [
-        LOCAL_ICONS / s,
-        LOCAL_ICONS / f"{s}-cursors",
-        LOCAL_ICONS / s.lower(),
-        Path("/usr/share/icons") / s,
-        Path("/usr/share/icons") / f"{s}-cursors",
-        Path("/usr/share/icons") / s.lower(),
-    ]
+    search_roots = [LOCAL_ICONS, HOME / ".icons"]
+    xdg_data_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+    for d in xdg_data_dirs:
+        if d.strip():
+            search_roots.append(Path(d.strip()) / "icons")
+
+    candidates = []
+    for root in search_roots:
+        candidates.append(root / s)
+        candidates.append(root / f"{s}-cursors")
+        candidates.append(root / s.lower())
+
     for c in candidates:
         if c.is_dir():
             return c
 
-    # If this is a bundled theme and not yet materialized into LOCAL_ICONS,
-    # safely materialize it from catalog.json
-    catalog_file = THEMES_ROOT / "bundled" / "catalog.json"
-    if not catalog_file.is_file():
-        catalog_file = THEMES_ROOT / "catalog.json"
-    if catalog_file.is_file():
-        try:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("cursor_import", SCRIPT_DIR / "cursor-import.py")
-            if spec and spec.loader:
-                ci = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(ci)
-                ci.install_bundled_themes(catalog_path=str(catalog_file), target_icons_dir=str(LOCAL_ICONS))
-                for c in candidates:
-                    if c.is_dir():
-                        return c
-        except Exception:
-            pass
-
-    for base in [LOCAL_ICONS, Path("/usr/share/icons")]:
+    for base in search_roots:
         if base.is_dir():
             for d in base.iterdir():
                 if not d.is_dir():
@@ -114,6 +97,7 @@ def find_theme_directory(theme_input, theme_path_hint=None):
                     except Exception:
                         pass
     return None
+
 
 
 
@@ -226,7 +210,6 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
         except Exception:
             cached_meta = {}
 
-    is_banana = theme_id.lower() == "banana" or theme_id.lower() == "banana-catppuccin-mocha"
     roles_found = {}
     roles_meta = {}
 
@@ -248,26 +231,8 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
         hx = -1.0
         hy = -1.0
 
-        # 1. Upstream vector SVGs (e.g. Banana)
-        if is_banana and BANANA_UPSTREAM_SVG.is_dir():
-            for alias in aliases:
-                cand = BANANA_UPSTREAM_SVG / f"{alias}.svg"
-                if cand.is_file():
-                    shutil.copy2(cand, cached_svg)
-                    resolved_file = str(cached_svg)
-                    matched_source = alias
-                    hx, hy = (0.203, 0.195) if role_key == "default" else (0.28, 0.20)
-                    break
-            if not resolved_file and role_key == "wait":
-                wait_cand = BANANA_UPSTREAM_SVG / "wait" / "wait-01.svg"
-                if wait_cand.is_file():
-                    shutil.copy2(wait_cand, cached_svg)
-                    resolved_file = str(cached_svg)
-                    matched_source = "wait-01"
-                    hx, hy = (0.5, 0.5)
-
-        # 2. Hyprcursor shapes in hyprcursors/*.hlc
-        if not resolved_file and (theme_dir / "hyprcursors").is_dir():
+        # 1. Hyprcursor shapes in hyprcursors/*.hlc
+        if (theme_dir / "hyprcursors").is_dir():
             for alias in aliases:
                 hlc = theme_dir / "hyprcursors" / f"{alias}.hlc"
                 if hlc.is_file():
@@ -277,7 +242,7 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
                         matched_source = alias
                         break
 
-        # 3. XCursor shapes in cursors/* (resolving symlinks safely)
+        # 2. XCursor shapes in cursors/* (resolving symlinks safely)
         if not resolved_file and (theme_dir / "cursors").is_dir():
             for alias in aliases:
                 cur = theme_dir / "cursors" / alias
@@ -309,7 +274,13 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
 def get_all_theme_role_previews():
     results = {}
     candidates = []
-    for base in [LOCAL_ICONS, Path("/usr/share/icons"), THEMES_ROOT]:
+    search_roots = [LOCAL_ICONS, HOME / ".icons"]
+    xdg_data_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+    for d in xdg_data_dirs:
+        if d.strip():
+            search_roots.append(Path(d.strip()) / "icons")
+
+    for base in search_roots:
         if base.is_dir():
             for d in base.iterdir():
                 if d.is_dir():
@@ -323,6 +294,7 @@ def get_all_theme_role_previews():
         except Exception:
             pass
     return results
+
 
 
 def main():

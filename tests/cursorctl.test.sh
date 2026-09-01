@@ -9,25 +9,16 @@ export HOME="$TEST_DIR/home"
 export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_CACHE_HOME="$HOME/.cache"
 export XDG_DATA_DIRS="$TEST_DIR/system/share"
-INSTALL_PARENT="$TEST_DIR/install"
-"$ROOT/scripts/cursorctl" install-bundled --source "$ROOT/themes/bundled/banana.tar.xz" \
-  --target "$INSTALL_PARENT/Banana" --version 2.0.0
-"$ROOT/scripts/cursorctl" install-bundled --source "$ROOT/themes/bundled/banana.tar.xz" \
-  --target "$INSTALL_PARENT/Banana" --version 2.0.0
-[[ $(<"$INSTALL_PARENT/Banana/.omarchy-cursor-switcher-theme") == 2.0.0 ]]
-[[ -f "$INSTALL_PARENT/Banana/cursors/default" ]]
-[[ -f "$INSTALL_PARENT/Banana/manifest.hl" ]]
-
 mkdir -p "$XDG_DATA_HOME/icons/XOnly/cursors" "$XDG_DATA_HOME/icons/Both/cursors" \
   "$XDG_DATA_HOME/icons/Both/hyprcursors" "$XDG_DATA_HOME/icons/IconsOnly/32x32/apps" \
   "$XDG_DATA_DIRS/icons/SystemHypr/hyprcursors"
-cp "$INSTALL_PARENT/Banana/cursors/left_ptr" "$XDG_DATA_HOME/icons/XOnly/cursors/left_ptr"
-cp "$INSTALL_PARENT/Banana/cursors/default" "$XDG_DATA_HOME/icons/Both/cursors/default"
+cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_HOME/icons/XOnly/cursors/left_ptr"
+cp /usr/share/icons/Adwaita/cursors/default "$XDG_DATA_HOME/icons/Both/cursors/default"
 printf '[Icon Theme]\nName=Friendly Both\n' > "$XDG_DATA_HOME/icons/Both/index.theme"
 printf 'name = Both-Hypr\ncursors_directory = hyprcursors\n' > "$XDG_DATA_HOME/icons/Both/manifest.hl"
 printf 'name = System-Hypr\ncursors_directory = hyprcursors\n' > "$XDG_DATA_DIRS/icons/SystemHypr/manifest.hl"
 
-"$ROOT/scripts/cursorctl" discover "$ROOT/themes/banana/preview.svg" > "$TEST_DIR/discovery.json"
+"$ROOT/scripts/cursorctl" discover > "$TEST_DIR/discovery.json"
 python3 - "$TEST_DIR/discovery.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -41,12 +32,6 @@ assert themes["Both"]["displayName"] == "Friendly Both"
 assert themes["SystemHypr"]["formats"] == ["hyprcursor"]
 PY
 
-mkdir -p "$TEST_DIR/collision/Banana"
-if "$ROOT/scripts/cursorctl" install-bundled --source "$ROOT/themes/bundled/banana.tar.xz" \
-  --target "$TEST_DIR/collision/Banana" --version 2.0.0 2>/dev/null; then
-  echo "collision protection failed" >&2
-  exit 1
-fi
 
 
 if "$ROOT/scripts/cursorctl" apply --hyprcursor 'bad;name' --xcursor - --size 24 --preview 2>/dev/null; then
@@ -80,10 +65,12 @@ grep -q "export HYPRCURSOR_THEME='CursorSwitcher-XCursor-XOnly-" "$TEST_DIR/conf
 # Test cursorctl import & remove-imported CLI commands
 IMPORT_TEST_SRC="$TEST_DIR/cli_import_src"
 mkdir -p "$IMPORT_TEST_SRC/cursors"
-cp "$INSTALL_PARENT/Banana/cursors/left_ptr" "$IMPORT_TEST_SRC/cursors/left_ptr"
-cp "$INSTALL_PARENT/Banana/cursors/default" "$IMPORT_TEST_SRC/cursors/default"
+cp /usr/share/icons/Adwaita/cursors/left_ptr "$IMPORT_TEST_SRC/cursors/left_ptr"
+cp /usr/share/icons/Adwaita/cursors/default "$IMPORT_TEST_SRC/cursors/default"
 printf '[Icon Theme]\nName=CliImported\n' > "$IMPORT_TEST_SRC/index.theme"
 printf 'MIT License\n' > "$IMPORT_TEST_SRC/LICENSE"
+
+
 
 
 IMPORT_RES=$(PATH="$MOCK_BIN:/usr/bin:/bin" "$ROOT/scripts/cursorctl" import --source "$IMPORT_TEST_SRC")

@@ -29,7 +29,7 @@ Rectangle {
       height: Style.space(60)
 
       Rectangle {
-        visible: root.theme.imported === true || root.theme.sourceType === "imported"
+        visible: Boolean(root.theme && (root.theme.sourceType || root.theme.imported))
         anchors.left: parent.left
         anchors.top: parent.top
         radius: Style.space(4)
@@ -43,13 +43,14 @@ Rectangle {
         Text {
           id: badgeText
           anchors.centerIn: parent
-          text: "Imported"
+          text: (root.theme && (root.theme.imported || root.theme.sourceType === "imported")) ? "Imported" : ((root.theme && root.theme.sourceType === "system") ? "System" : "User")
           color: Color.popups.text
           font.family: Style.font.family
           font.pixelSize: Style.font.caption - 2
           font.bold: true
         }
       }
+
 
       Image {
         id: previewImg

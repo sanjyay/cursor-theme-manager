@@ -35,8 +35,8 @@ Item {
   property bool _stateLoaded: false
   property bool _scanLoaded: false
   property var _loadedState: ({ ok: false, reason: "missing", theme: null, size: 16 })
-  property string _installError: ""
   property var _queuedApply: null
+
   property var _activeApply: null
   property string _applyStdout: ""
   property string _applyStderr: ""
@@ -356,23 +356,6 @@ Item {
     running: false
     command: []
     onExited: function(exitCode) {
-      installProcess.command = [root.helperPath, "install-bundled",
-        "--themes-dir", root.pluginRoot + "/themes", "--version", String((root.manifest && root.manifest.version) || "1")]
-      installProcess.running = true
-    }
-  }
-
-  Process {
-    id: installProcess
-    running: false
-    command: []
-    stderr: StdioCollector { id: installStderr; waitForEnd: true }
-    onExited: function(exitCode) {
-      if (exitCode !== 0) {
-        root._installError = root.elide(installStderr.text || "Bundled theme installation failed")
-        root.lastError = root._installError
-        console.warn("sanjyay.cursor-theme-manager:", root._installError)
-      }
       registerAppProcess.command = [root.helperPath, "register-app",
         "--source", root.pluginRoot]
       registerAppProcess.running = true
@@ -392,6 +375,7 @@ Item {
       root.refresh(true)
     }
   }
+
 
   Process {
     id: discoverProcess

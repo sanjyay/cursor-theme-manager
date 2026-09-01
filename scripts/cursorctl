@@ -60,12 +60,7 @@ has_hyprcursor() {
 }
 
 get_preview_path() {
-  local dir=$1 is_bundled=$2 bundled_preview=${3:-}
-  if [[ $is_bundled == true && -n $bundled_preview && -f $bundled_preview ]]; then
-    printf '%s' "$bundled_preview"
-    return 0
-  fi
-
+  local dir=$1
   local base=${dir##*/}
   local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-cursor-switcher/previews"
   local preview_png="$cache_dir/$base.png"
@@ -111,8 +106,8 @@ get_preview_path() {
 }
 
 discover() {
-  local bundled_preview=${1:-} home=${HOME:?HOME is not set} root dir base
-  local first=1 display hypr xcursor formats path manifest_name index_name is_bundled subtitle
+  local home=${HOME:?HOME is not set} root dir base
+  local first=1 display hypr xcursor formats path manifest_name index_name is_imported source_type subtitle
   local -a roots=("${XDG_DATA_HOME:-$home/.local/share}/icons" "$home/.icons")
   IFS=: read -ra system_roots <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
   for root in "${system_roots[@]}"; do roots+=("$root/icons"); done
@@ -121,6 +116,12 @@ discover() {
   shopt -s nullglob extglob
   for root in "${roots[@]}"; do
     [[ -d $root ]] || continue
+    local is_sys_root=false
+    if [[ $root != "${XDG_DATA_HOME:-$home/.local/share}/icons" && $root != "$home/.icons" ]]; then
+      is_sys_root=true
+    fi
+
+
     for dir in "$root"/*; do
       [[ -d $dir ]] || continue
       safe_theme_dir "$root" "$dir" || continue
@@ -129,8 +130,7 @@ discover() {
       # Skip internal generated converted themes in discovery list
       [[ $base == CursorSwitcher-XCursor-* || $base == CursorSwitcher-Themed-* ]] && continue
 
-      hypr=""; xcursor=""; formats=""; display=""; is_bundled=false; subtitle=""
-      local supports_palette=false palette_gen="" family=""
+      hypr=""; xcursor=""; formats=""; display=""; is_imported=false; source_type="user"; subtitle=""
       if has_hyprcursor "$dir"; then
         manifest_name=$(read_key "$dir/manifest.hl" name)
         [[ -n $manifest_name ]] || manifest_name=$(read_key "$dir/manifest.toml" name)
@@ -147,66 +147,57 @@ discover() {
       fi
       [[ -n $formats ]] || continue
       path=$(readlink -f -- "$dir")
-      family=$display
 
-      local script_dir
-      script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-      local is_imported=false import_license="Unknown"
+      local import_license=""
       if [[ -f $dir/.omarchy-cursor-switcher-imported ]]; then
         is_imported=true
-        is_bundled=false
+        source_type="imported"
         local imp_name imp_lic
         imp_name=$(python3 -c "import json, sys; m=json.load(open(sys.argv[1])); print(m.get('displayName',''))" "$dir/.omarchy-cursor-switcher-imported" 2>/dev/null || true)
-        imp_lic=$(python3 -c "import json, sys; m=json.load(open(sys.argv[1])); print(m.get('license','Unknown'))" "$dir/.omarchy-cursor-switcher-imported" 2>/dev/null || true)
+        imp_lic=$(python3 -c "import json, sys; m=json.load(open(sys.argv[1])); print(m.get('license',''))" "$dir/.omarchy-cursor-switcher-imported" 2>/dev/null || true)
         [[ -n $imp_name ]] && display="$imp_name"
-        import_license="${imp_lic:-Unknown}"
-        subtitle="Imported • $import_license"
-        family=$display
-      elif [[ $base == Banana || $base == Omarchy-Banana ]]; then
-        is_bundled=true; display="Banana"; subtitle="ful1e5"; family="Banana"
-        supports_palette=true
-        bundled_preview="$script_dir/../themes/banana/preview.svg"
-      elif [[ $base == Banana-Catppuccin-Mocha ]]; then
-        display="Banana-Catppuccin-Mocha"; subtitle="ful1e5"; family="Banana-Catppuccin-Mocha"
-        supports_palette=true
-      elif [[ $base == Phinger || $base == phinger-cursors-dark || $base == phinger ]]; then
-        is_bundled=true; display="Phinger"; subtitle="phisch"; family="Phinger"
-        supports_palette=true
-        bundled_preview="$script_dir/../themes/phinger/preview.svg"
-      elif [[ $base == Oreo || $base == oreo_black_cursors || $base == oreo ]]; then
-        is_bundled=true; display="Oreo"; subtitle="varlesh"; family="Oreo"
-        supports_palette=true
-        bundled_preview="$script_dir/../themes/oreo/preview.svg"
-      elif [[ $base == Volantes || $base == volantes_cursors || $base == volantes ]]; then
-        is_bundled=true; display="Volantes"; subtitle="varlesh"; family="Volantes"
-        supports_palette=true
-        bundled_preview="$script_dir/../themes/volantes/preview.svg"
-      elif [[ $base == Nordzy || $base == Nordzy-cursors || $base == nordzy ]]; then
-        is_bundled=true; display="Nordzy"; subtitle="gboehm"; family="Nordzy"
-        hypr="Nordzy-cursors"; xcursor="Nordzy-cursors"
-        supports_palette=true
-        bundled_preview="$script_dir/../themes/nordzy/preview.svg"
-      elif [[ $base == Capitaine || $base == capitaine-cursors || $base == capitaine ]]; then
-        is_bundled=true; display="Capitaine"; subtitle="Keefer Rourke"; family="Capitaine"
-        supports_palette=true
-        bundled_preview="$script_dir/../themes/capitaine/preview.svg"
+        import_license="$imp_lic"
+        if [[ -n $import_license && $import_license != "Unknown" ]]; then
+          subtitle="Imported • $import_license"
+        else
+          subtitle="Imported"
+        fi
+      elif [[ $is_sys_root == true ]]; then
+        source_type="system"
+        local idx_comment
+        idx_comment=$(read_key "$dir/index.theme" Comment)
+        if [[ -n $idx_comment ]]; then
+          subtitle="$idx_comment"
+        else
+          subtitle="System"
+        fi
+      else
+        source_type="user"
+        local idx_comment
+        idx_comment=$(read_key "$dir/index.theme" Comment)
+        if [[ -n $idx_comment ]]; then
+          subtitle="$idx_comment"
+        else
+          subtitle="User"
+        fi
       fi
 
       local theme_preview
-      theme_preview=$(get_preview_path "$dir" "$is_bundled" "$bundled_preview")
+      theme_preview=$(get_preview_path "$dir")
 
       (( first )) || printf ','
       first=0
       printf '{"id":'; json_string "$base"
       printf ',"displayName":'; json_string "$display"
-      printf ',"family":'; json_string "$family"
+      printf ',"family":'; json_string "$display"
       printf ',"subtitle":'; json_string "$subtitle"
       printf ',"hyprcursor":'; json_string "$hypr"
       printf ',"xcursor":'; json_string "$xcursor"
       printf ',"path":'; json_string "$path"
-      printf ',"formats":[%s],"bundled":%s,"imported":%s,"supportsThemePalette":%s' "$formats" "$is_bundled" "$is_imported" "$supports_palette"
+      printf ',"formats":[%s],"imported":%s,"sourceType":' "$formats" "$is_imported"
+      json_string "$source_type"
       printf ',"license":'
-      json_string "$import_license"
+      json_string "${import_license:-Unknown}"
       printf ',"previewPath":'
       json_string "$theme_preview"
       printf '}'
@@ -226,6 +217,7 @@ discover() {
   json_string "$current"
   printf '}\n'
 }
+
 
 ensure_hyprcursor() {
   local hypr=$1 xcursor=$2 theme_path=${3:-} home=${HOME:?HOME is not set}
@@ -439,14 +431,8 @@ apply_theme() {
   fi
 }
 
-install_bundled() {
-  local script_dir
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  exec python3 "$script_dir/cursor-import.py" install-bundled "$@"
-}
-
-
 register_app() {
+
   local source_dir="" home=${HOME:?HOME is not set}
   while (($#)); do
     case $1 in
@@ -643,7 +629,6 @@ case ${1:-} in
     script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
     exec python3 "$script_dir/cursor_theming.py" get-all-preview-roles "$@"
     ;;
-  install-bundled) shift; install_bundled "$@" ;;
   install-cleanup-helper) shift; install_cleanup_helper "$@" ;;
   register-app) shift; register_app "$@" ;;
   unregister-app) shift; unregister_app "$@" ;;
@@ -652,5 +637,6 @@ case ${1:-} in
   deactivate) shift; deactivate "$@" ;;
   purge) shift; purge "$@" ;;
   audit-installation) shift; audit_installation "$@" ;;
-  *) die "usage: $PROGRAM {discover|apply|ensure-hyprcursor|get-preview-roles|import|remove-imported|choose-file|install-bundled|install-cleanup-helper|register-app|unregister-app|snapshot-original-state|restore-original-state|deactivate|purge|audit-installation} ..." ;;
+  *) die "usage: $PROGRAM {discover|apply|ensure-hyprcursor|get-preview-roles|import|remove-imported|rename-imported|choose-file|install-cleanup-helper|register-app|unregister-app|snapshot-original-state|restore-original-state|deactivate|purge|audit-installation} ..." ;;
 esac
+

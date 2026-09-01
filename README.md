@@ -4,27 +4,51 @@
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Hyprland%20%7C%20Omarchy-purple.svg)](https://omarchyplugins.com)
 
-A cursor theme manager and previewer for **Omarchy** and **Hyprland**. It features dynamic multi-role previews, live hover inspection, discrete size scaling, native in-app archive/folder importing with automatic XCursor-to-Hyprcursor compilation, and bundled curated open-source cursor themes.
+Cursor Theme Manager is a local-first cursor theme manager and previewer for Omarchy and Hyprland. It discovers themes already installed on your system, provides dynamic multi-role previews, cursor sizing, hover inspection, safe archive/folder importing, and management of themes imported through the plugin.
 
-
-https://github.com/user-attachments/assets/365f9cf4-a422-4385-a559-150a68cded5c
-
+> [!NOTE]
+> **Local-Only Architecture:** Cursor Theme Manager does not bundle, ship with, or automatically download third-party cursor themes. It operates strictly locally with zero runtime network requests and zero automatic downloads.
 
 ---
 
 ## Features
 
-- **Standalone Application:** Automatically installs a desktop entry (`Cursor Theme`) and launcher command (`omarchy-cursor-switcher`). Open and configure your cursor directly from your application launcher without needing manual keybindings.
-- **Dynamic Role Previews:** Automatically extracts and renders vector/raster preview cards for semantic roles (`Default`, `Pointer`, `Text`, `Move`, `Resize`, `Wait`). If a theme does not define a role (e.g. no `Wait` cursor), the card is hidden and remaining previews automatically reflow and center.
-- **Accurate Hotspot Indicators:** Hovering any preview card displays a subtle indicator (`•`) at the exact hotspot coordinate defined by the Hyprcursor/XCursor metadata.
+- **Standalone Application:** Installs a desktop entry (`Cursor Theme Manager`) and launcher command (`omarchy-cursor-switcher`). Open and configure your cursor directly from your application launcher or terminal.
+- **Local Theme Discovery:** Scans standard system icon directories (`/usr/share/icons`, `/usr/local/share/icons`, `$XDG_DATA_DIRS/icons`) and user directories (`~/.local/share/icons`, `~/.icons`).
+- **Clear Theme Classification:** Accurately categorizes discovered themes into **System**, **User**, and **Imported** sources.
+- **Dynamic Role Previews:** Automatically extracts and renders preview cards for semantic cursor roles (`Default`, `Pointer`, `Text`, `Move`, `Resize`, `Wait`). If a theme does not define a role (e.g., static themes without an animated `Wait` cursor), the card is omitted gracefully and remaining previews automatically reflow and center.
+- **Accurate Hotspot Indicators:** Hovering any preview card displays a subtle indicator (`•`) at the exact hotspot coordinate defined by the Hyprcursor or XCursor metadata.
 - **Hover-to-Preview:** Browse themes in the sidebar to temporarily inspect preview cards and metadata without modifying active session settings. Clicking applies and commits the theme.
 - **Synchronized Size Control:** Stepper buttons (`−` / `+`) paired with a discrete slider track supporting standard scale snap points (16, 20, 24, 28, 32, 40, 48, 64, 80, 96, 128, 160, 192, 224, 256 px).
-- **In-App Native Importer:** Built-in modal file browser matching Omarchy design tokens for importing local directories or archives (`.zip`, `.tar.gz`, `.tar.xz`, etc.).
+- **In-App Native Importer:** Built-in modal file browser matching Omarchy design tokens for importing local directories or archives (`.tar.gz`, `.tar.xz`, `.zip`, etc.) chosen explicitly by the user.
 - **Automatic Hyprcursor Compilation:** Legacy XCursor themes are automatically converted to native Hyprcursor packages on-the-fly using `hyprcursor-util`.
-- **Imported Theme Management:** Rename, open directory, or safely remove imported themes directly from the UI or CLI.
-- **Smart Filtering & Categorization:** Automatically groups themes into `BUNDLED` and `IMPORTED` sections. A compact case-insensitive search bar appears automatically when 10 or more themes are present.
-- **Persistent & Compositor-Aware:** Instantly applies changes via `hyprctl setcursor` and `gsettings`, updating UWSM environment files (`~/.config/uwsm/env.d/90-omarchy-cursor-switcher`) and D-Bus activation environments for new applications.
+- **Safe Imported-Theme Management:** Rename, open directory, or safely remove themes imported through the plugin directly from the UI or CLI. Destructive actions are restricted strictly to plugin-owned imported themes.
+- **Compositor-Aware Persistence:** Instantly applies changes via `hyprctl setcursor` and `gsettings`, updating UWSM environment files (`~/.config/uwsm/env.d/90-omarchy-cursor-switcher`) and D-Bus activation environments for new applications.
+- **Zero Network Access:** Operates completely offline with zero runtime network requests, downloads, or background telemetry.
 - **Fully Responsive:** Fluid layouts designed for full-screen, split tiled (50/50), or compact floating windows.
+
+---
+
+## Theme Discovery & Classification
+
+Cursor Theme Manager automatically scans local icon-theme directories on launch and rescan:
+
+- `~/.local/share/icons` (`$XDG_DATA_HOME/icons`)
+- `~/.icons`
+- `/usr/share/icons`
+- `/usr/local/share/icons`
+- `$XDG_DATA_DIRS/icons`
+
+> [!IMPORTANT]
+> No cursor themes are installed merely by installing or launching Cursor Theme Manager. The plugin operates exclusively on themes present in these local directories.
+
+### Theme Classification Model
+
+| Source | Description | Management Permissions |
+| :--- | :--- | :--- |
+| **System** | Themes installed system-wide in `/usr/share/icons`, `/usr/local/share/icons`, or `$XDG_DATA_DIRS/icons`. | Read-only. Preview and apply only. |
+| **User** | Themes present in `~/.local/share/icons` or `~/.icons` installed manually or via package managers outside this plugin. | Read-only. Preview and apply only. |
+| **Imported** | Themes explicitly imported through Cursor Theme Manager and stored in `~/.local/share/icons/CursorSwitcher-Imported-*` with a plugin metadata marker. | Full management (Preview, Apply, Open Folder, Rename, Remove). |
 
 ---
 
@@ -35,6 +59,8 @@ https://github.com/user-attachments/assets/365f9cf4-a422-4385-a559-150a68cded5c
 ```bash
 omarchy plugin add https://github.com/sanjyay/cursor-theme-manager --enable
 ```
+
+> **Note:** Installing Cursor Theme Manager does not install any cursor themes. Existing themes on the system are discovered automatically.
 
 ### Manual / Local Development
 
@@ -50,9 +76,9 @@ omarchy plugin enable sanjyay.cursor-theme-manager
 
 ## Launching & Configuring
 
-Cursor Theme Manager installs as a standard graphical application on your system:
+Cursor Theme Manager integrates with standard desktop launchers and Omarchy shell controls:
 
-- **Application Launcher:** Open your app launcher (Omarchy drawer, Rofi, Fuzzel, etc.) and search for **Cursor Theme Manager** (or *Mouse*, *Pointer*, *Banana*).
+- **Application Launcher:** Open your application launcher (Omarchy drawer, Rofi, Fuzzel, etc.) and search for **Cursor Theme Manager** (or *Cursor Theme*, *Mouse*, *Pointer*).
 - **Command Line:** Run `omarchy-cursor-switcher` from any terminal.
 - **Omarchy Shell IPC:**
   ```bash
@@ -71,98 +97,118 @@ Cursor Theme Manager installs as a standard graphical application on your system
 | **Left / Right** (`h` / `l`) | Decrease / increase cursor size (when size focused) |
 | **Tab / Shift+Tab** | Switch focus between theme list and size stepper |
 | **Enter / Space** | Apply and commit focused theme / confirm dialog |
-| **Escape** | Clear search filter, close dialogs, or close panel |
+| **Escape** | Close dialogs or close panel |
 | **r** | Refresh / rescan installed cursor themes |
 
 ---
 
-## Downloading Cursor Themes
+## Getting Additional Cursor Themes
 
-You can import any standard Linux cursor theme.
+Cursor Theme Manager does not download themes itself. To add new cursor themes:
 
-### Supported File Types & Structures
+1. Browse and select an upstream open-source cursor project.
+2. Download the theme release archive (or clone the repository) locally to your machine.
+3. Open **Cursor Theme Manager** and click **Import** in the header.
+4. Browse your local storage and select the downloaded archive or extracted folder.
+5. Click **Import Theme**. Cursor Theme Manager verifies safety, stages the files, converts XCursor to Hyprcursor if needed, and adds the theme to your library.
 
-- **Archive Formats:**
-  - `*.tar.gz`, `*.tgz`
-  - `*.tar.xz`, `*.txz`
-  - `*.tar.bz2`, `*.tbz2`
-  - `*.tar`
-  - `*.zip`
-- **Directory Formats:**
-  - **Hyprcursor Theme:** Directory containing `manifest.hl` or `manifest.toml` and a `hyprcursors/` folder.
-  - **XCursor Theme:** Directory containing `index.theme` and a `cursors/` folder.
-  - **Hybrid Theme:** Directory containing both Hyprcursor and XCursor structures.
+### Supported Archive & Directory Formats
 
-### Recommended Download Sources
-
-1. **[GNOME Look (Cursors)](https://www.gnome-look.org/browse?cat=107)** — Extensive repository of community-created XCursor and Hyprcursor themes.
-2. **[Pling / OpenDesktop](https://www.pling.com/c/107)** — Popular cursor theme directory.
-3. **[Hyprcursor Community Ecosystem](https://github.com/topics/hyprcursor)** — Native vector cursor themes on GitHub.
-4. **[Catppuccin Cursors](https://github.com/catppuccin/cursors)** — Official Catppuccin colorway cursor ports.
+- **Archives:** `.tar.gz`, `.tgz`, `.tar.xz`, `.txz`, `.tar.bz2`, `.tbz2`, `.tar`, `.zip`
+- **Directories:** Any folder containing a native Hyprcursor (`manifest.hl`) or XCursor (`cursors/` directory with `index.theme`).
 
 ---
 
-## Importing & Managing Themes
+## Recommended Cursor Themes
 
-### Using the In-App Importer
+The following popular open-source cursor themes are compatible with Cursor Theme Manager.
 
-1. Open **Cursor Theme Manager** from your application launcher or terminal.
-2. Click **Import** in the sidebar header.
-3. Browse using the quick shortcuts (`Home`, `Downloads`, `~/.local/share/icons`, `/usr/share/icons`) or navigate directories.
-4. Select a supported cursor archive or extracted theme folder and click **Import Theme**.
-5. The theme is verified, extracted, converted (if legacy XCursor), and immediately available for preview and application.
+> [!NOTE]
+> These projects are independent third-party themes. Cursor Theme Manager does not bundle, maintain, or automatically install these themes. Review the upstream projects and releases before downloading.
 
-### Managing Imported Themes
+| Theme | Author / Project | License | Upstream Project |
+| :--- | :--- | :--- | :--- |
+| **Banana** | Abdulkaiz Khatri (`ful1e5`) | GPL-3.0 | [ful1e5/banana-cursor](https://github.com/ful1e5/banana-cursor) |
+| **Phinger** | Philipp Schaffrath (`phisch`) | CC-BY-SA-4.0 | [phisch/phinger-cursors](https://github.com/phisch/phinger-cursors) |
+| **Oreo** | Alexey Varfolomeev (`varlesh`) | GPL-2.0 | [varlesh/oreo-cursors](https://github.com/varlesh/oreo-cursors) |
+| **Volantes** | Alexey Varfolomeev (`varlesh`) | GPL-2.0 | [varlesh/volantes-cursors](https://github.com/varlesh/volantes-cursors) |
+| **Nordzy** | Guillaume Boehm (`gboehm`) | GPL-3.0 | [guillaumeboehm/Nordzy-cursors](https://github.com/guillaumeboehm/Nordzy-cursors) |
+| **Capitaine** | Keefer Rourke (`keeferrourke`) | LGPL-3.0 | [keeferrourke/capitaine-cursors](https://github.com/keeferrourke/capitaine-cursors) |
+| **Bibata** | Abdulkaiz Khatri (`ful1e5`) | GPL-3.0 | [ful1e5/Bibata_Cursor](https://github.com/ful1e5/Bibata_Cursor) |
+| **Catppuccin** | Catppuccin Community | GPL-3.0 | [catppuccin/cursors](https://github.com/catppuccin/cursors) |
 
-For any imported theme in the sidebar, hover over the entry or select it to reveal the **`⋯`** context button:
-- **Open folder:** Opens the installed directory in your default file manager.
-- **Rename:** Opens a modal to safely rename the display title of the theme.
-- **Remove:** Prompts confirmation to delete the imported theme and its caches. If the removed theme is currently active, the plugin automatically falls back to the default bundled theme.
+---
 
-### CLI Import & Removal
+## Managing Imported Themes & Ownership Safety
+
+Cursor Theme Manager enforces strict ownership boundaries:
+
+- **Non-Destructive for System and User Themes:** Cursor Theme Manager never modifies, renames, or deletes system themes or general user themes in `~/.local/share/icons` and `~/.icons`.
+- **Plugin-Owned Imported Themes:** Only themes explicitly imported through the plugin (identified by `.omarchy-cursor-switcher-imported` within the `CursorSwitcher-Imported-*` directory) expose management actions:
+  - **Open folder:** Opens the installed theme directory in your default file manager.
+  - **Rename:** Modifies the display title and theme manifests cleanly.
+  - **Remove:** Deletes the imported theme directory and associated preview caches.
+- **Active Theme Removal Fallback:** If an imported theme currently in use is removed, Cursor Theme Manager automatically falls back to the first available discovered theme to ensure cursor continuity.
+
+### CLI Management
 
 ```bash
-# Import an archive or folder
-scripts/cursorctl import --source ~/Downloads/Bibata-Modern-Ice.tar.gz
+# Import a local archive or directory
+scripts/cursorctl import --source ~/Downloads/Bibata-Modern-Classic.tar.xz
 
 # Rename an imported theme
-scripts/cursorctl rename-imported --id CursorSwitcher-Imported-Bibata-1a2b3c --name "Bibata Ice"
+scripts/cursorctl rename-imported --id CursorSwitcher-Imported-Bibata-1a2b3c4d5e6f --name "Bibata Classic"
 
 # Remove an imported theme
-scripts/cursorctl remove-imported --id CursorSwitcher-Imported-Bibata-1a2b3c
+scripts/cursorctl remove-imported --id CursorSwitcher-Imported-Bibata-1a2b3c4d5e6f
 ```
 
 ---
 
-## Security & omarchyplugins.com Compliance
+## Architecture
 
-Cursor Theme Manager adheres strictly to Omarchy plugin standards and follows defensive security practices:
+```
+Local Filesystem Icon Directories (~/.local/share/icons, /usr/share/icons, etc.)
+  │
+  ▼
+Local Discovery & Classification (System / User / Imported)
+  │
+  ▼
+Multi-Role Preview Generation & Hotspot Metadata Extraction
+  │
+  ▼
+Compositor-Aware Application (hyprctl setcursor, gsettings, UWSM env, D-Bus)
+```
 
-- **Untrusted Input Hardening:** All imported archives and folders are treated as untrusted data.
-- **No Script Execution:** Cursor Theme Manager never executes `install.sh`, `Makefile`, Python, or shell scripts bundled inside third-party theme archives.
-- **Path Traversal Protection:** Extraction strictly validates target paths, forbidding relative directory traversal (`..`), absolute path escapes, device files, FIFOs, and symlinks pointing outside the theme root.
-- **Decompression Bomb Protection:** Archive extraction enforces safe file size caps (max 50 MB archive, max 150 MB extracted, max 5,000 files).
-- **Safe Subprocess Execution:** All backend scripts execute with parameterized arguments (`subprocess.run(list, ...)`), preventing shell injection.
-- **Isolated Namespacing:** Imported themes are installed under isolated namespaces (`~/.local/share/icons/CursorSwitcher-Imported-*`) and will never overwrite system packages or user files.
+```
+User-Selected Local Archive / Folder
+  │
+  ▼
+Security Validation & Sandbox Extraction
+  │
+  ▼
+XCursor → Hyprcursor Compilation (via hyprcursor-util if needed)
+  │
+  ▼
+Atomic Install to ~/.local/share/icons/CursorSwitcher-Imported-*
+```
 
 ---
 
-## Bundled Themes & Attributions
+## Security & Import Hardening
 
-Cursor Theme Manager ships with curated, high-quality open-source cursor themes. Each theme is packaged independently, preserving original authorship, copyright notices, vector sources, and licenses:
+Cursor Theme Manager adheres strictly to defensive security standards:
 
-| Theme | Upstream Project | Author / Creator | License | Sources |
-| :--- | :--- | :--- | :--- | :--- |
-| **Banana** | [ful1e5/banana-cursor](https://github.com/ful1e5/banana-cursor) | Abdulkaiz Khatri (`ful1e5`) | GPL-3.0 | [`themes/banana/`](themes/banana/) |
-| **Phinger** | [phisch/phinger-cursors](https://github.com/phisch/phinger-cursors) | Philipp Schaffrath (`phisch`) | CC BY-SA 4.0 | [`themes/phinger/`](themes/phinger/) |
-| **Oreo** | [varlesh/oreo-cursors](https://github.com/varlesh/oreo-cursors) | Alexey Varfolomeev (`varlesh`) | GPL-2.0 | [`themes/oreo/`](themes/oreo/) |
-| **Volantes** | [varlesh/volantes-cursors](https://github.com/varlesh/volantes-cursors) | Alexey Varfolomeev (`varlesh`) | GPL-2.0 | [`themes/volantes/`](themes/volantes/) |
-| **Nordzy** | [guillaumeboehm/Nordzy-cursors](https://github.com/guillaumeboehm/Nordzy-cursors) | Guillaume Boehm (`gboehm`) | GPL-3.0 | [`themes/nordzy/`](themes/nordzy/) |
-| **Capitaine** | [keeferrourke/capitaine-cursors](https://github.com/keeferrourke/capitaine-cursors) | Keefer Rourke (`keeferrourke`) | LGPL-3.0 | [`themes/capitaine/`](themes/capitaine/) |
-| **Adwaita** | [GNOME/adwaita-icon-theme](https://gitlab.gnome.org/GNOME/adwaita-icon-theme) | GNOME Project | LGPL-2.1 / CC-BY-SA | `/usr/share/icons/Adwaita` |
-| **Bibata Catppuccin** | [catppuccin/cursors](https://github.com/catppuccin/cursors) | Abdulkaiz Khatri & Catppuccin | GPL-3.0 | `/usr/share/icons/Bibata-*` |
-
-See [`THIRD_PARTY.md`](THIRD_PARTY.md) for full licensing architecture, audit logs, and upstream commit provenance.
+- **Zero Runtime Network Access:** No automatic downloads, curl/wget execution, or remote dependencies.
+- **Untrusted Input Hardening:** All user-provided archives and directories are validated and isolated prior to extraction.
+- **No Script Execution:** Cursor Theme Manager never executes installer scripts (`install.sh`, `setup.sh`, `Makefile`, `.sh`, `.exe`, `.bat`, etc.) inside theme archives.
+- **Path Traversal Protection:** Extraction strictly forbids relative directory traversal (`..`), absolute paths, device nodes, FIFOs, and symlinks pointing outside the theme directory.
+- **Resource Limits:** Enforces decompression caps to prevent decompression bombs:
+  - Maximum archive size: **100 MB**
+  - Maximum extracted content size: **750 MB**
+  - Maximum file count: **10,000 files**
+- **Atomic Operations:** Installs and renames use temporary staging directories with atomic POSIX replacement operations.
+- **Protected Destructive Actions:** Remove and Rename operations are strictly restricted to themes managed by Cursor Theme Manager (verified via `.omarchy-cursor-switcher-imported`), preventing accidental deletion of system or user files.
 
 ---
 
@@ -175,7 +221,7 @@ omarchy plugin remove sanjyay.cursor-theme-manager
 ```
 
 Removal automatically:
-1. Restores the pre-existing cursor theme and size captured prior to plugin installation.
+1. Restores the pre-existing cursor theme and size captured prior to plugin installation (or system default if none was captured).
 2. Cleans up generated application desktop shortcuts, launchers, and icons.
 3. Removes UWSM configuration fragments and temporary preview caches.
 
@@ -183,4 +229,6 @@ Removal automatically:
 
 ## License
 
-The plugin code and Omarchy integration scripts are licensed under the [GNU General Public License v3.0 or later](LICENSE). Bundled third-party cursor themes retain their respective open-source licenses as documented in [`THIRD_PARTY.md`](THIRD_PARTY.md).
+Cursor Theme Manager is licensed under the [GNU General Public License v3.0 or later](LICENSE).
+
+Third-party cursor themes linked in documentation are independent projects distributed under their respective upstream licenses; they are not included with or distributed by Cursor Theme Manager.
