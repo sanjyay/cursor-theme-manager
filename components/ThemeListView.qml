@@ -109,15 +109,15 @@ Item {
         visible: root.userThemes.length > 0
 
         Text {
-          text: "IMPORTED"
+          text: "Imported"
           textFormat: Text.PlainText
           color: Color.popups.text
           font.family: Style.font.family
-          font.pixelSize: Style.font.bodySmall
+          font.pixelSize: Style.font.body
           font.bold: true
           leftPadding: Style.space(8)
-          bottomPadding: Style.space(2)
-          visible: root.systemThemes.length > 0
+          topPadding: Style.space(4)
+          bottomPadding: Style.space(4)
         }
 
         Repeater {
@@ -200,15 +200,15 @@ Item {
         visible: root.systemThemes.length > 0
 
         Text {
-          text: "SYSTEM"
+          text: "System"
           textFormat: Text.PlainText
           color: Color.popups.text
           font.family: Style.font.family
-          font.pixelSize: Style.font.bodySmall
+          font.pixelSize: Style.font.body
           font.bold: true
           leftPadding: Style.space(8)
-          bottomPadding: Style.space(2)
-          visible: root.userThemes.length > 0
+          topPadding: Style.space(4)
+          bottomPadding: Style.space(4)
         }
 
         Repeater {

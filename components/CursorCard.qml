@@ -43,11 +43,11 @@ Rectangle {
         Text {
           id: badgeText
           anchors.centerIn: parent
-          text: (root.theme && (root.theme.imported || root.theme.sourceType === "imported")) ? "Imported" : ((root.theme && root.theme.sourceType === "system") ? "System" : "User")
+          text: (root.theme && (root.theme.imported || root.theme.sourceType === "imported")) ? "Imported" : ((root.theme && root.theme.sourceType === "system") ? "System" : "Imported")
           textFormat: Text.PlainText
           color: Color.popups.text
           font.family: Style.font.family
-          font.pixelSize: Style.font.caption - 2
+          font.pixelSize: Style.font.caption
           font.bold: true
         }
       }

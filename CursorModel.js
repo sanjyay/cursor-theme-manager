@@ -86,7 +86,7 @@ function normalizedTheme(raw) {
   var sourceType = isImported ? "imported" : (raw.sourceType === "system" ? "system" : "user")
   var subtitle = sanitizeString(raw.subtitle, 1024)
   if (!subtitle) {
-    subtitle = isImported ? "Imported" : (sourceType === "system" ? "System" : "User")
+    subtitle = isImported ? "Imported" : (sourceType === "system" ? "System" : "Imported")
   }
 
   var id = sanitizeString(raw.id, 256) || hypr || xcursor
