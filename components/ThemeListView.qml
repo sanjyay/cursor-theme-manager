@@ -108,16 +108,30 @@ Item {
         spacing: Style.space(3)
         visible: root.userThemes.length > 0
 
-        Text {
-          text: "Imported"
-          textFormat: Text.PlainText
-          color: Color.popups.text
-          font.family: Style.font.family
-          font.pixelSize: Style.font.body
-          font.bold: true
+        Row {
+          spacing: Style.space(6)
           leftPadding: Style.space(8)
           topPadding: Style.space(4)
           bottomPadding: Style.space(4)
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "󰋺"
+            textFormat: Text.PlainText
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+          }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Imported"
+            textFormat: Text.PlainText
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
         }
 
         Repeater {
@@ -199,16 +213,30 @@ Item {
         spacing: Style.space(3)
         visible: root.systemThemes.length > 0
 
-        Text {
-          text: "System"
-          textFormat: Text.PlainText
-          color: Color.popups.text
-          font.family: Style.font.family
-          font.pixelSize: Style.font.body
-          font.bold: true
+        Row {
+          spacing: Style.space(6)
           leftPadding: Style.space(8)
-          topPadding: Style.space(4)
+          topPadding: Style.space(10)
           bottomPadding: Style.space(4)
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "󰒋"
+            textFormat: Text.PlainText
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+          }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "System"
+            textFormat: Text.PlainText
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
         }
 
         Repeater {
