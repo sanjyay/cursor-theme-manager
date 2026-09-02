@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import "../CursorModel.js" as Model
 
 Item {
   id: root
@@ -66,7 +67,7 @@ Item {
       root.close()
     }
     function onImportFailed(error) {
-      root.modalError = error || "Failed to import cursor theme"
+      root.modalError = Model.sanitizeString(error, 256) || "Failed to import cursor theme"
     }
     function onBrowserEntriesChanged() {
       root.selectedEntry = null
@@ -143,7 +144,6 @@ Item {
 
       MouseArea {
         anchors.fill: parent
-        // Prevent clicks inside modal from closing backdrop
       }
 
       Column {
@@ -163,6 +163,7 @@ Item {
 
             Text {
               text: "󰋺"
+              textFormat: Text.PlainText
               color: Color.accent
               font.family: Style.font.family
               font.pixelSize: Style.font.title
@@ -170,6 +171,7 @@ Item {
 
             Text {
               text: "Import Cursor Theme"
+              textFormat: Text.PlainText
               color: Color.popups.text
               font.family: Style.font.family
               font.pixelSize: Style.font.title
@@ -189,6 +191,7 @@ Item {
             Text {
               anchors.centerIn: parent
               text: "✕"
+              textFormat: Text.PlainText
               color: Color.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.bodySmall
@@ -230,6 +233,7 @@ Item {
 
               Text {
                 text: "PLACES"
+                textFormat: Text.PlainText
                 color: Color.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption - 1
@@ -265,6 +269,7 @@ Item {
                     Text {
                       anchors.verticalCenter: parent.verticalCenter
                       text: modelData.icon
+                      textFormat: Text.PlainText
                       color: isCurrent ? Color.accent : Color.muted
                       font.family: Style.font.family
                       font.pixelSize: Style.font.bodySmall
@@ -274,6 +279,7 @@ Item {
                       anchors.verticalCenter: parent.verticalCenter
                       width: parent.width - Style.space(24)
                       text: modelData.label
+                      textFormat: Text.PlainText
                       color: isCurrent ? Color.popups.text : (placeMouse.containsMouse ? Color.popups.text : Color.muted)
                       font.family: Style.font.family
                       font.pixelSize: Style.font.caption
@@ -343,6 +349,7 @@ Item {
                 Text {
                   anchors.centerIn: parent
                   text: "󰁝"
+                  textFormat: Text.PlainText
                   color: Color.popups.text
                   font.family: Style.font.family
                   font.pixelSize: Style.font.body
@@ -406,7 +413,8 @@ Item {
                           Text {
                             id: crumbText
                             anchors.centerIn: parent
-                            text: modelData.name
+                            text: modelData.name || ""
+                            textFormat: Text.PlainText
                             color: crumbMouse.containsMouse ? Color.accent : Color.popups.text
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption
@@ -428,6 +436,7 @@ Item {
                           visible: index < (root.service ? root.service.browserBreadcrumbs.length - 1 : 0)
                           anchors.verticalCenter: parent.verticalCenter
                           text: "/"
+                          textFormat: Text.PlainText
                           color: Color.muted
                           font.family: Style.font.family
                           font.pixelSize: Style.font.caption
@@ -487,6 +496,7 @@ Item {
                     Text {
                       anchors.verticalCenter: parent.verticalCenter
                       text: modelData.is_theme_dir ? "🎨" : (modelData.is_archive ? "📦" : "📁")
+                      textFormat: Text.PlainText
                       font.pixelSize: Style.font.bodySmall
                     }
 
@@ -494,7 +504,8 @@ Item {
                     Text {
                       anchors.verticalCenter: parent.verticalCenter
                       width: Math.max(1, parent.width - Style.space(120))
-                      text: modelData.name
+                      text: modelData.name || ""
+                      textFormat: Text.PlainText
                       color: isSelected ? Color.popups.text : (rowMouse.containsMouse ? Color.popups.text : (modelData.is_theme_dir || modelData.is_archive ? Color.popups.text : Color.muted))
                       font.family: Style.font.family
                       font.pixelSize: Style.font.caption
@@ -505,7 +516,7 @@ Item {
 
                     // Theme Badge
                     Rectangle {
-                      visible: modelData.is_theme_dir
+                      visible: Boolean(modelData.is_theme_dir)
                       anchors.verticalCenter: parent.verticalCenter
                       height: Style.space(18)
                       radius: Style.cornerRadius - 3
@@ -518,6 +529,7 @@ Item {
                         id: themeBadgeText
                         anchors.centerIn: parent
                         text: "Theme"
+                        textFormat: Text.PlainText
                         color: Color.accent
                         font.family: Style.font.family
                         font.pixelSize: Style.font.caption - 2
@@ -528,7 +540,8 @@ Item {
                     // Size / Type label
                     Text {
                       anchors.verticalCenter: parent.verticalCenter
-                      text: modelData.size_str
+                      text: modelData.size_str || ""
+                      textFormat: Text.PlainText
                       color: Color.muted
                       font.family: Style.font.family
                       font.pixelSize: Style.font.caption - 1
@@ -554,9 +567,10 @@ Item {
 
                 // Empty folder hint
                 Text {
-                  visible: fileListView.count === 0 && !root.service.browserLoading
+                  visible: fileListView.count === 0 && !(root.service && root.service.browserLoading)
                   anchors.centerIn: parent
-                  text: root.service && root.service.browserError ? root.service.browserError : "No cursor archives or folders found"
+                  text: (root.service && root.service.browserError) ? root.service.browserError : "No cursor archives or folders found"
+                  textFormat: Text.PlainText
                   color: Color.muted
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
@@ -589,6 +603,7 @@ Item {
             Text {
               visible: root.modalError !== ""
               text: "⚠"
+              textFormat: Text.PlainText
               color: Color.urgent
               font.pixelSize: Style.font.bodySmall
             }
@@ -598,6 +613,7 @@ Item {
               text: root.modalError !== ""
                 ? root.modalError
                 : "Supported: *.tar.gz, *.tar.xz, *.tar.bz2, *.zip, and cursor folders"
+              textFormat: Text.PlainText
               color: root.modalError !== "" ? Color.urgent : Color.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -627,6 +643,7 @@ Item {
                 id: cancelLabel
                 anchors.centerIn: parent
                 text: "Cancel"
+                textFormat: Text.PlainText
                 color: Color.popups.text
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
@@ -662,6 +679,7 @@ Item {
 
                 Text {
                   text: root.service && root.service.importing ? "…" : "󰋺"
+                  textFormat: Text.PlainText
                   color: importBtn.canImport ? Color.popups.background : Color.muted
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
@@ -669,6 +687,7 @@ Item {
 
                 Text {
                   text: root.service && root.service.importing ? "Importing…" : "Import"
+                  textFormat: Text.PlainText
                   color: importBtn.canImport ? Color.popups.background : Color.muted
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall

@@ -3,8 +3,17 @@
 var SupportedSizes = [16, 20, 24, 28, 32, 40, 48, 64, 80, 96, 128, 160, 192, 224, 256]
 var DefaultSize = 16
 
+function sanitizeString(value, maxLen) {
+  if (value === undefined || value === null) return ""
+  var s = String(value)
+  var limit = maxLen !== undefined ? maxLen : 256
+  // Remove NUL and unprintable control characters, normalize whitespace
+  var cleaned = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "").replace(/\s+/g, " ").trim()
+  return cleaned.length > limit ? cleaned.substring(0, limit) : cleaned
+}
+
 function safeString(value) {
-  return value === undefined || value === null ? "" : String(value)
+  return sanitizeString(value, 256)
 }
 
 function validSize(value, fallback) {
@@ -42,7 +51,7 @@ function canDecreaseSize(currentSize) {
 }
 
 function isInternalTheme(name, path) {
-  var s = (safeString(name) + " " + safeString(path)).toLowerCase()
+  var s = (sanitizeString(name, 512) + " " + sanitizeString(path, 1024)).toLowerCase()
   return s.indexOf("cursorswitcher-themed-") !== -1 ||
          s.indexOf("cursorswitcher-xcursor-") !== -1 ||
          s.indexOf("cursorswitcher-preview-") !== -1 ||
@@ -62,48 +71,48 @@ function normalizedTheme(raw) {
   var formats = Array.isArray(raw.formats) ? raw.formats.filter(function(value) {
     return value === "hyprcursor" || value === "xcursor"
   }) : []
-  var hypr = safeString(raw.hyprcursor)
-  var xcursor = safeString(raw.xcursor)
+  var hypr = sanitizeString(raw.hyprcursor, 256)
+  var xcursor = sanitizeString(raw.xcursor, 256)
   if (hypr && formats.indexOf("hyprcursor") === -1) formats.push("hyprcursor")
   if (xcursor && formats.indexOf("xcursor") === -1) formats.push("xcursor")
   if (formats.length === 0) return null
 
   var isImported = raw.imported === true || raw.sourceType === "imported" || String(raw.path || "").indexOf("CursorSwitcher-Imported-") !== -1
   var sourceType = isImported ? "imported" : (raw.sourceType === "system" ? "system" : "user")
-  var subtitle = safeString(raw.subtitle)
+  var subtitle = sanitizeString(raw.subtitle, 1024)
   if (!subtitle) {
     subtitle = isImported ? "Imported" : (sourceType === "system" ? "System" : "User")
   }
 
-  var id = safeString(raw.id) || hypr || xcursor
-  var displayName = safeString(raw.displayName) || hypr || xcursor
+  var id = sanitizeString(raw.id, 256) || hypr || xcursor
+  var displayName = sanitizeString(raw.displayName, 256) || hypr || xcursor
 
   return {
     id: id,
     displayName: displayName,
-    family: safeString(raw.family) || displayName || id,
+    family: sanitizeString(raw.family, 256) || displayName || id,
     subtitle: subtitle,
     hyprcursor: hypr,
     xcursor: xcursor,
-    path: safeString(raw.path),
+    path: sanitizeString(raw.path, 4096),
     formats: formats,
-    previewPath: safeString(raw.previewPath),
+    previewPath: sanitizeString(raw.previewPath, 4096),
     imported: isImported,
     sourceType: sourceType,
-    contentHash: safeString(raw.contentHash),
-    importedAt: safeString(raw.importedAt),
-    license: safeString(raw.license),
+    contentHash: sanitizeString(raw.contentHash, 128),
+    importedAt: sanitizeString(raw.importedAt, 128),
+    license: sanitizeString(raw.license, 128),
     previewable: true
   }
 }
 
 function canonicalFamily(name) {
-  return safeString(name).toLowerCase().trim()
+  return sanitizeString(name, 256).toLowerCase().trim()
 }
 
 function themeKey(theme) {
   if (!theme) return ""
-  return (safeString(theme.id) || safeString(theme.hyprcursor) || safeString(theme.xcursor) || safeString(theme.displayName)).toLowerCase()
+  return (sanitizeString(theme.id, 256) || sanitizeString(theme.hyprcursor, 256) || sanitizeString(theme.xcursor, 256) || sanitizeString(theme.displayName, 256)).toLowerCase()
 }
 
 function mergeTheme(a, b) {
@@ -133,7 +142,8 @@ function mergeTheme(a, b) {
 function normalizeThemes(rawThemes) {
   var byKey = {}
   var order = []
-  ;(Array.isArray(rawThemes) ? rawThemes : []).forEach(function(raw) {
+  var list = Array.isArray(rawThemes) ? rawThemes.slice(0, 1024) : []
+  list.forEach(function(raw) {
     var theme = normalizedTheme(raw)
     if (!theme) return
     var key = themeKey(theme)
@@ -149,11 +159,10 @@ function normalizeThemes(rawThemes) {
     var typeOrderA = a.sourceType === "imported" ? 0 : (a.sourceType === "user" ? 1 : 2)
     var typeOrderB = b.sourceType === "imported" ? 0 : (b.sourceType === "user" ? 1 : 2)
     if (typeOrderA !== typeOrderB) return typeOrderA - typeOrderB
-    return safeString(a.displayName).localeCompare(safeString(b.displayName))
+    return sanitizeString(a.displayName, 256).localeCompare(sanitizeString(b.displayName, 256))
   })
   return filtered
 }
-
 
 function parseState(text) {
   var fallback = {
@@ -161,55 +170,63 @@ function parseState(text) {
     reason: "missing",
     theme: null,
     size: DefaultSize,
-    importedThemes: []
+    importedThemes: [],
+    integrationConsent: false,
+    integrationInstalled: false
   }
-  if (!safeString(text).trim()) return fallback
+  if (!text || typeof text !== "string" || !text.trim()) return fallback
+  if (text.length > 65536) return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], integrationConsent: false, integrationInstalled: false }
+
   try {
     var raw = JSON.parse(text)
-    if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid", theme: null, size: DefaultSize, importedThemes: [] }
+    if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid", theme: null, size: DefaultSize, importedThemes: [], integrationConsent: false, integrationInstalled: false }
 
     var theme = raw.theme ? normalizedTheme(raw.theme) : (raw.manualTheme ? normalizedTheme(raw.manualTheme) : null)
     var size = validSize(raw.size !== undefined ? raw.size : raw.manualSize, DefaultSize)
-    var importedThemes = Array.isArray(raw.importedThemes) ? raw.importedThemes : []
+    var importedThemes = Array.isArray(raw.importedThemes) ? raw.importedThemes.slice(0, 1024) : []
+    var integrationConsent = Boolean(raw.integrationConsent)
+    var integrationInstalled = Boolean(raw.integrationInstalled)
 
     return {
       ok: true,
       reason: "",
       theme: theme,
       size: size,
-      importedThemes: importedThemes
+      importedThemes: importedThemes,
+      integrationConsent: integrationConsent,
+      integrationInstalled: integrationInstalled
     }
   } catch (error) {
-    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [] }
+    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], integrationConsent: false, integrationInstalled: false }
   }
 }
 
-function stateDocument(arg1, arg2, arg3) {
+function stateDocument(arg1, arg2, arg3, arg4, arg5) {
   var doc = { version: 2 }
   if (typeof arg1 === "object" && arg1 !== null && !arg1.displayName && !arg1.hyprcursor && !arg1.xcursor) {
     var s = arg1
     doc.theme = s.theme ? {
-      displayName: s.theme.displayName,
-      hyprcursor: s.theme.hyprcursor,
-      xcursor: s.theme.xcursor
-    } : (s.manualTheme ? {
-      displayName: s.manualTheme.displayName,
-      hyprcursor: s.manualTheme.hyprcursor,
-      xcursor: s.manualTheme.xcursor
-    } : null)
+      displayName: sanitizeString(s.theme.displayName, 256),
+      hyprcursor: sanitizeString(s.theme.hyprcursor, 256),
+      xcursor: sanitizeString(s.theme.xcursor, 256)
+    } : null
     doc.size = validSize(s.size !== undefined ? s.size : s.manualSize, DefaultSize)
-    doc.importedThemes = s.importedThemes || []
+    doc.importedThemes = Array.isArray(s.importedThemes) ? s.importedThemes.slice(0, 1024) : []
+    doc.integrationConsent = Boolean(s.integrationConsent)
+    doc.integrationInstalled = Boolean(s.integrationInstalled)
   } else {
     var theme = arg1
     var size = validSize(arg2, DefaultSize)
-    var importedThemes = Array.isArray(arg3) ? arg3 : []
+    var importedThemes = Array.isArray(arg3) ? arg3.slice(0, 1024) : []
     doc.theme = theme ? {
-      displayName: theme.displayName,
-      hyprcursor: theme.hyprcursor,
-      xcursor: theme.xcursor
+      displayName: sanitizeString(theme.displayName, 256),
+      hyprcursor: sanitizeString(theme.hyprcursor, 256),
+      xcursor: sanitizeString(theme.xcursor, 256)
     } : null
     doc.size = size
     doc.importedThemes = importedThemes
+    doc.integrationConsent = Boolean(arg4)
+    doc.integrationInstalled = Boolean(arg5)
   }
   return JSON.stringify(doc, null, 2) + "\n"
 }
@@ -217,10 +234,10 @@ function stateDocument(arg1, arg2, arg3) {
 function findTheme(themes, wanted) {
   if (!wanted || !Array.isArray(themes)) return null
   var isStr = typeof wanted === "string"
-  var wantedName = (isStr ? wanted : safeString(wanted.displayName)).toLowerCase()
-  var wantedHypr = (isStr ? wanted : safeString(wanted.hyprcursor)).toLowerCase()
-  var wantedX = (isStr ? wanted : safeString(wanted.xcursor)).toLowerCase()
-  var wantedId = (isStr ? wanted : safeString(wanted.id)).toLowerCase()
+  var wantedName = (isStr ? wanted : sanitizeString(wanted.displayName, 256)).toLowerCase()
+  var wantedHypr = (isStr ? wanted : sanitizeString(wanted.hyprcursor, 256)).toLowerCase()
+  var wantedX = (isStr ? wanted : sanitizeString(wanted.xcursor, 256)).toLowerCase()
+  var wantedId = (isStr ? wanted : sanitizeString(wanted.id, 256)).toLowerCase()
   for (var i = 0; i < themes.length; i++) {
     var theme = themes[i]
     if (wantedName && theme.displayName.toLowerCase() === wantedName) return theme
@@ -232,12 +249,12 @@ function findTheme(themes, wanted) {
 }
 
 function fallbackTheme(themes, currentXcursor) {
-  var current = safeString(currentXcursor).toLowerCase()
+  var current = sanitizeString(currentXcursor, 256).toLowerCase()
   if (current && Array.isArray(themes)) {
     for (var i = 0; i < themes.length; i++) {
-      if (safeString(themes[i].xcursor).toLowerCase() === current ||
-          safeString(themes[i].hyprcursor).toLowerCase() === current ||
-          safeString(themes[i].displayName).toLowerCase() === current) {
+      if (sanitizeString(themes[i].xcursor, 256).toLowerCase() === current ||
+          sanitizeString(themes[i].hyprcursor, 256).toLowerCase() === current ||
+          sanitizeString(themes[i].displayName, 256).toLowerCase() === current) {
         return themes[i]
       }
     }
@@ -247,10 +264,10 @@ function fallbackTheme(themes, currentXcursor) {
 
 function themeEquals(a, b) {
   if (!a || !b) return false
-  return (safeString(a.id) === safeString(b.id) && safeString(a.id) !== "") ||
-         (safeString(a.displayName) === safeString(b.displayName) && safeString(a.displayName) !== "") ||
-         (safeString(a.hyprcursor) === safeString(b.hyprcursor) && safeString(a.hyprcursor) !== "") ||
-         (safeString(a.xcursor) === safeString(b.xcursor) && safeString(a.xcursor) !== "")
+  return (sanitizeString(a.id, 256) === sanitizeString(b.id, 256) && sanitizeString(a.id, 256) !== "") ||
+         (sanitizeString(a.displayName, 256) === sanitizeString(b.displayName, 256) && sanitizeString(a.displayName, 256) !== "") ||
+         (sanitizeString(a.hyprcursor, 256) === sanitizeString(b.hyprcursor, 256) && sanitizeString(a.hyprcursor, 256) !== "") ||
+         (sanitizeString(a.xcursor, 256) === sanitizeString(b.xcursor, 256) && sanitizeString(a.xcursor, 256) !== "")
 }
 
 function applyArguments(scriptPath, theme, size, preview) {
@@ -385,6 +402,8 @@ function previewGridGeometry(totalCount, containerWidth, cardWidth, itemHeight, 
 if (typeof module !== "undefined") module.exports = {
   SupportedSizes: SupportedSizes,
   DefaultSize: DefaultSize,
+  sanitizeString: sanitizeString,
+  safeString: safeString,
   isInternalTheme: isInternalTheme,
   isThemeVisible: isThemeVisible,
   validSize: validSize,
@@ -408,5 +427,3 @@ if (typeof module !== "undefined") module.exports = {
   previewRows: previewRows,
   previewGridGeometry: previewGridGeometry
 }
-
-

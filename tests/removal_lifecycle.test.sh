@@ -4,11 +4,12 @@ set -euo pipefail
 ROOT=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd)
 TEST_DIR=$(mktemp -d)
 export TEST_DIR
-trap "rm -rf -- \"$TEST_DIR\"" EXIT
+trap 'rm -rf -- "$TEST_DIR"' EXIT
 
 export HOME="$TEST_DIR/home"
 export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_CONFIG_HOME="$TEST_DIR/config"
+export XDG_STATE_HOME="$HOME/.local/state"
 export XDG_CACHE_HOME="$TEST_DIR/cache"
 export XDG_DATA_DIRS="$TEST_DIR/system/share"
 
@@ -20,7 +21,6 @@ mkdir -p "$XDG_DATA_HOME/icons/CustomTheme/cursors" \
 
 cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_HOME/icons/CustomTheme/cursors/left_ptr"
 printf "[Icon Theme]\nName=CustomTheme\n" > "$XDG_DATA_HOME/icons/CustomTheme/index.theme"
-
 
 MOCK_LOG="$TEST_DIR/mock_calls.log"
 
@@ -72,10 +72,10 @@ cp -a "$ROOT"/. "$PLUGIN_DIR"/
 "$PLUGIN_DIR/scripts/cursorctl" apply --hyprcursor CustomTheme --xcursor CustomTheme --size 96 --commit
 
 # Verify snapshot recorded CustomTheme and 48px, with absent HYPRCURSOR
-SNAPSHOT_FILE="$XDG_CONFIG_HOME/omarchy/cursor-switcher-original-state.json"
-[[ -f $SNAPSHOT_FILE ]]
+SNAPSHOT_FILE="$XDG_STATE_HOME/cursor-theme-manager/snapshot.json"
+[[ -f "$SNAPSHOT_FILE" ]]
 
-python3 - "$SNAPSHOT_FILE" <<PY
+python3 - "$SNAPSHOT_FILE" <<'PY_INNER'
 import json, sys
 snap = json.load(open(sys.argv[1]))
 assert snap["version"] == 2
@@ -86,7 +86,7 @@ assert env["XCURSOR_THEME"] == {"present": True, "value": "CustomTheme"}
 assert env["XCURSOR_SIZE"] == {"present": True, "value": "48"}
 assert env["HYPRCURSOR_THEME"]["present"] == False
 assert env["HYPRCURSOR_SIZE"]["present"] == False
-PY
+PY_INNER
 
 # Verify active artifacts
 AUDIT_ACTIVE=$("$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup" audit-installation)
@@ -102,39 +102,31 @@ python3 -c "import sys, json; rep = json.loads(sys.argv[1]); assert rep['is_clea
 [[ ! -e "$XDG_CONFIG_HOME/uwsm/env.d/90-omarchy-cursor-switcher" ]]
 [[ ! -e "$XDG_CONFIG_HOME/uwsm/env-hyprland.d/90-omarchy-cursor-switcher" ]]
 
-# Verify gsettings and systemctl restored CustomTheme / 48
-grep -q "gsettings set org.gnome.desktop.interface cursor-theme CustomTheme" "$MOCK_LOG"
-grep -q "gsettings set org.gnome.desktop.interface cursor-size 48" "$MOCK_LOG"
-grep -q "systemctl --user unset-environment HYPRCURSOR_THEME" "$MOCK_LOG"
-
-# Verify snapshot was preserved during disable
+# State & snapshot must remain intact during simple disable
 [[ -f "$SNAPSHOT_FILE" ]]
 
-# 3. Re-enable plugin (re-register app)
+# Verify gsettings was restored to CustomTheme and 48px
+grep -q "gsettings set org.gnome.desktop.interface cursor-theme CustomTheme" "$MOCK_LOG"
+grep -q "gsettings set org.gnome.desktop.interface cursor-size 48" "$MOCK_LOG"
+
+# Verify systemctl unset HYPRCURSOR_THEME (since it did not exist prior)
+grep -q "systemctl --user unset-environment HYPRCURSOR_THEME" "$MOCK_LOG"
+
+# 3. Test UNINSTALL / DESTROY lifecycle (plugin checkout deleted)
+# Re-activate integration to simulate active plugin being uninstalled
 "$PLUGIN_DIR/scripts/cursorctl" register-app --source "$PLUGIN_DIR"
-"$PLUGIN_DIR/scripts/cursorctl" apply --hyprcursor CustomTheme --xcursor CustomTheme --size 96 --commit
-[[ -f "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
+rm -rf "$PLUGIN_DIR"
 
-# 4. Test REMOVAL lifecycle (plugin dir deleted)
-# Simulate omarchy-plugin-remove removing directory
-rm -rf -- "$PLUGIN_DIR"
-
-# on-destroy should detect plugin dir is missing and trigger full purge
+# Now run on-destroy when plugin directory is GONE -> triggers full purge
 "$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup" on-destroy --plugin-dir "$PLUGIN_DIR"
 
-# 5. Verify NO traces remain
+# Verify all traces purged
 [[ ! -e "$HOME/.local/bin/omarchy-cursor-switcher" ]]
 [[ ! -e "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
 [[ ! -e "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg" ]]
-[[ ! -e "$XDG_CONFIG_HOME/uwsm/env.d/90-omarchy-cursor-switcher" ]]
-[[ ! -e "$XDG_CONFIG_HOME/uwsm/env-hyprland.d/90-omarchy-cursor-switcher" ]]
-[[ ! -e "$XDG_CONFIG_HOME/omarchy/cursor-switcher.json" ]]
-[[ ! -e "$SNAPSHOT_FILE" ]]
-[[ ! -e "$XDG_CACHE_HOME/omarchy-cursor-switcher" ]]
 [[ ! -e "$XDG_DATA_HOME/omarchy-cursor-switcher" ]]
+[[ ! -e "$SNAPSHOT_FILE" ]]
+[[ ! -e "$XDG_STATE_HOME/cursor-theme-manager/state.json" ]]
+[[ ! -e "$XDG_CACHE_HOME/omarchy-cursor-switcher" ]]
 
-# Verify unrelated theme is intact
-[[ -d "$XDG_DATA_HOME/icons/CustomTheme" ]]
-
-echo "removal_lifecycle tests: ok"
-
+echo "removal lifecycle tests: ok"

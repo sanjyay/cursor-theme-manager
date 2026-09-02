@@ -59,6 +59,7 @@ Item {
       Text {
         anchors.centerIn: parent
         text: "−"
+        textFormat: Text.PlainText
         color: root.canDecrease ? Color.popups.text : Color.muted
         opacity: root.canDecrease ? 1.0 : 0.35
         font.family: Style.font.family
@@ -96,6 +97,7 @@ Item {
       Text {
         anchors.centerIn: parent
         text: String(root.committedSize)
+        textFormat: Text.PlainText
         color: Color.popups.text
         font.family: Style.font.family
         font.pixelSize: Style.font.body
@@ -123,6 +125,7 @@ Item {
       Text {
         anchors.centerIn: parent
         text: "+"
+        textFormat: Text.PlainText
         color: root.canIncrease ? Color.popups.text : Color.muted
         opacity: root.canIncrease ? 1.0 : 0.35
         font.family: Style.font.family

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import "../CursorModel.js" as Model
 
 Item {
   id: root
@@ -17,7 +18,7 @@ Item {
 
   function open(targetTheme) {
     theme = targetTheme
-    nameInput.text = targetTheme ? (targetTheme.displayName || targetTheme.id) : ""
+    nameInput.text = targetTheme ? (targetTheme.displayName || targetTheme.id || "") : ""
     errorMessage = ""
     active = true
     Qt.callLater(function() {
@@ -34,13 +35,9 @@ Item {
   }
 
   function submit() {
-    var newName = nameInput.text.trim()
+    var newName = Model.sanitizeString(nameInput.text, 100)
     if (!newName) {
       errorMessage = "Theme name cannot be empty"
-      return
-    }
-    if (newName.length > 100) {
-      errorMessage = "Theme name is too long"
       return
     }
     if (!theme || !service) return
@@ -88,6 +85,7 @@ Item {
 
         Text {
           text: "Rename Cursor Theme"
+          textFormat: Text.PlainText
           color: Color.popups.text
           font.family: Style.font.family
           font.pixelSize: Style.font.title
@@ -122,6 +120,7 @@ Item {
         Text {
           visible: root.errorMessage !== ""
           text: root.errorMessage
+          textFormat: Text.PlainText
           color: Color.urgent
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
@@ -146,6 +145,7 @@ Item {
               id: cancelLabel
               anchors.centerIn: parent
               text: "Cancel"
+              textFormat: Text.PlainText
               color: Color.popups.text
               font.family: Style.font.family
               font.pixelSize: Style.font.bodySmall
@@ -171,6 +171,7 @@ Item {
               id: renameLabel
               anchors.centerIn: parent
               text: "Rename"
+              textFormat: Text.PlainText
               color: Color.popups.background
               font.family: Style.font.family
               font.pixelSize: Style.font.bodySmall

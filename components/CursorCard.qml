@@ -44,13 +44,13 @@ Rectangle {
           id: badgeText
           anchors.centerIn: parent
           text: (root.theme && (root.theme.imported || root.theme.sourceType === "imported")) ? "Imported" : ((root.theme && root.theme.sourceType === "system") ? "System" : "User")
+          textFormat: Text.PlainText
           color: Color.popups.text
           font.family: Style.font.family
           font.pixelSize: Style.font.caption - 2
           font.bold: true
         }
       }
-
 
       Image {
         id: previewImg
@@ -68,6 +68,7 @@ Rectangle {
         visible: !root.theme || root.theme.previewPath === ""
         anchors.centerIn: parent
         text: "↖"
+        textFormat: Text.PlainText
         color: Color.popups.text
         font.family: Style.font.family
         font.pixelSize: Style.font.displayLarge
@@ -78,6 +79,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.top: parent.top
         text: "✓"
+        textFormat: Text.PlainText
         color: Color.accent
         font.family: Style.font.family
         font.pixelSize: Style.font.body
@@ -88,7 +90,8 @@ Rectangle {
 
     Text {
       width: parent.width
-      text: root.theme.displayName
+      text: root.theme ? (root.theme.displayName || "") : ""
+      textFormat: Text.PlainText
       color: Color.popups.text
       font.family: Style.font.family
       font.pixelSize: Style.font.body
@@ -99,7 +102,8 @@ Rectangle {
 
     Text {
       width: parent.width
-      text: root.theme.subtitle ? root.theme.subtitle : (root.theme.formats.length === 2 ? "HYPR + X" : (root.theme.formats[0] === "hyprcursor" ? "HYPR" : "XCURSOR"))
+      text: root.theme ? (root.theme.subtitle ? root.theme.subtitle : (root.theme.formats.length === 2 ? "HYPR + X" : (root.theme.formats[0] === "hyprcursor" ? "HYPR" : "XCURSOR"))) : ""
+      textFormat: Text.PlainText
       color: Color.muted
       font.family: Style.font.family
       font.pixelSize: Style.font.caption

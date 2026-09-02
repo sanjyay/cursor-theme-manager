@@ -59,6 +59,7 @@ Item {
       Text {
         anchors.horizontalCenter: parent.horizontalCenter
         text: "No cursor themes found"
+        textFormat: Text.PlainText
         color: Color.popups.text
         font.family: Style.font.family
         font.pixelSize: Style.font.body
@@ -68,6 +69,7 @@ Item {
       Text {
         anchors.horizontalCenter: parent.horizontalCenter
         text: "Install a cursor theme or use Import to add one."
+        textFormat: Text.PlainText
         color: Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
@@ -102,6 +104,7 @@ Item {
 
         Text {
           text: "USER"
+          textFormat: Text.PlainText
           color: Color.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.caption - 2
@@ -147,7 +150,7 @@ Item {
               anchors.leftMargin: Style.space(12)
               anchors.rightMargin: Style.space(8)
 
-              // Context Menu Button [⋯] (Only for Cursor Theme Manager imported themes)
+              // Context Menu Button [⋯] (Only for imported themes)
               Rectangle {
                 id: rowMenuBtn
                 visible: (userRow.modelData.theme.imported === true || userRow.modelData.theme.sourceType === "imported") && (uRowMouse.containsMouse || userRow.isCommitted)
@@ -161,6 +164,7 @@ Item {
                 Text {
                   anchors.centerIn: parent
                   text: "⋯"
+                  textFormat: Text.PlainText
                   color: Color.popups.text
                   font.pixelSize: Style.font.caption
                   font.bold: true
@@ -198,7 +202,8 @@ Item {
                 anchors.left: parent.left
                 anchors.right: rowMenuBtn.visible ? rowMenuBtn.left : parent.right
                 anchors.rightMargin: Style.space(6)
-                text: userRow.modelData.theme.displayName || userRow.modelData.theme.id
+                text: userRow.modelData.theme.displayName || userRow.modelData.theme.id || ""
+                textFormat: Text.PlainText
                 color: Color.popups.text
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
@@ -236,6 +241,7 @@ Item {
 
         Text {
           text: "SYSTEM"
+          textFormat: Text.PlainText
           color: Color.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.caption - 2
@@ -287,7 +293,8 @@ Item {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.rightMargin: Style.space(6)
-                text: systemRow.modelData.theme.displayName || systemRow.modelData.theme.id
+                text: systemRow.modelData.theme.displayName || systemRow.modelData.theme.id || ""
+                textFormat: Text.PlainText
                 color: Color.popups.text
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
@@ -319,4 +326,3 @@ Item {
     }
   }
 }
-

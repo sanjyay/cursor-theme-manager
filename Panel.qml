@@ -176,7 +176,7 @@ Item {
           anchors.fill: parent
           anchors.margins: Style.space(20)
 
-          // Header Row: Title and Import Button
+          // Header Row: Title, Integration Button, and Import Button
           Item {
             id: headerRow
             anchors.top: parent.top
@@ -189,50 +189,101 @@ Item {
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               text: "Cursor Theme Manager"
+              textFormat: Text.PlainText
               color: Color.popups.text
               font.family: Style.font.family
               font.pixelSize: Style.font.title
               font.bold: true
             }
 
-            // Import Button (anchored right)
-            Rectangle {
+            // Right actions row (Integration Settings + Import)
+            Row {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              height: Style.space(32)
-              radius: Style.cornerRadius
-              color: importMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, Color.accent) : Style.normalFillFor(Color.popups.text, Color.accent)
-              border.color: importMouse.containsMouse ? Style.hoverBorderFor(Color.popups.text, Color.accent) : Style.normalBorderFor(Color.popups.text, Color.accent)
-              border.width: 1
-              implicitWidth: importLabel.implicitWidth + Style.space(18)
+              spacing: Style.space(10)
 
-              Row {
-                id: importLabel
-                anchors.centerIn: parent
-                spacing: Style.space(5)
+              // Desktop Integration Button
+              Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                height: Style.space(32)
+                radius: Style.cornerRadius
+                color: integrationMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, Color.accent) : Style.normalFillFor(Color.popups.text, Color.accent)
+                border.color: integrationMouse.containsMouse ? Style.hoverBorderFor(Color.popups.text, Color.accent) : Style.normalBorderFor(Color.popups.text, Color.accent)
+                border.width: 1
+                implicitWidth: integrationLabel.implicitWidth + Style.space(18)
 
-                Text {
-                  text: "󰋺"
-                  color: Color.accent
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.body
+                Row {
+                  id: integrationLabel
+                  anchors.centerIn: parent
+                  spacing: Style.space(5)
+
+                  Text {
+                    text: root.service && root.service.integrationInstalled ? "✓" : "⚙"
+                    textFormat: Text.PlainText
+                    color: root.service && root.service.integrationInstalled ? Color.accent : Color.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.body
+                  }
+
+                  Text {
+                    text: "Integration"
+                    textFormat: Text.PlainText
+                    color: Color.popups.text
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
                 }
 
-                Text {
-                  text: "Import"
-                  color: Color.popups.text
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: true
+                MouseArea {
+                  id: integrationMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: integrationModal.open()
                 }
               }
 
-              MouseArea {
-                id: importMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: importDialog.open()
+              // Import Button
+              Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                height: Style.space(32)
+                radius: Style.cornerRadius
+                color: importMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, Color.accent) : Style.normalFillFor(Color.popups.text, Color.accent)
+                border.color: importMouse.containsMouse ? Style.hoverBorderFor(Color.popups.text, Color.accent) : Style.normalBorderFor(Color.popups.text, Color.accent)
+                border.width: 1
+                implicitWidth: importLabel.implicitWidth + Style.space(18)
+
+                Row {
+                  id: importLabel
+                  anchors.centerIn: parent
+                  spacing: Style.space(5)
+
+                  Text {
+                    text: "󰋺"
+                    textFormat: Text.PlainText
+                    color: Color.accent
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.body
+                  }
+
+                  Text {
+                    text: "Import"
+                    textFormat: Text.PlainText
+                    color: Color.popups.text
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+                }
+
+                MouseArea {
+                  id: importMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: importDialog.open()
+                }
               }
             }
           }
@@ -246,6 +297,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             text: root.service ? root.service.lastError : ""
+            textFormat: Text.PlainText
             color: Color.urgent
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
@@ -261,7 +313,7 @@ Item {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
 
-            // Left Column: Cursor Themes List (~38% width)
+            // Left Column: Cursor Themes List (~35% width)
             Item {
               id: leftPane
               anchors.top: parent.top
@@ -322,7 +374,7 @@ Item {
               color: Util.alpha(Color.popups.text, 0.1)
             }
 
-            // Right Column: Preview, Size Stepper, Metadata & Actions (~62% width)
+            // Right Column: Preview, Size Stepper, Metadata & Actions (~65% width)
             CursorPreviewPane {
               id: previewPane
               anchors.top: parent.top
@@ -399,6 +451,7 @@ Item {
 
             Text {
               text: "✓"
+              textFormat: Text.PlainText
               color: Color.accent
               font.family: Style.font.family
               font.pixelSize: Style.font.bodySmall
@@ -408,6 +461,7 @@ Item {
             Text {
               id: successLabel
               text: "Theme imported successfully"
+              textFormat: Text.PlainText
               color: Color.popups.text
               font.family: Style.font.family
               font.pixelSize: Style.font.bodySmall
@@ -447,7 +501,250 @@ Item {
           if (panelScope) panelScope.forceActiveFocus()
         }
       }
+
+      // Optional Desktop Integration Modal Dialog
+      Item {
+        id: integrationModal
+        anchors.fill: parent
+        z: 60
+        visible: opacity > 0
+        opacity: active ? 1.0 : 0.0
+        property bool active: false
+        Behavior on opacity { NumberAnimation { duration: 140 } }
+
+        function open() {
+          active = true
+          if (root.service) root.service.checkIntegrationStatus()
+        }
+
+        function close() {
+          active = false
+          if (panelScope) panelScope.forceActiveFocus()
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          color: Util.alpha("#000000", 0.65)
+          MouseArea {
+            anchors.fill: parent
+            onClicked: integrationModal.close()
+          }
+        }
+
+        Rectangle {
+          id: integrationCard
+          anchors.centerIn: parent
+          width: Math.min(parent.width - Style.space(32), Style.space(560))
+          implicitHeight: intCol.implicitHeight + Style.space(36)
+          radius: Style.cornerRadius
+          color: Color.popups.background
+          border.color: Color.popups.border
+          border.width: 1
+          clip: true
+
+          MouseArea { anchors.fill: parent }
+
+          Column {
+            id: intCol
+            anchors.fill: parent
+            anchors.margins: Style.space(18)
+            spacing: Style.space(12)
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Text {
+                text: "⚙"
+                textFormat: Text.PlainText
+                color: Color.accent
+                font.family: Style.font.family
+                font.pixelSize: Style.font.title
+              }
+
+              Text {
+                text: "Optional Desktop Integration"
+                textFormat: Text.PlainText
+                color: Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.title
+                font.bold: true
+              }
+            }
+
+            Text {
+              width: parent.width
+              text: "This optional feature registers Cursor Theme Manager with your desktop environment so it can be launched from the application launcher and preserves restoration cleanup support."
+              textFormat: Text.PlainText
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Rectangle {
+              width: parent.width
+              implicitHeight: pathCol.implicitHeight + Style.space(16)
+              radius: Style.cornerRadius - 2
+              color: Util.alpha(Color.popups.text, 0.03)
+              border.color: Util.alpha(Color.popups.text, 0.1)
+              border.width: 1
+
+              Column {
+                id: pathCol
+                anchors.fill: parent
+                anchors.margins: Style.space(8)
+                spacing: Style.space(4)
+
+                Text {
+                  text: "Installs the following files upon consent:"
+                  textFormat: Text.PlainText
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption - 1
+                  font.bold: true
+                }
+
+                Text {
+                  text: "• ~/.local/share/applications/omarchy-cursor-switcher.desktop"
+                  textFormat: Text.PlainText
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption - 1
+                }
+                Text {
+                  text: "• ~/.local/bin/omarchy-cursor-switcher"
+                  textFormat: Text.PlainText
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption - 1
+                }
+                Text {
+                  text: "• ~/.local/share/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup"
+                  textFormat: Text.PlainText
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption - 1
+                }
+                Text {
+                  text: "• ~/.local/share/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg"
+                  textFormat: Text.PlainText
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption - 1
+                }
+              }
+            }
+
+            // Status Row
+            Row {
+              spacing: Style.space(8)
+
+              Text {
+                text: "Status:"
+                textFormat: Text.PlainText
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Text {
+                text: root.service && root.service.integrationInstalled ? "Installed & Active" : "Not Installed (Plugin runs locally)"
+                textFormat: Text.PlainText
+                color: root.service && root.service.integrationInstalled ? Color.accent : Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+            }
+
+            // Error banner if any
+            Text {
+              visible: Boolean(root.service && root.service.integrationError)
+              text: root.service ? root.service.integrationError : ""
+              textFormat: Text.PlainText
+              color: Color.urgent
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+              width: parent.width
+            }
+
+            // Button Row
+            Row {
+              anchors.right: parent.right
+              spacing: Style.space(8)
+
+              Rectangle {
+                width: closeIntLabel.implicitWidth + Style.space(20)
+                height: Style.space(32)
+                radius: Style.cornerRadius - 2
+                color: closeIntMouse.containsMouse ? Util.alpha(Color.popups.text, 0.12) : Util.alpha(Color.popups.text, 0.06)
+                border.color: Util.alpha(Color.popups.text, 0.14)
+                border.width: 1
+
+                Text {
+                  id: closeIntLabel
+                  anchors.centerIn: parent
+                  text: "Close"
+                  textFormat: Text.PlainText
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                MouseArea {
+                  id: closeIntMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: integrationModal.close()
+                }
+              }
+
+              Rectangle {
+                id: intActionBtn
+                readonly property bool isInstalled: Boolean(root.service && root.service.integrationInstalled)
+                width: intActionLabel.implicitWidth + Style.space(20)
+                height: Style.space(32)
+                radius: Style.cornerRadius - 2
+                color: isInstalled
+                  ? (intActionMouse.containsMouse ? Util.alpha(Color.urgent, 0.25) : Util.alpha(Color.urgent, 0.15))
+                  : (intActionMouse.containsMouse ? Color.accent : Util.alpha(Color.accent, 0.85))
+                border.color: isInstalled ? Color.urgent : Color.accent
+                border.width: 1
+
+                Text {
+                  id: intActionLabel
+                  anchors.centerIn: parent
+                  text: intActionBtn.isInstalled ? "Remove Integration" : "Install Integration"
+                  textFormat: Text.PlainText
+                  color: intActionBtn.isInstalled ? Color.urgent : Color.popups.background
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                MouseArea {
+                  id: intActionMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    if (intActionBtn.isInstalled) {
+                      if (root.service) root.service.removeIntegration()
+                    } else {
+                      if (root.service) root.service.installIntegration()
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
-

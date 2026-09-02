@@ -1,474 +1,86 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env python3
+"""
+Dedicated Cleanup & Restoration CLI for Cursor Theme Manager.
+Invokes cleanup_engine functions with strict arguments and bounded output.
+"""
 
-PROGRAM=${0##*/}
-HOME_DIR=${HOME:?HOME is not set}
-CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME_DIR/.config}
-DATA_HOME=${XDG_DATA_HOME:-$HOME_DIR/.local/share}
-CACHE_HOME=${XDG_CACHE_HOME:-$HOME_DIR/.cache}
-STATE_DIR="$CONFIG_HOME/omarchy"
-SNAPSHOT_FILE="$STATE_DIR/cursor-switcher-original-state.json"
-STATE_FILE="$STATE_DIR/cursor-switcher.json"
-ICONS_DIR="$DATA_HOME/icons"
-APP_DIR="$DATA_HOME/applications"
-BIN_DIR="$HOME_DIR/.local/bin"
-APP_ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
-CLEANUP_DIR="$DATA_HOME/omarchy-cursor-switcher"
-LEGACY_CLEANUP_DIR="$DATA_HOME/omarchy/cursor-switcher"
+import sys
+import os
+import argparse
+import json
 
-die() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; exit 1; }
-log() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; }
+# Add scripts directory to module search path
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
-snapshot_original_state() {
-  mkdir -p "$STATE_DIR"
-  if [[ -f $SNAPSHOT_FILE ]]; then
-    if python3 -c 'import sys, json; d = json.load(open(sys.argv[1])); assert d.get("version") in (1, 2)' "$SNAPSHOT_FILE" 2>/dev/null; then
-      return 0
-    fi
-  fi
+import cleanup_engine
+from runtime_safety import emit_bounded_json
 
-  python3 - <<'PY' "$SNAPSHOT_FILE" "$CONFIG_HOME"
-import sys, os, json, subprocess, datetime
 
-snapshot_path = sys.argv[1]
-config_home = sys.argv[2]
+def main():
+    parser = argparse.ArgumentParser(description="Cursor Theme Manager Cleanup & Restoration Helper")
+    subparsers = parser.add_subparsers(dest="action", required=True)
 
-gtk_theme_present = False
-gtk_theme_val = ""
-try:
-    res = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "cursor-theme"],
-                         capture_output=True, text=True, timeout=2)
-    if res.returncode == 0 and res.stdout.strip():
-        val = res.stdout.strip().strip("'").strip('"')
-        if val:
-            gtk_theme_present = True
-            gtk_theme_val = val
-except Exception:
-    pass
+    # snapshot-original-state
+    subparsers.add_parser("snapshot-original-state")
 
-gtk_size_present = False
-gtk_size_val = 24
-try:
-    res = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "cursor-size"],
-                         capture_output=True, text=True, timeout=2)
-    if res.returncode == 0 and res.stdout.strip():
-        val = res.stdout.strip()
-        if val.isdigit():
-            gtk_size_present = True
-            gtk_size_val = int(val)
-except Exception:
-    pass
+    # restore-original-state
+    subparsers.add_parser("restore-original-state")
 
-sysd_env = {}
-systemd_probe_succeeded = False
-try:
-    res = subprocess.run(["systemctl", "--user", "show-environment"],
-                         capture_output=True, text=True, timeout=2)
-    if res.returncode == 0:
-        systemd_probe_succeeded = True
-        for line in res.stdout.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                sysd_env[k] = v
-except Exception:
-    pass
+    # unregister-app
+    subparsers.add_parser("unregister-app")
 
-cursor_vars = ("HYPRCURSOR_THEME", "HYPRCURSOR_SIZE", "XCURSOR_THEME", "XCURSOR_SIZE")
+    # deactivate
+    subparsers.add_parser("deactivate")
 
-def capture(mapping, name):
-    return {"present": name in mapping, "value": mapping.get(name, "")}
+    # purge
+    subparsers.add_parser("purge")
 
-def capture_file(path):
-    result = {"present": os.path.isfile(path)}
-    if result["present"]:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                result["content"] = f.read()
-            result["mode"] = os.stat(path).st_mode & 0o777
-        except Exception as exc:
-            result["readError"] = str(exc)
-    return result
+    # on-destroy
+    p_destroy = subparsers.add_parser("on-destroy")
+    p_destroy.add_argument("--plugin-dir", default="", help="Plugin checkout directory path")
 
-uwsm_common = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
-uwsm_hypr = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
+    # audit-installation
+    subparsers.add_parser("audit-installation")
 
-data = {
-    "version": 2,
-    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-    "gtkTheme": {
-        "present": gtk_theme_present,
-        "value": gtk_theme_val
-    },
-    "gtkSize": {
-        "present": gtk_size_present,
-        "value": gtk_size_val
-    },
-    "systemdProbeSucceeded": systemd_probe_succeeded,
-    "systemdEnvironment": {name: capture(sysd_env, name) for name in cursor_vars},
-    "processEnvironment": {name: capture(os.environ, name) for name in cursor_vars},
-    "uwsmEnvCommon": capture_file(uwsm_common),
-    "uwsmEnvHyprland": capture_file(uwsm_hypr)
-}
+    # install-integration
+    p_inst = subparsers.add_parser("install-integration")
+    p_inst.add_argument("--source", required=True, help="Plugin source root directory")
 
-tmp_path = snapshot_path + f".tmp.{os.getpid()}"
-with open(tmp_path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-os.chmod(tmp_path, 0o600)
-os.replace(tmp_path, snapshot_path)
-PY
-}
+    # remove-integration
+    subparsers.add_parser("remove-integration")
 
-restore_original_state() {
-  python3 - <<'PY' "$SNAPSHOT_FILE" "$CONFIG_HOME" "$HOME_DIR"
-import sys, os, json, subprocess
+    args = parser.parse_args()
 
-snapshot_path = sys.argv[1]
-config_home = sys.argv[2]
-home = sys.argv[3]
+    if args.action == "snapshot-original-state":
+        res = cleanup_engine.snapshot_original_state()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+    elif args.action == "restore-original-state":
+        res = cleanup_engine.restore_original_state()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+    elif args.action == "unregister-app":
+        res = cleanup_engine.unregister_app()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+    elif args.action == "deactivate":
+        res = cleanup_engine.deactivate()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+    elif args.action == "purge":
+        res = cleanup_engine.purge()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+    elif args.action == "on-destroy":
+        res = cleanup_engine.on_destroy(args.plugin_dir)
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+    elif args.action == "audit-installation":
+        res = cleanup_engine.audit_installation()
+        emit_bounded_json(res, exit_code=0)
+    elif args.action == "install-integration":
+        res = cleanup_engine.install_integration(args.source)
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+    elif args.action == "remove-integration":
+        res = cleanup_engine.remove_integration()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
 
-snap = None
-if os.path.isfile(snapshot_path):
-    try:
-        with open(snapshot_path, "r", encoding="utf-8") as f:
-            snap = json.load(f)
-    except Exception as e:
-        print(f"Warning: failed to read snapshot {snapshot_path}: {e}", file=sys.stderr)
 
-def get_system_default_cursor():
-    for p in ["/usr/share/icons/default/index.theme", os.path.expanduser("~/.local/share/icons/default/index.theme"), os.path.expanduser("~/.icons/default/index.theme")]:
-        if os.path.isfile(p):
-            try:
-                with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        if line.strip().startswith("Inherits="):
-                            inh = line.strip().split("=", 1)[1].strip()
-                            if inh: return inh
-            except Exception:
-                pass
-    for cand in ["Bibata-Catppuccin-Mocha", "Adwaita", "Tokyonight-Dark"]:
-        if os.path.isdir(f"/usr/share/icons/{cand}"):
-            return cand
-    return "Adwaita"
-
-plugin_themes = {"banana", "phinger", "oreo", "volantes", "nordzy", "capitaine", "banana-catppuccin-mocha"}
-
-is_valid_snap = False
-if snap and isinstance(snap, dict) and snap.get("version") == 2:
-    gtk_theme = snap.get("gtkTheme", {})
-    gtk_size = snap.get("gtkSize", {})
-    systemd_env = snap.get("systemdEnvironment", {})
-    process_env = snap.get("processEnvironment", {})
-    uwsm_common_state = snap.get("uwsmEnvCommon", {"present": False})
-    uwsm_hypr_state = snap.get("uwsmEnvHyprland", {"present": False})
-    val_name = str(gtk_theme.get("value", "")).lower()
-    if val_name not in plugin_themes and not val_name.startswith("cursorswitcher-"):
-        is_valid_snap = True
-elif snap and isinstance(snap, dict) and snap.get("version") == 1:
-    gtk_theme = snap.get("gtkTheme", {})
-    gtk_size = snap.get("gtkSize", {})
-    systemd_env = {
-        "HYPRCURSOR_THEME": snap.get("hyprcursorTheme", {}),
-        "HYPRCURSOR_SIZE": snap.get("hyprcursorSize", {}),
-        "XCURSOR_THEME": snap.get("xcursorTheme", {}),
-        "XCURSOR_SIZE": snap.get("xcursorSize", {}),
-    }
-    process_env = dict(systemd_env)
-    uwsm_common_state = {"present": bool(snap.get("uwsmEnvCommonExisted", False))}
-    uwsm_hypr_state = {"present": bool(snap.get("uwsmEnvHyprlandExisted", False))}
-    val_name = str(gtk_theme.get("value", "")).lower()
-    if val_name not in plugin_themes and not val_name.startswith("cursorswitcher-"):
-        is_valid_snap = True
-
-if not is_valid_snap:
-    def_cursor = get_system_default_cursor()
-    gtk_theme = {"present": True, "value": def_cursor}
-    gtk_size = {"present": True, "value": 24}
-    systemd_env = {
-        "HYPRCURSOR_THEME": {"present": False, "value": ""},
-        "HYPRCURSOR_SIZE": {"present": False, "value": ""},
-        "XCURSOR_THEME": {"present": True, "value": def_cursor},
-        "XCURSOR_SIZE": {"present": True, "value": "24"}
-    }
-    process_env = dict(systemd_env)
-    uwsm_common_state = {"present": False}
-    uwsm_hypr_state = {"present": False}
-
-# 1. Restore GTK / GSettings
-try:
-    if gtk_theme.get("present") and gtk_theme.get("value"):
-        subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", str(gtk_theme["value"])],
-                       capture_output=True, timeout=2)
-    else:
-        subprocess.run(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-theme"],
-                       capture_output=True, timeout=2)
-    if gtk_size.get("present") and gtk_size.get("value"):
-        subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(gtk_size["value"])],
-                       capture_output=True, timeout=2)
-    else:
-        subprocess.run(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-size"],
-                       capture_output=True, timeout=2)
-except Exception:
-    pass
-
-# 2. Restore systemd user environment & DBus activation environment
-set_assignments = []
-unset_names = []
-
-for key in ("HYPRCURSOR_THEME", "HYPRCURSOR_SIZE", "XCURSOR_THEME", "XCURSOR_SIZE"):
-    obj = systemd_env.get(key, {})
-    if obj.get("present") and obj.get("value") is not None and str(obj.get("value")) != "":
-        set_assignments.append(f"{key}={obj['value']}")
-    else:
-        unset_names.append(key)
-
-if set_assignments:
-    try:
-        subprocess.run(["systemctl", "--user", "set-environment"] + set_assignments,
-                       capture_output=True, timeout=2)
-        subprocess.run(["dbus-update-activation-environment", "--systemd"] + set_assignments,
-                       capture_output=True, timeout=2)
-    except Exception:
-        pass
-
-if unset_names:
-    try:
-        subprocess.run(["systemctl", "--user", "unset-environment"] + unset_names,
-                       capture_output=True, timeout=2)
-        dbus_clears = [f"{k}=" for k in unset_names]
-        subprocess.run(["dbus-update-activation-environment", "--systemd"] + dbus_clears,
-                       capture_output=True, timeout=2)
-    except Exception:
-        pass
-
-# 3. Restore live compositor cursor via hyprctl
-target_theme = str(gtk_theme.get("value") or get_system_default_cursor())
-target_size = int(gtk_size.get("value") or 24)
-
-try:
-    subprocess.run(["hyprctl", "setcursor", target_theme, str(target_size)],
-                   capture_output=True, timeout=2)
-except Exception:
-    pass
-
-# 4. Restore exact pre-plugin UWSM fragment state.
-uwsm_common = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
-uwsm_hypr = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
-
-def restore_file(path, state):
-    try:
-        if state.get("present") and "content" in state:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            tmp = path + f".restore.{os.getpid()}"
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.write(state["content"])
-            os.chmod(tmp, int(state.get("mode", 0o600)))
-            os.replace(tmp, path)
-        elif not state.get("present") and os.path.lexists(path):
-            os.unlink(path)
-        elif state.get("present") and "content" not in state:
-            print(f"Warning: cannot restore unread pre-existing UWSM fragment: {path}", file=sys.stderr)
-    except Exception as exc:
-        print(f"Warning: failed restoring UWSM fragment {path}: {exc}", file=sys.stderr)
-
-restore_file(uwsm_common, uwsm_common_state)
-restore_file(uwsm_hypr, uwsm_hypr_state)
-PY
-}
-
-unregister_app() {
-  rm -f -- "$BIN_DIR/omarchy-cursor-switcher"
-  rm -f -- "$APP_DIR/omarchy-cursor-switcher.desktop"
-  rm -f -- "$DATA_HOME"/icons/hicolor/*/apps/omarchy-cursor-switcher.*
-  rm -f -- "$DATA_HOME"/pixmaps/omarchy-cursor-switcher.*
-
-  if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database -q "$APP_DIR" 2>/dev/null || true
-  fi
-  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    gtk-update-icon-cache -q "$DATA_HOME/icons/hicolor" 2>/dev/null || true
-  fi
-}
-
-deactivate() {
-  restore_original_state
-  unregister_app
-}
-
-purge() {
-  deactivate
-
-  local errors=0
-
-  remove_owned_theme() {
-    local target=$1 marker=$2 canonical_root canonical_target
-    canonical_root=$(realpath -m -- "$ICONS_DIR") || return 1
-    canonical_target=$(realpath -m -- "$target") || return 1
-    if [[ $canonical_target != "$canonical_root"/* || ! -f $target/$marker ]]; then
-      log "refusing unsafe or unowned theme removal: $target"
-      return 1
-    fi
-    rm -rf -- "$target" || return 1
-  }
-
-  # Remove plugin-owned bundled themes (verify marker .omarchy-cursor-switcher-theme)
-  if [[ -d $ICONS_DIR ]]; then
-    local d
-    for d in "$ICONS_DIR"/*; do
-      [[ -d $d ]] || continue
-      if [[ -f $d/.omarchy-cursor-switcher-theme ]]; then
-        remove_owned_theme "$d" .omarchy-cursor-switcher-theme || errors=1
-      fi
-    done
-  fi
-
-  # Remove plugin-owned converted XCursor->Hyprcursor themes (verify marker .omarchy-cursor-switcher-converted)
-  if [[ -d $ICONS_DIR ]]; then
-    local c
-    for c in "$ICONS_DIR"/CursorSwitcher-XCursor-*; do
-      [[ -d $c ]] || continue
-      if [[ -f $c/.omarchy-cursor-switcher-converted ]]; then
-        remove_owned_theme "$c" .omarchy-cursor-switcher-converted || errors=1
-      fi
-    done
-  fi
-
-  # Remove plugin-owned imported themes (verify marker .omarchy-cursor-switcher-imported)
-  if [[ -d $ICONS_DIR ]]; then
-    local imp
-    for imp in "$ICONS_DIR"/CursorSwitcher-Imported-*; do
-      [[ -d $imp ]] || continue
-      if [[ -f $imp/.omarchy-cursor-switcher-imported ]]; then
-        remove_owned_theme "$imp" .omarchy-cursor-switcher-imported || errors=1
-      fi
-    done
-  fi
-
-  # Remove preview cache
-  rm -rf -- "$CACHE_HOME/omarchy-cursor-switcher"
-
-  # Remove state and snapshot files
-  rm -f -- "$STATE_FILE"
-  rm -f -- "$SNAPSHOT_FILE"
-
-  # Remove current and prerelease cleanup-helper locations. Deleting the
-  # running script is safe on Linux; its open file remains readable to bash.
-  rm -rf -- "$LEGACY_CLEANUP_DIR"
-  rm -rf -- "$CLEANUP_DIR"
-
-  return "$errors"
-}
-
-on_destroy() {
-  local plugin_dir=""
-  while (($#)); do
-    case $1 in
-      --plugin-dir) plugin_dir=${2:-}; shift 2 ;;
-      *) die "unknown on-destroy argument: $1" ;;
-    esac
-  done
-
-  # 1. Immediately deactivate live environment & unregister app
-  deactivate
-
-  # 2. Check if the plugin checkout directory still exists or has been unlinked/removed
-  local is_removed=false
-  if [[ -n $plugin_dir ]]; then
-    local check_path=$plugin_dir
-    local i
-    for i in {1..30}; do
-      if [[ ! -d $check_path ]]; then
-        is_removed=true
-        break
-      fi
-      sleep 0.05
-    done
-  else
-    is_removed=true
-  fi
-
-  if [[ $is_removed == true ]]; then
-    purge
-  fi
-}
-
-audit_installation() {
-  python3 - <<'PY' "$CONFIG_HOME" "$DATA_HOME" "$CACHE_HOME" "$HOME_DIR"
-import sys, os, json, glob
-
-config_home, data_home, cache_home, home = sys.argv[1:5]
-
-icons_dir = os.path.join(data_home, "icons")
-bundled_themes = []
-converted_themes = []
-imported_themes = []
-
-if os.path.isdir(icons_dir):
-    for d in glob.glob(os.path.join(icons_dir, "*")):
-        if os.path.isfile(os.path.join(d, ".omarchy-cursor-switcher-theme")):
-            bundled_themes.append(os.path.basename(d))
-        elif os.path.isfile(os.path.join(d, ".omarchy-cursor-switcher-converted")):
-            converted_themes.append(os.path.basename(d))
-        elif os.path.isfile(os.path.join(d, ".omarchy-cursor-switcher-imported")):
-            imported_themes.append(os.path.basename(d))
-
-icon_assets = []
-for pattern in (
-    os.path.join(data_home, "icons", "hicolor", "*", "apps", "omarchy-cursor-switcher.*"),
-    os.path.join(data_home, "pixmaps", "omarchy-cursor-switcher.*"),
-):
-    icon_assets.extend(glob.glob(pattern))
-
-# Keep the ownership check deliberately strict enough to ignore a user's
-# pre-existing file restored from the snapshot, while recognizing old IDs.
-def managed_fragment(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            first = f.readline().strip()
-        return first.startswith("# Managed by ") and first.endswith("cursor-switcher.")
-    except OSError:
-        return False
-
-uwsm_common_path = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
-uwsm_hypr_path = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
-
-report = {
-    "snapshot": os.path.isfile(os.path.join(config_home, "omarchy", "cursor-switcher-original-state.json")),
-    "state": os.path.isfile(os.path.join(config_home, "omarchy", "cursor-switcher.json")),
-    "desktop_entry": os.path.isfile(os.path.join(data_home, "applications", "omarchy-cursor-switcher.desktop")),
-    "launcher": os.path.isfile(os.path.join(home, ".local", "bin", "omarchy-cursor-switcher")),
-    "icon": bool(icon_assets),
-    "icon_assets": sorted(icon_assets),
-    "uwsm_env_common": managed_fragment(uwsm_common_path),
-    "uwsm_env_hyprland": managed_fragment(uwsm_hypr_path),
-    "bundled_themes": bundled_themes,
-    "converted_themes": converted_themes,
-    "imported_themes": imported_themes,
-    "cache_previews": os.path.isdir(os.path.join(cache_home, "omarchy-cursor-switcher")),
-    "cleanup_helper": os.path.isfile(os.path.join(data_home, "omarchy-cursor-switcher", "omarchy-cursor-switcher-cleanup")),
-    "legacy_cleanup_helper": os.path.lexists(os.path.join(data_home, "omarchy", "cursor-switcher"))
-}
-
-is_clean = not (
-    report["snapshot"] or report["state"] or report["desktop_entry"] or
-    report["launcher"] or report["icon"] or report["uwsm_env_common"] or
-    report["uwsm_env_hyprland"] or bool(report["bundled_themes"]) or
-    bool(report["converted_themes"]) or bool(report["imported_themes"]) or
-    report["cache_previews"] or report["cleanup_helper"] or report["legacy_cleanup_helper"]
-)
-report["is_clean"] = is_clean
-
-print(json.dumps(report, indent=2))
-PY
-}
-
-case ${1:-} in
-  snapshot-original-state) shift; snapshot_original_state "$@" ;;
-  restore-original-state) shift; restore_original_state "$@" ;;
-  unregister-app) shift; unregister_app "$@" ;;
-  deactivate) shift; deactivate "$@" ;;
-  purge) shift; purge "$@" ;;
-  on-destroy) shift; on_destroy "$@" ;;
-  audit-installation) shift; audit_installation "$@" ;;
-  *) die "usage: $PROGRAM {snapshot-original-state|restore-original-state|unregister-app|deactivate|purge|on-destroy|audit-installation} ..." ;;
-esac
+if __name__ == "__main__":
+    main()

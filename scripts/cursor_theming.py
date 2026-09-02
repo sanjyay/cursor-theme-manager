@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Multi-Role Cursor Preview Extractor for Omarchy Cursor Switcher.
+Multi-Role Cursor Preview Extractor for Cursor Theme Manager.
 Resolves generic semantic cursor roles (default, pointer, text, move, resize, wait)
 against Hyprcursor and XCursor theme assets and caches rendered role previews.
+All external tool execution is supervised via runtime_safety.run_bounded.
 """
 
 import sys
@@ -10,16 +11,23 @@ import os
 import json
 import shutil
 import zipfile
-import subprocess
-import hashlib
 from pathlib import Path
 
+# Add script dir to path
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from runtime_safety import (
+    run_bounded, sanitize_text, emit_bounded_json,
+    TIMEOUT_PREVIEW_ROLES, TIMEOUT_ALL_PREVIEW_ROLES,
+    LIMIT_STDOUT_SMALL, LIMIT_STDOUT_MEDIUM, LIMIT_STDOUT_LARGE, LIMIT_STDERR_DEFAULT
+)
+
 HOME = Path(os.path.expanduser("~"))
-CACHE_DIR = HOME / ".cache" / "omarchy-cursor-switcher"
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", str(HOME / ".cache"))) / "omarchy-cursor-switcher"
 ROLES_DIR = CACHE_DIR / "roles"
 LOCAL_ICONS = Path(os.environ.get("XDG_DATA_HOME", str(HOME / ".local" / "share"))) / "icons"
-SCRIPT_DIR = Path(__file__).resolve().parent
-PLUGIN_ROOT = SCRIPT_DIR.parent
 
 # Canonical Semantic Preview Roles with prioritized alias candidate lists
 SEMANTIC_ROLE_ALIASES = {
@@ -82,23 +90,24 @@ def find_theme_directory(theme_input, theme_path_hint=None):
 
     for base in search_roots:
         if base.is_dir():
-            for d in base.iterdir():
-                if not d.is_dir():
-                    continue
-                if d.name.lower() == s.lower():
-                    return d
-                idx = d / "index.theme"
-                if idx.is_file():
-                    try:
-                        content = idx.read_text(encoding="utf-8", errors="ignore")
-                        for line in content.splitlines():
-                            if line.startswith("Name=") and line[5:].strip().lower() == s.lower():
-                                return d
-                    except Exception:
-                        pass
+            try:
+                for d in base.iterdir():
+                    if not d.is_dir():
+                        continue
+                    if d.name.lower() == s.lower():
+                        return d
+                    idx = d / "index.theme"
+                    if idx.is_file():
+                        try:
+                            content = idx.read_text(encoding="utf-8", errors="ignore")
+                            for line in content.splitlines()[:100]:
+                                if line.startswith("Name=") and line[5:].strip().lower() == s.lower():
+                                    return d
+                        except Exception:
+                            pass
+            except Exception:
+                pass
     return None
-
-
 
 
 def extract_role_from_hlc(hlc_path, out_file_base):
@@ -107,11 +116,11 @@ def extract_role_from_hlc(hlc_path, out_file_base):
         hotspot_y = -1.0
         with zipfile.ZipFile(hlc_path, "r") as zf:
             names = zf.namelist()
-            # Try to read meta.hl for hotspot
+            # Try to read meta.hl for hotspot (bounded read)
             meta_names = [n for n in names if n == "meta.hl" or n.endswith("/meta.hl")]
             if meta_names:
                 try:
-                    meta_text = zf.read(meta_names[0]).decode("utf-8", errors="ignore")
+                    meta_text = zf.read(meta_names[0])[:8192].decode("utf-8", errors="ignore")
                     define_size = 24.0
                     for line in meta_text.splitlines():
                         line = line.strip()
@@ -136,14 +145,14 @@ def extract_role_from_hlc(hlc_path, out_file_base):
             svgs = [n for n in names if n.endswith(".svg")]
             if svgs:
                 out_path = out_file_base.with_suffix(".svg")
-                out_path.write_bytes(zf.read(svgs[0]))
+                out_path.write_bytes(zf.read(svgs[0])[:512 * 1024])
                 return str(out_path), hotspot_x, hotspot_y
 
             pngs = [n for n in names if n.endswith(".png")]
             if pngs:
                 pngs.sort(key=lambda n: len(n))
                 out_path = out_file_base.with_suffix(".png")
-                out_path.write_bytes(zf.read(pngs[-1]))
+                out_path.write_bytes(zf.read(pngs[-1])[:512 * 1024])
                 return str(out_path), hotspot_x, hotspot_y
     except Exception:
         pass
@@ -152,41 +161,49 @@ def extract_role_from_hlc(hlc_path, out_file_base):
 
 def extract_role_from_xcursor(cursor_file, out_file_base):
     try:
-        temp_dir = out_file_base.parent / f"_tmp_{out_file_base.name}"
+        temp_dir = out_file_base.parent / f"_tmp_{out_file_base.name}_{os.getpid()}"
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
         temp_dir.mkdir(parents=True, exist_ok=True)
-        res = subprocess.run(["xcur2png", "-d", str(temp_dir), str(cursor_file)], cwd=str(temp_dir), capture_output=True, text=True)
-        if res.returncode == 0:
-            pngs = list(temp_dir.glob("*.png"))
-            conf_files = list(temp_dir.glob("*.conf"))
-            hotspot_x = -1.0
-            hotspot_y = -1.0
-            if conf_files:
-                try:
-                    conf_lines = conf_files[0].read_text(encoding="utf-8", errors="ignore").splitlines()
-                    for line in conf_lines:
-                        line = line.strip()
-                        if line and not line.startswith("#"):
-                            parts = line.split()
-                            if len(parts) >= 3:
-                                sz = float(parts[0])
-                                xh = float(parts[1])
-                                yh = float(parts[2])
-                                if sz > 0:
-                                    hotspot_x = xh / sz
-                                    hotspot_y = yh / sz
-                                break
-                except Exception:
-                    pass
+        try:
+            res = run_bounded(
+                ["xcur2png", "-d", str(temp_dir), str(cursor_file)],
+                cwd=str(temp_dir),
+                timeout=3.0,
+                stdout_limit=LIMIT_STDOUT_SMALL,
+                stderr_limit=LIMIT_STDERR_DEFAULT
+            )
+            if res.ok:
+                pngs = list(temp_dir.glob("*.png"))
+                conf_files = list(temp_dir.glob("*.conf"))
+                hotspot_x = -1.0
+                hotspot_y = -1.0
+                if conf_files:
+                    try:
+                        conf_lines = conf_files[0].read_text(encoding="utf-8", errors="ignore").splitlines()[:50]
+                        for line in conf_lines:
+                            line = line.strip()
+                            if line and not line.startswith("#"):
+                                parts = line.split()
+                                if len(parts) >= 3:
+                                    sz = float(parts[0])
+                                    xh = float(parts[1])
+                                    yh = float(parts[2])
+                                    if sz > 0:
+                                        hotspot_x = xh / sz
+                                        hotspot_y = yh / sz
+                                    break
+                    except Exception:
+                        pass
 
-            if pngs:
-                pngs.sort(key=lambda p: p.stat().st_size, reverse=True)
-                target_png = out_file_base.with_suffix(".png")
-                shutil.copy2(pngs[0], target_png)
+                if pngs:
+                    pngs.sort(key=lambda p: p.stat().st_size, reverse=True)
+                    target_png = out_file_base.with_suffix(".png")
+                    shutil.copy2(pngs[0], target_png)
+                    return str(target_png), hotspot_x, hotspot_y
+        finally:
+            if temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
-                return str(target_png), hotspot_x, hotspot_y
-        shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception:
         pass
     return None, -1.0, -1.0
@@ -198,7 +215,7 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
     if not theme_dir or not theme_dir.is_dir():
         return {}
 
-    theme_id = theme_dir.name
+    theme_id = sanitize_text(theme_dir.name, max_len=128)
     cache_target_dir = ROLES_DIR / theme_id
     cache_target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -242,7 +259,7 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
                         matched_source = alias
                         break
 
-        # 2. XCursor shapes in cursors/* (resolving symlinks safely)
+        # 2. XCursor shapes in cursors/*
         if not resolved_file and (theme_dir / "cursors").is_dir():
             for alias in aliases:
                 cur = theme_dir / "cursors" / alias
@@ -257,7 +274,7 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
             roles_found[role_key] = resolved_file
             roles_meta[role_key] = {
                 "label": ROLE_LABELS.get(role_key, role_key.capitalize()),
-                "source": matched_source,
+                "source": sanitize_text(matched_source, max_len=64),
                 "hotspot_x": round(hx, 3) if hx >= 0 else -1,
                 "hotspot_y": round(hy, 3) if hy >= 0 else -1
             }
@@ -282,10 +299,13 @@ def get_all_theme_role_previews():
 
     for base in search_roots:
         if base.is_dir():
-            for d in base.iterdir():
-                if d.is_dir():
-                    candidates.append(d.name)
-    for c in sorted(set(candidates)):
+            try:
+                for d in base.iterdir():
+                    if d.is_dir():
+                        candidates.append(d.name)
+            except Exception:
+                pass
+    for c in sorted(set(candidates))[:128]:
         try:
             r = get_theme_role_previews(c)
             if r and any(k for k in r if not k.startswith("_")):
@@ -296,10 +316,9 @@ def get_all_theme_role_previews():
     return results
 
 
-
 def main():
     if len(sys.argv) < 2:
-        print("Usage: cursor_theming.py get-preview-roles [--theme <name>] [--path <path>]", file=sys.stderr)
+        sys.stderr.write("Usage: cursor_theming.py get-preview-roles [--theme <name>] [--path <path>]\n")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -320,15 +339,14 @@ def main():
             else:
                 i += 1
         roles = get_theme_role_previews(theme, path_hint)
-        print(json.dumps(roles))
+        emit_bounded_json(roles, max_bytes=LIMIT_STDOUT_MEDIUM)
     elif cmd == "get-all-preview-roles":
         all_roles = get_all_theme_role_previews()
-        print(json.dumps(all_roles))
+        emit_bounded_json(all_roles, max_bytes=LIMIT_STDOUT_LARGE)
     else:
-        print(f"Unknown command: {cmd}", file=sys.stderr)
+        sys.stderr.write(f"Unknown command: {cmd}\n")
         sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
-

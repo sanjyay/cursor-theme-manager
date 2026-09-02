@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Secure Import and Management Engine for Omarchy Cursor Switcher.
+Secure Import and Management Engine for Cursor Theme Manager.
 Imports local cursor theme directories or safe archives chosen by the user into ~/.local/share/icons.
+All external tool execution is supervised via runtime_safety.run_bounded.
 """
 
 import sys
@@ -14,10 +15,20 @@ import zipfile
 import hashlib
 import tempfile
 import argparse
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Add script dir to path
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from runtime_safety import (
+    run_bounded, sanitize_text, emit_bounded_json,
+    TIMEOUT_CONVERT, TIMEOUT_IMPORT, LIMIT_STDOUT_MEDIUM, LIMIT_STDERR_DEFAULT,
+    MAX_LEN_DISPLAY_NAME, MAX_LEN_THEME_ID, MAX_LEN_PATH, MAX_LEN_LICENSE
+)
+import secure_state
 
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024   # 100 MB
 MAX_EXTRACTED_BYTES = 750 * 1024 * 1024  # 750 MB
@@ -76,18 +87,21 @@ def detect_license_text(content: str) -> str:
 
 
 def scan_license_in_dir(theme_dir: str) -> str:
-    for fname in os.listdir(theme_dir):
-        if re.match(r'^(license|copying|copyright)(\.[a-z0-9]+)?$', fname, re.IGNORECASE):
-            fpath = os.path.join(theme_dir, fname)
-            if os.path.isfile(fpath) and not os.path.islink(fpath):
-                try:
-                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-                        txt = f.read(8192)
-                        detected = detect_license_text(txt)
-                        if detected != "Unknown":
-                            return detected
-                except Exception:
-                    pass
+    try:
+        for fname in os.listdir(theme_dir):
+            if re.match(r'^(license|copying|copyright)(\.[a-z0-9]+)?$', fname, re.IGNORECASE):
+                fpath = os.path.join(theme_dir, fname)
+                if os.path.isfile(fpath) and not os.path.islink(fpath):
+                    try:
+                        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                            txt = f.read(8192)
+                            detected = detect_license_text(txt)
+                            if detected != "Unknown":
+                                return detected
+                    except Exception:
+                        pass
+    except Exception:
+        pass
     return "Unknown"
 
 
@@ -112,7 +126,6 @@ def compute_content_hash(theme_root: str) -> str:
 
 
 def validate_theme_security(theme_root: str):
-
     """Ensures no dangerous installer scripts, forbidden extensions, or executable binaries exist in theme."""
     for root, _, files in os.walk(theme_root, followlinks=False):
         for name in files:
@@ -188,7 +201,6 @@ def extract_archive_safely(archive_path: str, stage_dir: str):
                 total_bytes += m.size
                 if total_bytes > MAX_EXTRACTED_BYTES:
                     raise ValueError(f"Extracted content exceeds size limit of {MAX_EXTRACTED_BYTES // (1024*1024)} MB")
-            # Extract
             if hasattr(tarfile, 'data_filter'):
                 tf.extractall(stage_dir, filter='data')
             else:
@@ -283,9 +295,9 @@ def detect_theme_metadata(theme_root: str, user_name_override: str = ""):
     license_name = scan_license_in_dir(theme_root)
 
     return {
-        "declared_name": declared_name,
+        "declared_name": sanitize_text(declared_name, max_len=MAX_LEN_DISPLAY_NAME),
         "formats": formats,
-        "license": license_name
+        "license": sanitize_text(license_name, max_len=MAX_LEN_LICENSE)
     }
 
 
@@ -379,7 +391,6 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
             "contentHash": content_hash,
             "importedAt": datetime.now(timezone.utc).isoformat(),
             "formats": meta["formats"],
-
             "xcursor": internal_id if "xcursor" in meta["formats"] else "",
             "hyprcursor": internal_id if "hyprcursor" in meta["formats"] else "",
             "path": install_path,
@@ -391,12 +402,12 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
             cursorctl_bin = os.path.join(script_dir or os.path.dirname(__file__), "cursorctl")
             if os.path.isfile(cursorctl_bin):
                 try:
-                    res = subprocess.run([
+                    res = run_bounded([
                         cursorctl_bin, "ensure-hyprcursor",
                         "--xcursor", internal_id,
                         "--theme-path", install_path
-                    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
-                    if res.returncode == 0:
+                    ], timeout=TIMEOUT_CONVERT, stdout_limit=LIMIT_STDOUT_MEDIUM, stderr_limit=LIMIT_STDERR_DEFAULT)
+                    if res.ok:
                         out = res.stdout.strip()
                         if out:
                             theme_record["hyprcursor"] = out
@@ -416,7 +427,7 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
         }
 
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": sanitize_text(str(e), max_len=256)}
     finally:
         if os.path.exists(stage_temp):
             shutil.rmtree(stage_temp, ignore_errors=True)
@@ -461,8 +472,8 @@ def run_rename(theme_id: str, new_name: str):
     if not theme_id or not new_name:
         return {"ok": False, "error": "Missing theme ID or new name"}
 
-    clean_name = re.sub(r'[\r\n\t]+', ' ', new_name).strip()
-    if not clean_name or len(clean_name) > 100:
+    clean_name = sanitize_text(new_name, max_len=100)
+    if not clean_name:
         return {"ok": False, "error": "Invalid theme name"}
 
     if not theme_id.startswith("CursorSwitcher-Imported-") or "/" in theme_id or ".." in theme_id:
@@ -528,25 +539,20 @@ def run_rename(theme_id: str, new_name: str):
             except Exception:
                 pass
 
-    config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
-    state_file = os.path.join(config_home, "omarchy", "cursor-switcher.json")
-    if os.path.isfile(state_file):
-        try:
-            with open(state_file, "r", encoding="utf-8") as f:
-                st = json.load(f)
-            if st.get("theme") == theme_id:
-                st["displayName"] = clean_name
-                with open(state_file, "w", encoding="utf-8") as f:
-                    json.dump(st, f, indent=2)
-        except Exception:
-            pass
+    # Update secure state if currently active theme is this theme
+    try:
+        st = secure_state.read_state()
+        if st.get("theme") and isinstance(st["theme"], dict) and st["theme"].get("id") == theme_id:
+            st["theme"]["displayName"] = clean_name
+            secure_state.write_state(st)
+    except Exception:
+        pass
 
     return {
         "ok": True,
         "id": theme_id,
         "displayName": clean_name
     }
-
 
 
 def main():
@@ -568,23 +574,18 @@ def main():
     p_rename.add_argument("--name", required=True, help="New theme display name")
 
     args = parser.parse_args()
-
     script_dir = os.path.dirname(os.path.abspath(__file__))
+
     if args.action == "import":
         result = run_import(args.source, args.name, script_dir)
-        print(json.dumps(result, indent=2))
-        sys.exit(0 if result.get("ok") else 1)
+        emit_bounded_json(result, max_bytes=LIMIT_STDOUT_MEDIUM, exit_code=0 if result.get("ok") else 1)
     elif args.action == "remove":
         result = run_remove(args.id)
-        print(json.dumps(result, indent=2))
-        sys.exit(0 if result.get("ok") else 1)
+        emit_bounded_json(result, max_bytes=LIMIT_STDOUT_MEDIUM, exit_code=0 if result.get("ok") else 1)
     elif args.action == "rename":
         result = run_rename(args.id, args.name)
-        print(json.dumps(result, indent=2))
-        sys.exit(0 if result.get("ok") else 1)
+        emit_bounded_json(result, max_bytes=LIMIT_STDOUT_MEDIUM, exit_code=0 if result.get("ok") else 1)
 
 
 if __name__ == "__main__":
     main()
-
-

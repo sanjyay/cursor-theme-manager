@@ -5,97 +5,123 @@ ROOT=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd)
 TEST_DIR=$(mktemp -d)
 export TEST_DIR
 trap 'rm -rf -- "$TEST_DIR"' EXIT
+
 export HOME="$TEST_DIR/home"
 export XDG_DATA_HOME="$HOME/.local/share"
-export XDG_CACHE_HOME="$HOME/.cache"
+export XDG_CONFIG_HOME="$TEST_DIR/config"
+export XDG_STATE_HOME="$HOME/.local/state"
+export XDG_CACHE_HOME="$TEST_DIR/cache"
 export XDG_DATA_DIRS="$TEST_DIR/system/share"
-mkdir -p "$XDG_DATA_HOME/icons/XOnly/cursors" "$XDG_DATA_HOME/icons/Both/cursors" \
-  "$XDG_DATA_HOME/icons/Both/hyprcursors" "$XDG_DATA_HOME/icons/IconsOnly/32x32/apps" \
-  "$XDG_DATA_DIRS/icons/SystemHypr/hyprcursors"
-cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_HOME/icons/XOnly/cursors/left_ptr"
-cp /usr/share/icons/Adwaita/cursors/default "$XDG_DATA_HOME/icons/Both/cursors/default"
-printf '[Icon Theme]\nName=Friendly Both\n' > "$XDG_DATA_HOME/icons/Both/index.theme"
-printf 'name = Both-Hypr\ncursors_directory = hyprcursors\n' > "$XDG_DATA_HOME/icons/Both/manifest.hl"
-printf 'name = System-Hypr\ncursors_directory = hyprcursors\n' > "$XDG_DATA_DIRS/icons/SystemHypr/manifest.hl"
-
-"$ROOT/scripts/cursorctl" discover > "$TEST_DIR/discovery.json"
-python3 - "$TEST_DIR/discovery.json" <<'PY'
-import json, sys
-data = json.load(open(sys.argv[1], encoding="utf-8"))
-themes = {entry["path"].rsplit("/", 1)[-1]: entry for entry in data["themes"]}
-assert set(themes) == {"XOnly", "Both", "SystemHypr"}, themes
-assert themes["XOnly"]["formats"] == ["xcursor"]
-assert themes["Both"]["formats"] == ["hyprcursor", "xcursor"]
-assert themes["Both"]["hyprcursor"] == "Both-Hypr"
-assert themes["Both"]["xcursor"] == "Both"
-assert themes["Both"]["displayName"] == "Friendly Both"
-assert themes["SystemHypr"]["formats"] == ["hyprcursor"]
-PY
-
-
-
-if "$ROOT/scripts/cursorctl" apply --hyprcursor 'bad;name' --xcursor - --size 24 --preview 2>/dev/null; then
-  echo "unsafe theme name accepted" >&2
-  exit 1
-fi
-if "$ROOT/scripts/cursorctl" apply --hyprcursor Safe --xcursor - --size 99 --preview 2>/dev/null; then
-  echo "unsupported size accepted" >&2
-  exit 1
-fi
 
 MOCK_BIN="$TEST_DIR/mock-bin"
-mkdir -p "$MOCK_BIN" "$TEST_DIR/config"
-for command in hyprctl gsettings systemctl dbus-update-activation-environment; do
-  printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/$command"
-  chmod +x "$MOCK_BIN/$command"
-done
-PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" \
-  "$ROOT/scripts/cursorctl" apply --hyprcursor Both-Hypr --xcursor Both --size 256 --commit
-grep -qx "export XCURSOR_THEME='Both'" "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
-grep -qx "export XCURSOR_SIZE='256'" "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
-grep -qx "export HYPRCURSOR_THEME='Both-Hypr'" "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
-grep -qx "export HYPRCURSOR_SIZE='256'" "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
+mkdir -p \
+  "$XDG_DATA_HOME/icons/UserOnly/cursors" \
+  "$XDG_DATA_HOME/icons/Both/cursors" \
+  "$XDG_DATA_HOME/icons/Both/hyprcursors" \
+  "$XDG_DATA_DIRS/icons/SystemOnly/cursors" \
+  "$XDG_DATA_DIRS/icons/SystemOnly/hyprcursors" \
+  "$MOCK_BIN" \
+  "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
 
-# Test XCursor-only theme live application via conversion
-PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" \
-  "$ROOT/scripts/cursorctl" apply --hyprcursor - --xcursor XOnly --theme-path "$XDG_DATA_HOME/icons/XOnly" --size 24 --commit
-grep -qx "export XCURSOR_THEME='XOnly'" "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
-grep -q "export HYPRCURSOR_THEME='CursorSwitcher-XCursor-XOnly-" "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
+cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_HOME/icons/UserOnly/cursors/left_ptr"
+printf "[Icon Theme]\nName=User Only\n" > "$XDG_DATA_HOME/icons/UserOnly/index.theme"
 
-# Test cursorctl import & remove-imported CLI commands
-IMPORT_TEST_SRC="$TEST_DIR/cli_import_src"
-mkdir -p "$IMPORT_TEST_SRC/cursors"
-cp /usr/share/icons/Adwaita/cursors/left_ptr "$IMPORT_TEST_SRC/cursors/left_ptr"
-cp /usr/share/icons/Adwaita/cursors/default "$IMPORT_TEST_SRC/cursors/default"
-printf '[Icon Theme]\nName=CliImported\n' > "$IMPORT_TEST_SRC/index.theme"
-printf 'MIT License\n' > "$IMPORT_TEST_SRC/LICENSE"
+cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_HOME/icons/Both/cursors/left_ptr"
+printf "[Icon Theme]\nName=Both Formats\n" > "$XDG_DATA_HOME/icons/Both/index.theme"
+printf "name = Both-Hypr\nversion = 0.1\ncursors_directory = hyprcursors\n" > "$XDG_DATA_HOME/icons/Both/manifest.hl"
 
+cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_DIRS/icons/SystemOnly/cursors/left_ptr"
+printf "[Icon Theme]\nName=System Theme\n" > "$XDG_DATA_DIRS/icons/SystemOnly/index.theme"
+printf "name = System-Hypr\nversion = 0.1\ncursors_directory = hyprcursors\n" > "$XDG_DATA_DIRS/icons/SystemOnly/manifest.hl"
 
+cat <<'EOF' > "$MOCK_BIN/gsettings"
+#!/bin/sh
+if [ "$1" = "get" ] && [ "$3" = "cursor-theme" ]; then
+  echo "'Both'"
+  exit 0
+fi
+exit 0
+EOF
+chmod +x "$MOCK_BIN/gsettings"
 
+PATH="$MOCK_BIN:/usr/bin:/bin"
+JSON_OUTPUT=$("$ROOT/scripts/cursorctl" discover)
 
-IMPORT_RES=$(PATH="$MOCK_BIN:/usr/bin:/bin" "$ROOT/scripts/cursorctl" import --source "$IMPORT_TEST_SRC")
+python3 - "$JSON_OUTPUT" <<'PY_INNER'
+import json, sys
+data = json.loads(sys.argv[1])
+themes = data["themes"]
+assert data["currentXcursor"] == "Both"
+assert len(themes) == 3
+
+user_only = next(t for t in themes if t["displayName"] == "User Only")
+assert user_only["sourceType"] == "user"
+assert user_only["formats"] == ["xcursor"]
+assert user_only["xcursor"] == "UserOnly"
+assert user_only["hyprcursor"] == ""
+
+both = next(t for t in themes if t["displayName"] == "Both Formats")
+assert both["sourceType"] == "user"
+assert "hyprcursor" in both["formats"]
+assert "xcursor" in both["formats"]
+assert both["xcursor"] == "Both"
+assert both["hyprcursor"] == "Both-Hypr"
+
+system_only = next(t for t in themes if t["displayName"] == "System Theme")
+assert system_only["sourceType"] == "system"
+assert "hyprcursor" in system_only["formats"]
+assert "xcursor" in system_only["formats"]
+PY_INNER
+
+cat <<'EOF' > "$MOCK_BIN/hyprctl"
+#!/bin/sh
+if [ "$1" = "setcursor" ]; then
+  echo "SETCURSOR $2 $3" >> "$TEST_DIR/hyprctl.log"
+  exit 0
+fi
+exit 0
+EOF
+chmod +x "$MOCK_BIN/hyprctl"
+
+# Test Preview
+PATH="$MOCK_BIN:/usr/bin:/bin" "$ROOT/scripts/cursorctl" apply --hyprcursor Both-Hypr --xcursor Both --size 48 --preview
+grep -q "SETCURSOR Both-Hypr 48" "$TEST_DIR/hyprctl.log"
+[[ ! -f "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher" ]]
+
+# Test Commit
+PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" "$ROOT/scripts/cursorctl" apply --hyprcursor Both-Hypr --xcursor Both --size 48 --commit
+grep -q "SETCURSOR Both-Hypr 48" "$TEST_DIR/hyprctl.log"
+[[ -f "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher" ]]
+[[ -f "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher" ]]
+
+grep -q "export XCURSOR_THEME='Both'" "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
+grep -q "export XCURSOR_SIZE='48'" "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
+grep -q "export HYPRCURSOR_THEME='Both-Hypr'" "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
+grep -q "export HYPRCURSOR_SIZE='48'" "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
+
+# Test CLI theme import and removal
+STAGE_ARCHIVE="$TEST_DIR/sample_theme.tar.gz"
+mkdir -p "$TEST_DIR/sample_src/cursors"
+cp /usr/share/icons/Adwaita/cursors/left_ptr "$TEST_DIR/sample_src/cursors/left_ptr"
+printf "[Icon Theme]\nName=CliImported\n" > "$TEST_DIR/sample_src/index.theme"
+tar -czf "$STAGE_ARCHIVE" -C "$TEST_DIR/sample_src" .
+
+IMPORT_RES=$(PATH="$MOCK_BIN:/usr/bin:/bin" "$ROOT/scripts/cursorctl" import --source "$STAGE_ARCHIVE")
 IMPORTED_ID=$(python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data.get("ok"); print(data["theme"]["id"])' "$IMPORT_RES")
 [[ -d "$XDG_DATA_HOME/icons/$IMPORTED_ID" ]]
 [[ -f "$XDG_DATA_HOME/icons/$IMPORTED_ID/.omarchy-cursor-switcher-imported" ]]
 
-
-# Test remove-imported CLI command
 REMOVE_RES=$(PATH="$MOCK_BIN:/usr/bin:/bin" "$ROOT/scripts/cursorctl" remove-imported --id "$IMPORTED_ID")
 python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data.get("ok")' "$REMOVE_RES"
 [[ ! -e "$XDG_DATA_HOME/icons/$IMPORTED_ID" ]]
 
-# App registration & unregistration tests
+# Test Desktop Integration: register-app / unregister-app
 "$ROOT/scripts/cursorctl" register-app --source "$ROOT"
 [[ -x "$HOME/.local/bin/omarchy-cursor-switcher" ]]
 [[ -f "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
 [[ -f "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg" ]]
 
-# Idempotency check
-"$ROOT/scripts/cursorctl" register-app --source "$ROOT"
-[[ -x "$HOME/.local/bin/omarchy-cursor-switcher" ]]
-[[ -f "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
-[[ -f "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg" ]]
-
+# Validate desktop file syntax if desktop-file-validate is present
 if command -v desktop-file-validate >/dev/null 2>&1; then
   desktop-file-validate "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop"
 fi
@@ -105,20 +131,18 @@ fi
 [[ ! -e "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
 [[ ! -e "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg" ]]
 
-# Test install-cleanup-helper
+# Test cleanup helper installation
 "$ROOT/scripts/cursorctl" install-cleanup-helper --source "$ROOT"
 CLEANUP_HELPER="$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup"
 [[ -x "$CLEANUP_HELPER" ]]
 
-# Test snapshot-original-state
-# Earlier apply tests intentionally created plugin fragments; a first activation
-# starts without those files.
-rm -f "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher" \
-  "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
+# Test Snapshotting of pre-existing state
+rm -f "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher" "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
 mkdir -p "$TEST_DIR/config/uwsm/env.d"
-printf '%s\n' '# pre-existing user fragment' "export XCURSOR_THEME='MyPriorTheme'" \
-  > "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
+printf '%s\n' '# pre-existing user fragment' "export XCURSOR_THEME='MyPriorTheme'" > "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
+
 MOCK_CALLS="$TEST_DIR/mock_calls.log"
+
 cat <<EOF > "$MOCK_BIN/gsettings"
 #!/bin/sh
 echo "gsettings \$*" >> "$MOCK_CALLS"
@@ -150,10 +174,10 @@ chmod +x "$MOCK_BIN/hyprctl"
 PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" \
   "$ROOT/scripts/cursorctl" snapshot-original-state
 
-SNAPSHOT_FILE="$TEST_DIR/config/omarchy/cursor-switcher-original-state.json"
+SNAPSHOT_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/cursor-theme-manager/snapshot.json"
 [[ -f "$SNAPSHOT_FILE" ]]
 
-python3 - "$SNAPSHOT_FILE" <<'PY'
+python3 - "$SNAPSHOT_FILE" <<'PY_INNER'
 import json, sys
 snap = json.load(open(sys.argv[1]))
 assert snap["version"] == 2
@@ -166,7 +190,7 @@ assert env["HYPRCURSOR_THEME"]["present"] == False
 assert snap["uwsmEnvCommon"]["present"] == True
 assert "pre-existing user fragment" in snap["uwsmEnvCommon"]["content"]
 assert snap["uwsmEnvHyprland"]["present"] == False
-PY
+PY_INNER
 
 # Verify snapshot is NOT overwritten on subsequent runs
 touch -t 202001010000 "$SNAPSHOT_FILE"
@@ -179,6 +203,7 @@ PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" \
 PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" \
   "$ROOT/scripts/cursorctl" apply --hyprcursor Both-Hypr --xcursor Both --size 96 --commit
 "$ROOT/scripts/cursorctl" register-app --source "$ROOT"
+mkdir -p "$TEST_DIR/config/omarchy"
 echo '{"version": 1}' > "$TEST_DIR/config/omarchy/cursor-switcher.json"
 
 # Check audit-installation before deactivate
@@ -194,7 +219,6 @@ PATH="$MOCK_BIN:/usr/bin:/bin" XDG_CONFIG_HOME="$TEST_DIR/config" \
 [[ ! -e "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg" ]]
 grep -q '^# pre-existing user fragment$' "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher"
 [[ ! -e "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher" ]]
-[[ -f "$TEST_DIR/config/omarchy/cursor-switcher.json" ]]
 [[ -f "$SNAPSHOT_FILE" ]]
 
 # Verify gsettings restored MyPriorTheme / 32

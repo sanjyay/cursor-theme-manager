@@ -1,642 +1,746 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-PROGRAM=${0##*/}
-NAME_RE='^[A-Za-z0-9][A-Za-z0-9._+ -]{0,127}$'
-
-die() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; exit 1; }
-log() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; }
-
-valid_name() {
-  [[ $1 =~ $NAME_RE ]] && [[ $1 != *..* ]]
-}
-
-json_string() {
-  local value=$1
-  value=${value//\\/\\\\}; value=${value//\"/\\\"}
-  value=${value//$'\n'/\\n}; value=${value//$'\r'/\\r}; value=${value//$'\t'/\\t}
-  printf '"%s"' "$value"
-}
-
-read_key() {
-  local file=$1 key=$2 line value
-  [[ -f $file && ! -L $file ]] || return 0
-  while IFS= read -r line; do
-    [[ $line =~ ^[[:space:]]*${key}[[:space:]]*=[[:space:]]*(.*)$ ]] || continue
-    value=${BASH_REMATCH[1]}
-    value=${value%%#*}; value=${value%%;*}
-    value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
-    value=${value##+([[:space:]])}; value=${value%%+([[:space:]])}
-    printf '%s' "$value"
-    return 0
-  done < "$file"
-}
-
-safe_theme_dir() {
-  local root=$1 dir=$2 real_root real_dir
-  real_root=$(readlink -f -- "$root") || return 1
-  real_dir=$(readlink -f -- "$dir") || return 1
-  [[ $real_dir == "$real_root"/* ]]
-}
-
-has_xcursor() {
-  local dir=$1 candidate resolved
-  [[ -d $dir/cursors ]] || return 1
-  for candidate in left_ptr default arrow; do
-    [[ -e $dir/cursors/$candidate ]] || continue
-    resolved=$(readlink -f -- "$dir/cursors/$candidate") || continue
-    [[ $resolved == "$(readlink -f -- "$dir")"/* ]] && return 0
-  done
-  return 1
-}
-
-has_hyprcursor() {
-  local dir=$1 cursors
-  [[ -f $dir/manifest.hl || -f $dir/manifest.toml ]] || return 1
-  cursors=$(read_key "$dir/manifest.hl" cursors_directory)
-  [[ -n $cursors ]] || cursors=$(read_key "$dir/manifest.toml" cursors_directory)
-  valid_name "${cursors:-hyprcursors}" || return 1
-  [[ -d $dir/${cursors:-hyprcursors} ]]
-}
-
-get_preview_path() {
-  local dir=$1
-  local base=${dir##*/}
-  local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-cursor-switcher/previews"
-  local preview_png="$cache_dir/$base.png"
-
-  if [[ -f $preview_png ]]; then
-    printf '%s' "$preview_png"
-    return 0
-  fi
-
-  if [[ -d $dir/cursors ]]; then
-    local cur_path=""
-    local candidate
-    for candidate in left_ptr default arrow pointer top_left_arrow; do
-      if [[ -f $dir/cursors/$candidate ]]; then
-        cur_path="$dir/cursors/$candidate"
-        break
-      fi
-    done
-
-    if [[ -n $cur_path ]] && command -v xcur2png >/dev/null 2>&1; then
-      mkdir -p "$cache_dir"
-      local temp_dir
-      temp_dir=$(mktemp -d -t .preview.XXXXXX)
-      if (cd "$temp_dir" && xcur2png "$cur_path" >/dev/null 2>&1); then
-        local best_png
-        best_png=$(find "$temp_dir" -type f -name "*.png" -size +100c 2>/dev/null | sort -V | tail -n1)
-        if [[ -n $best_png && -f $best_png ]]; then
-          if command -v magick >/dev/null 2>&1; then
-            magick "$best_png" -resize 64x64 "$preview_png" >/dev/null 2>&1 || cp "$best_png" "$preview_png"
-          else
-            cp "$best_png" "$preview_png"
-          fi
-          rm -rf -- "$temp_dir"
-          printf '%s' "$preview_png"
-          return 0
-        fi
-      fi
-      rm -rf -- "$temp_dir"
-    fi
-  fi
-
-  printf ''
-}
-
-discover() {
-  local home=${HOME:?HOME is not set} root dir base
-  local first=1 display hypr xcursor formats path manifest_name index_name is_imported source_type subtitle
-  local -a roots=("${XDG_DATA_HOME:-$home/.local/share}/icons" "$home/.icons")
-  IFS=: read -ra system_roots <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-  for root in "${system_roots[@]}"; do roots+=("$root/icons"); done
-
-  printf '{"themes":['
-  shopt -s nullglob extglob
-  for root in "${roots[@]}"; do
-    [[ -d $root ]] || continue
-    local is_sys_root=false
-    if [[ $root != "${XDG_DATA_HOME:-$home/.local/share}/icons" && $root != "$home/.icons" ]]; then
-      is_sys_root=true
-    fi
-
-
-    for dir in "$root"/*; do
-      [[ -d $dir ]] || continue
-      safe_theme_dir "$root" "$dir" || continue
-      base=${dir##*/}; valid_name "$base" || continue
-
-      # Skip internal generated converted themes in discovery list
-      [[ $base == CursorSwitcher-XCursor-* || $base == CursorSwitcher-Themed-* ]] && continue
-
-      hypr=""; xcursor=""; formats=""; display=""; is_imported=false; source_type="user"; subtitle=""
-      if has_hyprcursor "$dir"; then
-        manifest_name=$(read_key "$dir/manifest.hl" name)
-        [[ -n $manifest_name ]] || manifest_name=$(read_key "$dir/manifest.toml" name)
-        valid_name "${manifest_name:-$base}" || manifest_name=$base
-        hypr=${manifest_name:-$base}; display=$hypr; formats='"hyprcursor"'
-      fi
-      if has_xcursor "$dir"; then
-        xcursor=$base
-        index_name=$(read_key "$dir/index.theme" Name)
-        if valid_name "${index_name:-$base}"; then display=${index_name:-$display}; fi
-        [[ -n $display ]] || display=$base
-        [[ -n $formats ]] && formats+=','
-        formats+='"xcursor"'
-      fi
-      [[ -n $formats ]] || continue
-      path=$(readlink -f -- "$dir")
-
-      local import_license=""
-      if [[ -f $dir/.omarchy-cursor-switcher-imported ]]; then
-        is_imported=true
-        source_type="imported"
-        local imp_name imp_lic
-        imp_name=$(python3 -c "import json, sys; m=json.load(open(sys.argv[1])); print(m.get('displayName',''))" "$dir/.omarchy-cursor-switcher-imported" 2>/dev/null || true)
-        imp_lic=$(python3 -c "import json, sys; m=json.load(open(sys.argv[1])); print(m.get('license',''))" "$dir/.omarchy-cursor-switcher-imported" 2>/dev/null || true)
-        [[ -n $imp_name ]] && display="$imp_name"
-        import_license="$imp_lic"
-        if [[ -n $import_license && $import_license != "Unknown" ]]; then
-          subtitle="Imported • $import_license"
-        else
-          subtitle="Imported"
-        fi
-      elif [[ $is_sys_root == true ]]; then
-        source_type="system"
-        local idx_comment
-        idx_comment=$(read_key "$dir/index.theme" Comment)
-        if [[ -n $idx_comment ]]; then
-          subtitle="$idx_comment"
-        else
-          subtitle="System"
-        fi
-      else
-        source_type="user"
-        local idx_comment
-        idx_comment=$(read_key "$dir/index.theme" Comment)
-        if [[ -n $idx_comment ]]; then
-          subtitle="$idx_comment"
-        else
-          subtitle="User"
-        fi
-      fi
-
-      local theme_preview
-      theme_preview=$(get_preview_path "$dir")
-
-      (( first )) || printf ','
-      first=0
-      printf '{"id":'; json_string "$base"
-      printf ',"displayName":'; json_string "$display"
-      printf ',"family":'; json_string "$display"
-      printf ',"subtitle":'; json_string "$subtitle"
-      printf ',"hyprcursor":'; json_string "$hypr"
-      printf ',"xcursor":'; json_string "$xcursor"
-      printf ',"path":'; json_string "$path"
-      printf ',"formats":[%s],"imported":%s,"sourceType":' "$formats" "$is_imported"
-      json_string "$source_type"
-      printf ',"license":'
-      json_string "${import_license:-Unknown}"
-      printf ',"previewPath":'
-      json_string "$theme_preview"
-      printf '}'
-    done
-  done
-  printf '],"currentXcursor":'
-  local current=""
-  if command -v gsettings >/dev/null 2>&1; then
-    current=$(gsettings get org.gnome.desktop.interface cursor-theme 2>/dev/null || true)
-    current=${current#\'}; current=${current%\'}
-  fi
-  if [[ $current == default && -f /usr/share/icons/default/index.theme && ! -L /usr/share/icons/default/index.theme ]]; then
-    local inherited
-    inherited=$(read_key /usr/share/icons/default/index.theme Inherits)
-    if valid_name "${inherited:-}"; then current=$inherited; fi
-  fi
-  json_string "$current"
-  printf '}\n'
-}
-
-
-ensure_hyprcursor() {
-  local hypr=$1 xcursor=$2 theme_path=${3:-} home=${HOME:?HOME is not set}
-
-  # If native Hyprcursor is provided, check if it actually exists
-  if [[ $hypr != - && -n $hypr ]]; then
-    local -a check_roots=("${XDG_DATA_HOME:-$home/.local/share}/icons" "$home/.icons")
-    IFS=: read -ra sys_roots <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-    for r in "${sys_roots[@]}"; do check_roots+=("$r/icons"); done
-    for r in "${check_roots[@]}"; do
-      [[ -d $r ]] || continue
-      for d in "$r"/*; do
-        [[ -d $d ]] || continue
-        if has_hyprcursor "$d"; then
-          local mname
-          mname=$(read_key "$d/manifest.hl" name)
-          [[ -n $mname ]] || mname=$(read_key "$d/manifest.toml" name)
-          if [[ $mname == "$hypr" || ${d##*/} == "$hypr" ]]; then
-            printf '%s' "$hypr"
-            return 0
-          fi
-        fi
-      done
-    done
-  fi
-
-  [[ $xcursor != - && -n $xcursor ]] || die "no cursor theme specified"
-
-  # Find XCursor theme directory
-  local xdir=""
-  if [[ -n $theme_path && -d $theme_path/cursors ]]; then
-    xdir=$theme_path
-  else
-    local -a roots=("${XDG_DATA_HOME:-$home/.local/share}/icons" "$home/.icons")
-    IFS=: read -ra system_roots <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-    for root in "${system_roots[@]}"; do roots+=("$root/icons"); done
-    for root in "${roots[@]}"; do
-      local candidate="$root/$xcursor"
-      if [[ -d $candidate/cursors ]]; then
-        xdir=$candidate
-        break
-      fi
-    done
-  fi
-
-  [[ -n $xdir && -d $xdir/cursors ]] || die "XCursor directory not found for theme '$xcursor'"
-
-  # Compute content hash
-  local sig
-  if command -v sha256sum >/dev/null 2>&1; then
-    sig=$(find "$xdir" -type f -exec stat -c "%n %s %Y" {} + 2>/dev/null | sha256sum | awk '{print $1}')
-  else
-    sig=$(find "$xdir" -type f -exec stat -c "%n %s %Y" {} + 2>/dev/null | cksum | awk '{print $1}')
-  fi
-  local hash_short=${sig:0:12}
-  local converted_name="CursorSwitcher-XCursor-${xcursor}-${hash_short}"
-  local target_parent="${XDG_DATA_HOME:-$home/.local/share}/icons"
-  local target_dir="$target_parent/$converted_name"
-
-  if [[ -d $target_dir && -f $target_dir/manifest.hl && -d $target_dir/hyprcursors ]]; then
-    printf '%s' "$converted_name"
-    return 0
-  fi
-
-  command -v hyprcursor-util >/dev/null 2>&1 || die "hyprcursor-util is required to convert XCursor theme '$xcursor'"
-
-  local temp_dir
-  temp_dir=$(mktemp -d -t .cs-convert.XXXXXX)
-  local clean_source="$temp_dir/clean_source"
-  local extracted_dir="$temp_dir/extracted"
-  local created_dir="$temp_dir/created"
-  mkdir -p "$clean_source/cursors" "$extracted_dir" "$created_dir" "$target_parent"
-
-  if [[ -f $xdir/index.theme ]]; then
-    cp -- "$xdir/index.theme" "$clean_source/"
-  fi
-
-  local item item_base item_target
-  for item in "$xdir/cursors"/*; do
-    [[ -e $item || -L $item ]] || continue
-    item_base=${item##*/}
-    [[ $item_base == *.cur || $item_base == *.ani ]] && continue
-    if [[ -L $item ]]; then
-      item_target=$(readlink -- "$item") || continue
-      [[ $item_target == *.cur || $item_target == *.ani ]] && continue
-      ln -s -- "$item_target" "$clean_source/cursors/$item_base"
-    elif [[ -f $item ]]; then
-      cp -a -- "$item" "$clean_source/cursors/"
-    fi
-  done
-
-  if ! hyprcursor-util --extract "$clean_source" --output "$extracted_dir" >/dev/null 2>&1; then
-    rm -rf -- "$temp_dir"
-    die "failed to extract XCursor theme '$xcursor'"
-  fi
-
-  local extracted_theme
-  extracted_theme=$(find "$extracted_dir" -mindepth 1 -maxdepth 1 -type d -name "extracted_*" | head -n1)
-  if [[ -z $extracted_theme || ! -d $extracted_theme ]]; then
-    rm -rf -- "$temp_dir"
-    die "hyprcursor-util extract produced no output for '$xcursor'"
-  fi
-
-  cat <<EOF > "$extracted_theme/manifest.hl"
-name = $converted_name
-description = Automatically converted from $xcursor by Cursor Switcher
-version = 1.0
-cursors_directory = hyprcursors
-EOF
-
-  if ! hyprcursor-util --create "$extracted_theme" --output "$created_dir" >/dev/null 2>&1; then
-    rm -rf -- "$temp_dir"
-    die "failed to create Hyprcursor package for '$xcursor'"
-  fi
-
-  local created_theme
-  created_theme=$(find "$created_dir" -mindepth 1 -maxdepth 1 -type d -name "theme_*" | head -n1)
-  if [[ -z $created_theme || ! -d $created_theme ]]; then
-    rm -rf -- "$temp_dir"
-    die "hyprcursor-util create produced no output for '$xcursor'"
-  fi
-
-  local temp_install
-  temp_install=$(mktemp -d --tmpdir="$target_parent" .convert.XXXXXX)
-  cp -a "$created_theme"/. "$temp_install"/
-  printf '%s\n' "1.0" > "$temp_install/.omarchy-cursor-switcher-converted"
-  mv -f "$temp_install" "$target_dir"
-  rm -rf -- "$temp_dir"
-
-  printf '%s' "$converted_name"
-  return 0
-}
-
-apply_theme() {
-  local hypr="" xcursor="" theme_path="" size="" mode=""
-  while (($#)); do
-    case $1 in
-      --hyprcursor) [[ $# -ge 2 ]] || die "missing Hyprcursor name"; hypr=$2; shift 2 ;;
-      --xcursor) [[ $# -ge 2 ]] || die "missing XCursor name"; xcursor=$2; shift 2 ;;
-      --theme-path) [[ $# -ge 2 ]] || die "missing theme path"; theme_path=$2; shift 2 ;;
-      --size) [[ $# -ge 2 ]] || die "missing size"; size=$2; shift 2 ;;
-      --preview|--commit) mode=$1; shift ;;
-      *) die "unknown apply argument: $1" ;;
-    esac
-  done
-  [[ $size =~ ^(16|20|24|28|32|40|48|64|80|96|128|160|192|224|256)$ ]] || die "unsupported cursor size: $size"
-  [[ $hypr == - ]] || valid_name "$hypr" || die "invalid Hyprcursor theme name"
-  [[ $xcursor == - ]] || valid_name "$xcursor" || die "invalid XCursor theme name"
-  [[ $hypr != - || $xcursor != - ]] || die "theme has no supported cursor format"
-
-  command -v hyprctl >/dev/null 2>&1 || die "hyprctl is unavailable"
-
-  local effective_hypr
-  effective_hypr=$(ensure_hyprcursor "$hypr" "$xcursor" "$theme_path") || die "could not resolve Hyprcursor for $xcursor"
-
-  if ! hyprctl setcursor "$effective_hypr" "$size" >/dev/null; then
-    die "hyprctl setcursor failed for '$effective_hypr' ($size px)"
-  fi
-
-  if [[ $mode == --commit ]]; then
-    local hypr_env=""
-    [[ $effective_hypr == - ]] || hypr_env=$effective_hypr
-    hyprctl eval "hl.env(\"HYPRCURSOR_THEME\", \"$hypr_env\")" >/dev/null 2>&1 || true
-    hyprctl eval "hl.env(\"HYPRCURSOR_SIZE\", \"$size\")" >/dev/null 2>&1 || true
-    if [[ $xcursor != - ]]; then
-      hyprctl eval "hl.env(\"XCURSOR_THEME\", \"$xcursor\")" >/dev/null 2>&1 || true
-      hyprctl eval "hl.env(\"XCURSOR_SIZE\", \"$size\")" >/dev/null 2>&1 || true
-    fi
-  fi
-
-  if [[ $xcursor != - ]]; then
-    if command -v gsettings >/dev/null 2>&1; then
-      gsettings set org.gnome.desktop.interface cursor-theme "$xcursor" 2>/dev/null || true
-      gsettings set org.gnome.desktop.interface cursor-size "$size" 2>/dev/null || true
-    else
-      log "gsettings unavailable; GTK cursor could not be updated"
-    fi
-  fi
-
-  local -a assignments=("XCURSOR_SIZE=$size" "HYPRCURSOR_SIZE=$size")
-  [[ $effective_hypr == - ]] || assignments+=("HYPRCURSOR_THEME=$effective_hypr")
-  [[ $xcursor == - ]] || assignments+=("XCURSOR_THEME=$xcursor")
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user set-environment "${assignments[@]}" >/dev/null 2>&1 || true
-  fi
-  if command -v dbus-update-activation-environment >/dev/null 2>&1; then
-    dbus-update-activation-environment --systemd "${assignments[@]}" >/dev/null 2>&1 || true
-  fi
-
-  if [[ $mode == --commit ]]; then
-    local config_home=${XDG_CONFIG_HOME:-${HOME:?HOME is not set}/.config}
-    local common_dir="$config_home/uwsm/env.d" hypr_dir="$config_home/uwsm/env-hyprland.d"
-    local common_file="$common_dir/90-omarchy-cursor-switcher" hypr_file="$hypr_dir/90-omarchy-cursor-switcher"
-    local common_tmp hypr_tmp
-    mkdir -p -- "$common_dir" "$hypr_dir"
-    common_tmp=$(mktemp --tmpdir="$common_dir" .cursor-switcher.XXXXXX)
-    hypr_tmp=$(mktemp --tmpdir="$hypr_dir" .cursor-switcher.XXXXXX)
-    {
-      printf '# Managed by sanjyay.cursor-theme-manager.\n'
-      [[ $xcursor == - ]] || printf "export XCURSOR_THEME='%s'\n" "$xcursor"
-      printf "export XCURSOR_SIZE='%s'\n" "$size"
-    } > "$common_tmp"
-    {
-      printf '# Managed by sanjyay.cursor-theme-manager.\n'
-      if [[ $effective_hypr == - ]]; then printf 'unset HYPRCURSOR_THEME\n'; else printf "export HYPRCURSOR_THEME='%s'\n" "$effective_hypr"; fi
-      printf "export HYPRCURSOR_SIZE='%s'\n" "$size"
-    } > "$hypr_tmp"
-    chmod 600 -- "$common_tmp" "$hypr_tmp"
-    mv -f -- "$common_tmp" "$common_file"
-    mv -f -- "$hypr_tmp" "$hypr_file"
-  fi
-}
-
-register_app() {
-
-  local source_dir="" home=${HOME:?HOME is not set}
-  while (($#)); do
-    case $1 in
-      --source) source_dir=${2:-}; shift 2 ;;
-      *) die "unknown register-app argument: $1" ;;
-    esac
-  done
-  [[ -n $source_dir && -d $source_dir ]] || die "missing --source directory"
-
-  local data_home=${XDG_DATA_HOME:-$home/.local/share}
-  local bin_dir="$home/.local/bin"
-  local app_dir="$data_home/applications"
-  local scalable_dir="$data_home/icons/hicolor/scalable/apps"
-  local pixmaps_dir="$data_home/pixmaps"
-
-  local launcher_src="$source_dir/scripts/omarchy-cursor-switcher"
-  local desktop_src="$source_dir/desktop/omarchy-cursor-switcher.desktop"
-  local icon_src="$source_dir/icons/omarchy-cursor-switcher.svg"
-
-  [[ -f $launcher_src ]] || die "launcher script not found: $launcher_src"
-  [[ -f $desktop_src ]] || die "desktop entry not found: $desktop_src"
-  [[ -f $icon_src ]] || die "icon not found: $icon_src"
-
-  mkdir -p -- "$bin_dir" "$app_dir" "$scalable_dir" "$pixmaps_dir"
-
-  # Install launcher script (atomic)
-  local tmp
-  tmp=$(mktemp --tmpdir="$bin_dir" .omarchy-cursor-switcher.XXXXXX)
-  cp -- "$launcher_src" "$tmp"
-  chmod 755 -- "$tmp"
-  mv -f -- "$tmp" "$bin_dir/omarchy-cursor-switcher"
-
-  # Install desktop entry (atomic)
-  tmp=$(mktemp --tmpdir="$app_dir" .omarchy-cursor-switcher.XXXXXX)
-  cp -- "$desktop_src" "$tmp"
-  chmod 644 -- "$tmp"
-  mv -f -- "$tmp" "$app_dir/omarchy-cursor-switcher.desktop"
-
-  # Install scalable SVG icon (atomic)
-  tmp=$(mktemp --tmpdir="$scalable_dir" .omarchy-cursor-switcher.XXXXXX)
-  cp -- "$icon_src" "$tmp"
-  chmod 644 -- "$tmp"
-  mv -f -- "$tmp" "$scalable_dir/omarchy-cursor-switcher.svg"
-
-  # Install pixmaps SVG and PNG copies
-  cp -- "$icon_src" "$pixmaps_dir/omarchy-cursor-switcher.svg"
-
-  # Install raster PNG icons if present
-  local sz png_src png_dir
-  for sz in 48 64 128 256; do
-    png_src="$source_dir/icons/omarchy-cursor-switcher-$sz.png"
-    if [[ -f $png_src ]]; then
-      png_dir="$data_home/icons/hicolor/${sz}x${sz}/apps"
-      mkdir -p -- "$png_dir"
-      cp -- "$png_src" "$png_dir/omarchy-cursor-switcher.png"
-      if [[ $sz == 48 || $sz == 256 ]]; then
-        cp -- "$png_src" "$pixmaps_dir/omarchy-cursor-switcher.png"
-      fi
-    fi
-  done
-
-  # Refresh icon cache and desktop database if available (best effort)
-  if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database -q "$app_dir" 2>/dev/null || true
-  fi
-  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    gtk-update-icon-cache -q "$data_home/icons/hicolor" 2>/dev/null || true
-  fi
-}
-
-install_cleanup_helper() {
-  local source_dir="" home=${HOME:?HOME is not set}
-  while (($#)); do
-    case $1 in
-      --source) source_dir=${2:-}; shift 2 ;;
-      *) die "unknown install-cleanup-helper argument: $1" ;;
-    esac
-  done
-  [[ -n $source_dir && -d $source_dir ]] || die "missing --source directory"
-
-  local data_home=${XDG_DATA_HOME:-$home/.local/share}
-  local target_dir="$data_home/omarchy-cursor-switcher"
-  local target_file="$target_dir/omarchy-cursor-switcher-cleanup"
-  local src_file="$source_dir/scripts/omarchy-cursor-switcher-cleanup"
-
-  [[ -f $src_file ]] || die "cleanup helper source not found: $src_file"
-
-  mkdir -p -- "$target_dir"
-  local tmp
-  tmp=$(mktemp --tmpdir="$target_dir" .cleanup.XXXXXX)
-  cp -- "$src_file" "$tmp"
-  chmod 755 -- "$tmp"
-  mv -f -- "$tmp" "$target_file"
-}
-
-unregister_app() {
-  local script_dir
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
-  if [[ -f $helper ]]; then
-    "$helper" unregister-app "$@"
-  fi
-}
-
-snapshot_original_state() {
-  local script_dir
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
-  if [[ -f $helper ]]; then
-    "$helper" snapshot-original-state "$@"
-  fi
-}
-
-restore_original_state() {
-  local script_dir
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
-  if [[ -f $helper ]]; then
-    "$helper" restore-original-state "$@"
-  fi
-}
-
-deactivate() {
-  local script_dir
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
-  if [[ -f $helper ]]; then
-    "$helper" deactivate "$@"
-  fi
-}
-
-purge() {
-  local script_dir
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
-  if [[ -f $helper ]]; then
-    "$helper" purge "$@"
-  fi
-}
-
-audit_installation() {
-  local script_dir
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  local helper="$script_dir/omarchy-cursor-switcher-cleanup"
-  if [[ -f $helper ]]; then
-    "$helper" audit-installation "$@"
-  fi
-}
-
-case ${1:-} in
-  discover) shift; discover "$@" ;;
-  apply) shift; apply_theme "$@" ;;
-  ensure-hyprcursor) shift; ensure_hyprcursor "$@" ;;
-  import)
-    shift
-    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-    if [[ $# -eq 1 && $1 != --* ]]; then
-      exec python3 "$script_dir/cursor-import.py" import --source "$1"
-    else
-      exec python3 "$script_dir/cursor-import.py" import "$@"
-    fi
-    ;;
-  remove-imported)
-    shift
-    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-    if [[ $# -eq 1 && $1 != --* ]]; then
-      exec python3 "$script_dir/cursor-import.py" remove --id "$1"
-    else
-      exec python3 "$script_dir/cursor-import.py" remove "$@"
-    fi
-    ;;
-  rename-imported)
-    shift
-    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-    exec python3 "$script_dir/cursor-import.py" rename "$@"
-    ;;
-  choose-file)
-    shift
-    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-    exec python3 "$script_dir/choose-file.py" "$@"
-    ;;
-  list-dir)
-    shift
-    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-    exec python3 "$script_dir/file_browser.py" "$@"
-    ;;
-  get-preview-roles)
-    shift
-    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-    exec python3 "$script_dir/cursor_theming.py" get-preview-roles "$@"
-    ;;
-  get-all-preview-roles)
-    shift
-    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-    exec python3 "$script_dir/cursor_theming.py" get-all-preview-roles "$@"
-    ;;
-  install-cleanup-helper) shift; install_cleanup_helper "$@" ;;
-  register-app) shift; register_app "$@" ;;
-  unregister-app) shift; unregister_app "$@" ;;
-  snapshot-original-state) shift; snapshot_original_state "$@" ;;
-  restore-original-state) shift; restore_original_state "$@" ;;
-  deactivate) shift; deactivate "$@" ;;
-  purge) shift; purge "$@" ;;
-  audit-installation) shift; audit_installation "$@" ;;
-  *) die "usage: $PROGRAM {discover|apply|ensure-hyprcursor|get-preview-roles|import|remove-imported|rename-imported|choose-file|install-cleanup-helper|register-app|unregister-app|snapshot-original-state|restore-original-state|deactivate|purge|audit-installation} ..." ;;
-esac
-
+#!/usr/bin/env python3
+"""
+Unified CLI & Dispatcher for Cursor Theme Manager.
+Supervises all actions with bounded execution, process-group isolation,
+secure descriptor-held state operations, and transactional integration.
+"""
+
+import sys
+import os
+import re
+import json
+import shutil
+import hashlib
+import tempfile
+import argparse
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+
+# Add script dir to path
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from runtime_safety import (
+    run_bounded, sanitize_text, emit_bounded_json,
+    TIMEOUT_DISCOVERY, TIMEOUT_APPLY, TIMEOUT_CONVERT, TIMEOUT_OPEN_FOLDER,
+    TIMEOUT_STATE, LIMIT_STDOUT_DEFAULT, LIMIT_STDOUT_MEDIUM, LIMIT_STDOUT_LARGE,
+    LIMIT_STDOUT_SMALL, LIMIT_STDERR_DEFAULT, MAX_DISCOVERED_THEMES,
+    MAX_LEN_THEME_ID, MAX_LEN_DISPLAY_NAME, MAX_LEN_PATH, MAX_LEN_SUBTITLE,
+    MAX_LEN_LICENSE
+)
+import secure_state
+import cleanup_engine
+import cursor_theming
+import file_browser
+
+NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._+ -]{0,127}$')
+
+
+def valid_name(name: str) -> bool:
+    if not name or ".." in name:
+        return False
+    return bool(NAME_RE.match(name))
+
+
+def read_ini_key(file_path: Path, key: str, max_bytes: int = 32768) -> str:
+    """Safely reads a single key from an INI/manifest file without symlink escapes."""
+    if not file_path.is_file() or file_path.is_symlink():
+        return ""
+    try:
+        if file_path.stat().st_size > max_bytes:
+            return ""
+        content = file_path.read_text(encoding="utf-8", errors="ignore")
+        pattern = re.compile(rf'^\s*{re.escape(key)}\s*=\s*(.+)$', re.MULTILINE)
+        m = pattern.search(content)
+        if m:
+            val = m.group(1).split("#")[0].split(";")[0].strip()
+            val = val.strip("'\"")
+            return val
+    except Exception:
+        pass
+    return ""
+
+
+def has_xcursor(theme_dir: Path) -> bool:
+    cursors = theme_dir / "cursors"
+    if not cursors.is_dir():
+        return False
+    for candidate in ("left_ptr", "default", "arrow", "pointer", "top_left_arrow"):
+        cand_path = cursors / candidate
+        if cand_path.is_file():
+            return True
+    return False
+
+
+def has_hyprcursor(theme_dir: Path) -> bool:
+    manifest_hl = theme_dir / "manifest.hl"
+    manifest_toml = theme_dir / "manifest.toml"
+    if not manifest_hl.is_file() and not manifest_toml.is_file():
+        return False
+    cursors_dir = read_ini_key(manifest_hl, "cursors_directory") or read_ini_key(manifest_toml, "cursors_directory") or "hyprcursors"
+    if not valid_name(cursors_dir):
+        return False
+    return (theme_dir / cursors_dir).is_dir()
+
+
+def get_preview_path(theme_dir: Path) -> str:
+    base = theme_dir.name
+    cache_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "omarchy-cursor-switcher" / "previews"
+    preview_png = cache_dir / f"{base}.png"
+    if preview_png.is_file():
+        return str(preview_png)
+
+    cursors_dir = theme_dir / "cursors"
+    if not cursors_dir.is_dir():
+        return ""
+
+    cur_path = None
+    for cand in ("left_ptr", "default", "arrow", "pointer", "top_left_arrow"):
+        cand_file = cursors_dir / cand
+        if cand_file.is_file():
+            cur_path = cand_file
+            break
+
+    if cur_path and shutil.which("xcur2png"):
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir = Path(tempfile.mkdtemp(prefix=".preview_tmp_"))
+        try:
+            res = run_bounded(["xcur2png", str(cur_path)], cwd=str(temp_dir), timeout=2.0, stdout_limit=LIMIT_STDOUT_SMALL)
+            if res.ok:
+                pngs = sorted(temp_dir.glob("*.png"), key=lambda p: p.stat().st_size, reverse=True)
+                if pngs:
+                    best_png = pngs[0]
+                    if shutil.which("magick"):
+                        run_bounded(["magick", str(best_png), "-resize", "64x64", str(preview_png)], timeout=2.0)
+                    else:
+                        shutil.copy2(best_png, preview_png)
+                    if preview_png.is_file():
+                        return str(preview_png)
+        except Exception:
+            pass
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+    return ""
+
+
+# ==============================================================================
+# DISCOVERY
+# ==============================================================================
+
+def run_discover():
+    home = Path(os.environ.get("HOME", os.path.expanduser("~")))
+    data_home = Path(os.environ.get("XDG_DATA_HOME", str(home / ".local" / "share")))
+    roots = [data_home / "icons", home / ".icons"]
+    sys_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+    for d in sys_dirs:
+        if d.strip():
+            roots.append(Path(d.strip()) / "icons")
+
+    discovered_themes = []
+    seen_ids = set()
+
+    for root in roots:
+        if not root.is_dir():
+            continue
+        is_sys_root = (root != data_home / "icons" and root != home / ".icons")
+
+        try:
+            entries = list(root.iterdir())
+        except OSError:
+            continue
+
+        for theme_dir in entries:
+            if len(discovered_themes) >= MAX_DISCOVERED_THEMES:
+                break
+            if not theme_dir.is_dir() or theme_dir.is_symlink():
+                continue
+
+            base = theme_dir.name
+            if not valid_name(base):
+                continue
+
+            # Skip internal generated converted themes
+            if base.startswith("CursorSwitcher-XCursor-") or base.startswith("CursorSwitcher-Themed-") or base.startswith("CursorSwitcher-Preview-"):
+                continue
+
+            hypr = ""
+            xcursor = ""
+            formats = []
+            display = ""
+            is_imported = False
+            source_type = "user"
+            subtitle = ""
+
+            if has_hyprcursor(theme_dir):
+                mname = read_ini_key(theme_dir / "manifest.hl", "name") or read_ini_key(theme_dir / "manifest.toml", "name") or base
+                if not valid_name(mname):
+                    mname = base
+                hypr = mname
+                display = hypr
+                formats.append("hyprcursor")
+
+            if has_xcursor(theme_dir):
+                xcursor = base
+                index_name = read_ini_key(theme_dir / "index.theme", "Name") or base
+                if valid_name(index_name):
+                    display = index_name or display
+                else:
+                    display = display or base
+                formats.append("xcursor")
+
+            if not formats:
+                continue
+
+            path_str = sanitize_text(str(theme_dir.resolve()), max_len=MAX_LEN_PATH)
+            marker = theme_dir / ".omarchy-cursor-switcher-imported"
+            import_license = "Unknown"
+
+            if marker.is_file():
+                is_imported = True
+                source_type = "imported"
+                try:
+                    meta = json.loads(marker.read_text(encoding="utf-8"))
+                    imp_name = meta.get("displayName", "")
+                    imp_lic = meta.get("license", "")
+                    if imp_name:
+                        display = imp_name
+                    if imp_lic:
+                        import_license = imp_lic
+                except Exception:
+                    pass
+                subtitle = f"Imported • {import_license}" if import_license and import_license != "Unknown" else "Imported"
+            elif is_sys_root:
+                source_type = "system"
+                idx_comment = read_ini_key(theme_dir / "index.theme", "Comment")
+                subtitle = idx_comment if idx_comment else "System"
+            else:
+                source_type = "user"
+                idx_comment = read_ini_key(theme_dir / "index.theme", "Comment")
+                subtitle = idx_comment if idx_comment else "User"
+
+            theme_preview = get_preview_path(theme_dir)
+
+            theme_record = {
+                "id": sanitize_text(base, max_len=MAX_LEN_THEME_ID),
+                "displayName": sanitize_text(display, max_len=MAX_LEN_DISPLAY_NAME),
+                "family": sanitize_text(display, max_len=MAX_LEN_DISPLAY_NAME),
+                "subtitle": sanitize_text(subtitle, max_len=MAX_LEN_SUBTITLE),
+                "hyprcursor": sanitize_text(hypr, max_len=MAX_LEN_THEME_ID),
+                "xcursor": sanitize_text(xcursor, max_len=MAX_LEN_THEME_ID),
+                "path": path_str,
+                "formats": formats,
+                "imported": is_imported,
+                "sourceType": source_type,
+                "license": sanitize_text(import_license, max_len=MAX_LEN_LICENSE),
+                "previewPath": sanitize_text(theme_preview, max_len=MAX_LEN_PATH)
+            }
+            discovered_themes.append(theme_record)
+
+    # Current XCursor from gsettings
+    current_xcursor = ""
+    res = run_bounded(["gsettings", "get", "org.gnome.desktop.interface", "cursor-theme"], timeout=2.0, stdout_limit=LIMIT_STDOUT_SMALL)
+    if res.ok and res.stdout.strip():
+        current_xcursor = res.stdout.strip().strip("'\"")
+
+    if current_xcursor == "default":
+        def_theme = Path("/usr/share/icons/default/index.theme")
+        if def_theme.is_file() and not def_theme.is_symlink():
+            inh = read_ini_key(def_theme, "Inherits")
+            if valid_name(inh):
+                current_xcursor = inh
+
+    emit_bounded_json({
+        "themes": discovered_themes,
+        "currentXcursor": sanitize_text(current_xcursor, max_len=MAX_LEN_THEME_ID)
+    }, max_bytes=LIMIT_STDOUT_LARGE)
+
+
+# ==============================================================================
+# ENSURE HYPRCURSOR (CONVERSION)
+# ==============================================================================
+
+def run_ensure_hyprcursor(hypr: str, xcursor: str, theme_path: str = "") -> str:
+    home = Path(os.environ.get("HOME", os.path.expanduser("~")))
+    data_home = Path(os.environ.get("XDG_DATA_HOME", str(home / ".local" / "share")))
+    user_icons = data_home / "icons"
+
+    # 1. Native Hyprcursor check
+    if hypr and hypr != "-":
+        check_roots = [user_icons, home / ".icons"]
+        sys_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+        for d in sys_dirs:
+            if d.strip():
+                check_roots.append(Path(d.strip()) / "icons")
+        for r in check_roots:
+            if not r.is_dir():
+                continue
+            for d in r.iterdir():
+                if d.is_dir() and has_hyprcursor(d):
+                    mname = read_ini_key(d / "manifest.hl", "name") or read_ini_key(d / "manifest.toml", "name") or d.name
+                    if mname == hypr or d.name == hypr:
+                        return hypr
+
+    if not xcursor or xcursor == "-":
+        sys.stderr.write("cursorctl: no cursor theme specified\n")
+        sys.exit(1)
+
+    # 2. Locate XCursor directory
+    xdir = None
+    if theme_path and (Path(theme_path) / "cursors").is_dir():
+        xdir = Path(theme_path)
+    else:
+        roots = [user_icons, home / ".icons"]
+        sys_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+        for d in sys_dirs:
+            if d.strip():
+                roots.append(Path(d.strip()) / "icons")
+        for r in roots:
+            cand = r / xcursor
+            if (cand / "cursors").is_dir():
+                xdir = cand
+                break
+
+    if not xdir or not (xdir / "cursors").is_dir():
+        sys.stderr.write(f"cursorctl: XCursor directory not found for theme '{xcursor}'\n")
+        sys.exit(1)
+
+    # 3. Compute content hash
+    hasher = hashlib.sha256()
+    for root, _, files in os.walk(xdir):
+        for f in sorted(files):
+            fp = Path(root) / f
+            hasher.update(str(fp.relative_to(xdir)).encode("utf-8"))
+            try:
+                hasher.update(fp.read_bytes())
+            except Exception:
+                pass
+    hash_short = hasher.hexdigest()[:12]
+    converted_name = f"CursorSwitcher-XCursor-{xcursor}-{hash_short}"
+    target_dir = user_icons / converted_name
+
+    if (target_dir / "manifest.hl").is_file() and (target_dir / "hyprcursors").is_dir():
+        return converted_name
+
+    if not shutil.which("hyprcursor-util"):
+        sys.stderr.write(f"cursorctl: hyprcursor-util is required to convert XCursor theme '{xcursor}'\n")
+        sys.exit(1)
+
+    temp_dir = Path(tempfile.mkdtemp(prefix=".cs-convert-"))
+    clean_source = temp_dir / "clean_source"
+    extracted_dir = temp_dir / "extracted"
+    created_dir = temp_dir / "created"
+
+    try:
+        (clean_source / "cursors").mkdir(parents=True)
+        extracted_dir.mkdir(parents=True)
+        created_dir.mkdir(parents=True)
+        user_icons.mkdir(parents=True, exist_ok=True)
+
+        if (xdir / "index.theme").is_file():
+            shutil.copy2(xdir / "index.theme", clean_source / "index.theme")
+
+        for item in (xdir / "cursors").iterdir():
+            if item.name.endswith(".cur") or item.name.endswith(".ani"):
+                continue
+            if item.is_symlink():
+                target = os.readlink(item)
+                if not target.endswith(".cur") and not target.endswith(".ani"):
+                    try:
+                        os.symlink(target, clean_source / "cursors" / item.name)
+                    except OSError:
+                        pass
+            elif item.is_file():
+                shutil.copy2(item, clean_source / "cursors" / item.name)
+
+        # Run hyprcursor-util extract with run_bounded
+        res = run_bounded(
+            ["hyprcursor-util", "--extract", str(clean_source), "--output", str(extracted_dir)],
+            timeout=TIMEOUT_CONVERT, stdout_limit=LIMIT_STDOUT_MEDIUM, stderr_limit=LIMIT_STDERR_DEFAULT
+        )
+        if not res.ok:
+            sys.stderr.write(f"cursorctl: failed to extract XCursor theme '{xcursor}': {res.stderr}\n")
+            sys.exit(1)
+
+        extracted_theme = None
+        for d in extracted_dir.iterdir():
+            if d.is_dir() and d.name.startswith("extracted_"):
+                extracted_theme = d
+                break
+        if not extracted_theme:
+            sys.stderr.write(f"cursorctl: hyprcursor-util extract produced no output for '{xcursor}'\n")
+            sys.exit(1)
+
+        manifest_content = (
+            f"name = {converted_name}\n"
+            f"description = Automatically converted from {xcursor} by Cursor Theme Manager\n"
+            f"version = 1.0\n"
+            f"cursors_directory = hyprcursors\n"
+        )
+        (extracted_theme / "manifest.hl").write_text(manifest_content, encoding="utf-8")
+
+        # Run hyprcursor-util create with run_bounded
+        res = run_bounded(
+            ["hyprcursor-util", "--create", str(extracted_theme), "--output", str(created_dir)],
+            timeout=TIMEOUT_CONVERT, stdout_limit=LIMIT_STDOUT_MEDIUM, stderr_limit=LIMIT_STDERR_DEFAULT
+        )
+        if not res.ok:
+            sys.stderr.write(f"cursorctl: failed to create Hyprcursor package for '{xcursor}': {res.stderr}\n")
+            sys.exit(1)
+
+        created_theme = None
+        for d in created_dir.iterdir():
+            if d.is_dir() and d.name.startswith("theme_"):
+                created_theme = d
+                break
+        if not created_theme:
+            sys.stderr.write(f"cursorctl: hyprcursor-util create produced no output for '{xcursor}'\n")
+            sys.exit(1)
+
+        # Atomic installation into user icons directory
+        temp_install = Path(tempfile.mkdtemp(prefix=".convert-", dir=str(user_icons)))
+        try:
+            shutil.copytree(created_theme, temp_install, dirs_exist_ok=True, symlinks=True)
+            (temp_install / ".omarchy-cursor-switcher-converted").write_text("1.0\n", encoding="utf-8")
+            if target_dir.exists():
+                shutil.rmtree(target_dir, ignore_errors=True)
+            os.rename(temp_install, target_dir)
+        finally:
+            if temp_install.exists():
+                shutil.rmtree(temp_install, ignore_errors=True)
+
+        return converted_name
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# ==============================================================================
+# APPLY THEME
+# ==============================================================================
+
+def run_apply(hypr: str, xcursor: str, theme_path: str, size: int, mode: str):
+    if size not in secure_state.SUPPORTED_SIZES:
+        sys.stderr.write(f"cursorctl: unsupported cursor size: {size}\n")
+        sys.exit(1)
+
+    if hypr != "-" and not valid_name(hypr):
+        sys.stderr.write("cursorctl: invalid Hyprcursor theme name\n")
+        sys.exit(1)
+    if xcursor != "-" and not valid_name(xcursor):
+        sys.stderr.write("cursorctl: invalid XCursor theme name\n")
+        sys.exit(1)
+
+    effective_hypr = run_ensure_hyprcursor(hypr, xcursor, theme_path)
+
+    # 1. hyprctl setcursor
+    run_bounded(["hyprctl", "setcursor", effective_hypr, str(size)], timeout=TIMEOUT_APPLY)
+
+    # 2. If commit mode
+    if mode == "--commit":
+        hypr_env = "" if effective_hypr == "-" else effective_hypr
+        run_bounded(["hyprctl", "eval", f'hl.env("HYPRCURSOR_THEME", "{hypr_env}")'], timeout=2.0)
+        run_bounded(["hyprctl", "eval", f'hl.env("HYPRCURSOR_SIZE", "{size}")'], timeout=2.0)
+        if xcursor != "-":
+            run_bounded(["hyprctl", "eval", f'hl.env("XCURSOR_THEME", "{xcursor}")'], timeout=2.0)
+            run_bounded(["hyprctl", "eval", f'hl.env("XCURSOR_SIZE", "{size}")'], timeout=2.0)
+
+    # 3. GTK cursor via gsettings
+    if xcursor != "-":
+        run_bounded(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", xcursor], timeout=2.0)
+        run_bounded(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)], timeout=2.0)
+
+    # 4. Systemd & DBus environment
+    assignments = [f"XCURSOR_SIZE={size}", f"HYPRCURSOR_SIZE={size}"]
+    if effective_hypr != "-":
+        assignments.append(f"HYPRCURSOR_THEME={effective_hypr}")
+    if xcursor != "-":
+        assignments.append(f"XCURSOR_THEME={xcursor}")
+
+    run_bounded(["systemctl", "--user", "set-environment"] + assignments, timeout=2.0)
+    run_bounded(["dbus-update-activation-environment", "--systemd"] + assignments, timeout=2.0)
+
+    # 5. UWSM drop-in files
+    if mode == "--commit":
+        home = os.environ.get("HOME", os.path.expanduser("~"))
+        config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
+        common_dir = os.path.join(config_home, "uwsm", "env.d")
+        hypr_dir = os.path.join(config_home, "uwsm", "env-hyprland.d")
+        os.makedirs(common_dir, exist_ok=True)
+        os.makedirs(hypr_dir, exist_ok=True)
+
+        common_file = os.path.join(common_dir, "90-omarchy-cursor-switcher")
+        hypr_file = os.path.join(hypr_dir, "90-omarchy-cursor-switcher")
+
+        common_tmp = common_file + f".tmp.{os.getpid()}"
+        hypr_tmp = hypr_file + f".tmp.{os.getpid()}"
+
+        with open(common_tmp, "w", encoding="utf-8") as f:
+            f.write("# Managed by sanjyay.cursor-theme-manager.\n")
+            if xcursor != "-":
+                f.write(f"export XCURSOR_THEME='{xcursor}'\n")
+            f.write(f"export XCURSOR_SIZE='{size}'\n")
+
+        with open(hypr_tmp, "w", encoding="utf-8") as f:
+            f.write("# Managed by sanjyay.cursor-theme-manager.\n")
+            if effective_hypr == "-":
+                f.write("unset HYPRCURSOR_THEME\n")
+            else:
+                f.write(f"export HYPRCURSOR_THEME='{effective_hypr}'\n")
+            f.write(f"export HYPRCURSOR_SIZE='{size}'\n")
+
+        os.chmod(common_tmp, 0o600)
+        os.chmod(hypr_tmp, 0o600)
+        os.replace(common_tmp, common_file)
+        os.replace(hypr_tmp, hypr_file)
+
+
+# ==============================================================================
+# MAIN ROUTING
+# ==============================================================================
+
+def main():
+    if len(sys.argv) < 2:
+        sys.stderr.write("Usage: cursorctl {discover|apply|ensure-hyprcursor|import|remove-imported|rename-imported|list-dir|choose-file|get-preview-roles|get-all-preview-roles|open-folder|state-read|state-write|integration-status|integration-install|integration-remove|snapshot-original-state|restore-original-state|deactivate|purge|audit-installation} ...\n")
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+
+    if cmd == "discover":
+        run_discover()
+
+    elif cmd == "ensure-hyprcursor":
+        hypr = ""
+        xcursor = ""
+        theme_path = ""
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--hyprcursor" and i + 1 < len(sys.argv):
+                hypr = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--xcursor" and i + 1 < len(sys.argv):
+                xcursor = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--theme-path" and i + 1 < len(sys.argv):
+                theme_path = sys.argv[i+1]; i += 2
+            elif not sys.argv[i].startswith("--"):
+                if not hypr: hypr = sys.argv[i]
+                elif not xcursor: xcursor = sys.argv[i]
+                elif not theme_path: theme_path = sys.argv[i]
+                i += 1
+            else:
+                i += 1
+        res = run_ensure_hyprcursor(hypr, xcursor, theme_path)
+        sys.stdout.write(res + "\n")
+        sys.exit(0)
+
+    elif cmd == "apply":
+        hypr = ""
+        xcursor = ""
+        theme_path = ""
+        size = 16
+        mode = "--preview"
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--hyprcursor" and i + 1 < len(sys.argv):
+                hypr = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--xcursor" and i + 1 < len(sys.argv):
+                xcursor = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--theme-path" and i + 1 < len(sys.argv):
+                theme_path = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--size" and i + 1 < len(sys.argv):
+                try: size = int(sys.argv[i+1])
+                except ValueError: pass
+                i += 2
+            elif sys.argv[i] in ("--preview", "--commit"):
+                mode = sys.argv[i]; i += 1
+            else:
+                i += 1
+        run_apply(hypr, xcursor, theme_path, size, mode)
+        sys.exit(0)
+
+    elif cmd == "open-folder":
+        path = ""
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--path" and i + 1 < len(sys.argv):
+                path = sys.argv[i+1]; i += 2
+            elif not sys.argv[i].startswith("--"):
+                path = sys.argv[i]; i += 1
+            else:
+                i += 1
+        if path and os.path.isdir(path):
+            run_bounded(["xdg-open", path], timeout=TIMEOUT_OPEN_FOLDER)
+            emit_bounded_json({"ok": True})
+        else:
+            emit_bounded_json({"ok": False, "error": "Invalid directory path"}, exit_code=1)
+
+    elif cmd == "state-read":
+        st = secure_state.read_state()
+        emit_bounded_json(st, max_bytes=LIMIT_STDOUT_SMALL)
+
+    elif cmd == "state-write":
+        state_json = ""
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--state" and i + 1 < len(sys.argv):
+                state_json = sys.argv[i+1]; i += 2
+            else:
+                i += 1
+        if not state_json and not sys.stdin.isatty():
+            state_json = sys.stdin.read(secure_state.MAX_STATE_BYTES + 1)
+        try:
+            data = json.loads(state_json)
+            ok = secure_state.write_state(data)
+            emit_bounded_json({"ok": ok})
+        except Exception as exc:
+            emit_bounded_json({"ok": False, "error": str(exc)}, exit_code=1)
+
+    elif cmd == "integration-status":
+        home, _, data_home, _ = cleanup_engine._get_home_dirs()
+        desktop_path = os.path.join(data_home, "applications", "omarchy-cursor-switcher.desktop")
+        launcher_path = os.path.join(home, ".local", "bin", "omarchy-cursor-switcher")
+        cleanup_path = os.path.join(data_home, "omarchy-cursor-switcher", "omarchy-cursor-switcher-cleanup")
+        installed = os.path.isfile(desktop_path) and os.path.isfile(launcher_path)
+        st = secure_state.read_state()
+        emit_bounded_json({
+            "ok": True,
+            "installed": installed,
+            "consent": bool(st.get("integrationConsent", False)),
+            "paths": [
+                desktop_path,
+                launcher_path,
+                cleanup_path,
+                os.path.join(data_home, "icons", "hicolor", "scalable", "apps", "omarchy-cursor-switcher.svg")
+            ]
+        })
+
+    elif cmd in ("integration-install", "register-app"):
+        source = ""
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--source" and i + 1 < len(sys.argv):
+                source = sys.argv[i+1]; i += 2
+            elif not sys.argv[i].startswith("--"):
+                source = sys.argv[i]; i += 1
+            else:
+                i += 1
+        res = cleanup_engine.install_integration(source)
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+
+    elif cmd in ("integration-remove", "unregister-app"):
+        res = cleanup_engine.remove_integration()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+
+    elif cmd == "install-cleanup-helper":
+        # Legacy compat: installs integration helper
+        source = ""
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--source" and i + 1 < len(sys.argv):
+                source = sys.argv[i+1]; i += 2
+            elif not sys.argv[i].startswith("--"):
+                source = sys.argv[i]; i += 1
+            else:
+                i += 1
+        home, _, data_home, _ = cleanup_engine._get_home_dirs()
+        target_dir = os.path.join(data_home, "omarchy-cursor-switcher")
+        src_file = os.path.join(source, "scripts", "omarchy-cursor-switcher-cleanup")
+        if os.path.isfile(src_file):
+            os.makedirs(target_dir, exist_ok=True)
+            for mod_name, mod_mode in [
+                ("omarchy-cursor-switcher-cleanup", 0o755),
+                ("cleanup_engine.py", 0o644),
+                ("runtime_safety.py", 0o644),
+                ("secure_state.py", 0o644)
+            ]:
+                s_path = os.path.join(source, "scripts", mod_name)
+                if os.path.isfile(s_path):
+                    t_path = os.path.join(target_dir, mod_name)
+                    tmp = t_path + f".tmp.{os.getpid()}"
+                    shutil.copy2(s_path, tmp)
+                    os.chmod(tmp, mod_mode)
+                    os.replace(tmp, t_path)
+            target_file = os.path.join(target_dir, "omarchy-cursor-switcher-cleanup")
+            emit_bounded_json({"ok": True, "installed": target_file})
+        else:
+            emit_bounded_json({"ok": False, "error": "Cleanup helper source not found"}, exit_code=1)
+
+    elif cmd == "snapshot-original-state":
+        res = cleanup_engine.snapshot_original_state()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+
+    elif cmd == "restore-original-state":
+        res = cleanup_engine.restore_original_state()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+
+    elif cmd == "deactivate":
+        res = cleanup_engine.deactivate()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+
+    elif cmd == "purge":
+        res = cleanup_engine.purge()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+
+    elif cmd == "on-destroy":
+        pdir = ""
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--plugin-dir" and i + 1 < len(sys.argv):
+                pdir = sys.argv[i+1]; i += 2
+            elif not sys.argv[i].startswith("--"):
+                pdir = sys.argv[i]; i += 1
+            else:
+                i += 1
+        res = cleanup_engine.on_destroy(pdir)
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+
+    elif cmd == "audit-installation":
+        res = cleanup_engine.audit_installation()
+        emit_bounded_json(res, exit_code=0)
+
+    # Forwarding to other sub-scripts with sys.argv preservation
+    elif cmd == "import":
+        import importlib
+        cursor_import = importlib.import_module("cursor-import")
+        sys.argv = ["cursor-import.py", "import"] + sys.argv[2:]
+        cursor_import.main()
+
+    elif cmd == "remove-imported":
+        import importlib
+        cursor_import = importlib.import_module("cursor-import")
+        # Support positional ID or --id
+        args = sys.argv[2:]
+        if len(args) == 1 and not args[0].startswith("--"):
+            args = ["--id", args[0]]
+        sys.argv = ["cursor-import.py", "remove"] + args
+        cursor_import.main()
+
+    elif cmd == "rename-imported":
+        import importlib
+        cursor_import = importlib.import_module("cursor-import")
+        sys.argv = ["cursor-import.py", "rename"] + sys.argv[2:]
+        cursor_import.main()
+
+    elif cmd == "list-dir":
+        sys.argv = ["file_browser.py"] + sys.argv[2:]
+        file_browser.main()
+
+    elif cmd == "choose-file":
+        import importlib
+        choose_file = importlib.import_module("choose-file")
+        sys.argv = ["choose-file.py"] + sys.argv[2:]
+        choose_file.main()
+
+    elif cmd == "get-preview-roles":
+        sys.argv = ["cursor_theming.py", "get-preview-roles"] + sys.argv[2:]
+        cursor_theming.main()
+
+    elif cmd == "get-all-preview-roles":
+        sys.argv = ["cursor_theming.py", "get-all-preview-roles"] + sys.argv[2:]
+        cursor_theming.main()
+
+    else:
+        sys.stderr.write(f"cursorctl: unknown command '{cmd}'\n")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

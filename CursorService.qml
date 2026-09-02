@@ -11,9 +11,6 @@ Item {
   property var manifest: null
   readonly property string pluginRoot: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
   readonly property string helperPath: pluginRoot + "/scripts/cursorctl"
-  readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || ((Quickshell.env("HOME") || "") + "/.config")
-  readonly property string stateDir: configHome + "/omarchy"
-  readonly property string statePath: stateDir + "/cursor-switcher.json"
 
   property var themes: []
   property var committedTheme: null
@@ -31,6 +28,13 @@ Item {
   property string statusText: "Starting…"
   property double lastScanMs: 0
 
+  // Optional Desktop Integration State
+  property bool integrationInstalled: false
+  property bool integrationConsent: false
+  property bool integrationLoading: false
+  property string integrationError: ""
+  property var integrationPaths: []
+
   property bool _started: false
   property bool _stateLoaded: false
   property bool _scanLoaded: false
@@ -43,11 +47,11 @@ Item {
   property var _debouncedPreview: null
   property string _discoverOutput: ""
   property string _discoverError: ""
-  property bool _savePending: false
 
   signal themesChangedByScan()
   signal importCompleted(var theme, string message)
   signal importFailed(string error)
+  signal integrationChanged()
 
   // In-App File Browser State
   property string browserPath: ""
@@ -59,8 +63,7 @@ Item {
   property string browserError: ""
 
   function elide(value) {
-    var text = String(value || "").replace(/\s+/g, " ").trim()
-    return text.length > 180 ? text.substring(0, 177) + "…" : text
+    return Model.sanitizeString(value, 256)
   }
 
   function start() {
@@ -68,28 +71,21 @@ Item {
     var sourceRoot = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
     if (sourceRoot === "") { startupTimer.restart(); return }
     _started = true
-    stateDirProcess.running = true
-    snapshotProcess.command = [sourceRoot + "/scripts/cursorctl", "snapshot-original-state"]
-    snapshotProcess.running = true
+
+    // Load state from secure state helper
+    stateReadProcess.command = [helperPath, "state-read"]
+    stateReadProcess.running = true
+    stateReadWatchdog.restart()
+
+    // Query integration status
+    checkIntegrationStatus()
+
+    // Start theme discovery
+    refresh(true)
   }
 
   onManifestChanged: startupTimer.restart()
   Component.onCompleted: startupTimer.restart()
-  Component.onDestruction: {
-    var isEnabled = false
-    if (shell && shell.pluginRegistry && typeof shell.pluginRegistry.isEnabled === "function") {
-      isEnabled = shell.pluginRegistry.isEnabled(manifest && manifest.id ? manifest.id : "sanjyay.cursor-theme-manager")
-    } else if (manifest && manifest.id && shell && shell.pluginRegistry) {
-      isEnabled = shell.pluginRegistry.isEnabled(manifest.id)
-    }
-    if (isEnabled) {
-      return
-    }
-    var dataHome = Quickshell.env("XDG_DATA_HOME") || ((Quickshell.env("HOME") || "") + "/.local/share")
-    var cleanupPath = dataHome + "/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup"
-    var sourceRoot = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : (root.pluginRoot || "")
-    Util.execDetached(Util.shellQuote(cleanupPath) + " on-destroy --plugin-dir " + Util.shellQuote(sourceRoot))
-  }
 
   Timer { id: startupTimer; interval: 25; repeat: false; onTriggered: root.start() }
 
@@ -101,6 +97,7 @@ Item {
     _discoverError = ""
     discoverProcess.command = [helperPath, "discover"]
     discoverProcess.running = true
+    discoverWatchdog.restart()
   }
 
   function refreshIfStale() { refresh(false) }
@@ -134,11 +131,12 @@ Item {
     if (prefetchRolesProcess.running) return
     prefetchRolesProcess.command = [helperPath, "get-all-preview-roles"]
     prefetchRolesProcess.running = true
+    prefetchRolesWatchdog.restart()
   }
 
   function fetchRoles(themeIdentifier, themePath) {
     if (!themeIdentifier) return
-    var key = String(themeIdentifier)
+    var key = Model.sanitizeString(themeIdentifier, 256)
     if (rolesCache[key]) {
       currentRoles = rolesCache[key]
       return
@@ -159,6 +157,7 @@ Item {
     }
     fetchRolesProcess.command = args
     fetchRolesProcess.running = true
+    fetchRolesWatchdog.restart()
   }
 
   function initialize(currentXcursor) {
@@ -166,6 +165,8 @@ Item {
 
     committedSize = Model.validSize(_loadedState.size)
     importedThemes = _loadedState.importedThemes || []
+    integrationConsent = Boolean(_loadedState.integrationConsent)
+    integrationInstalled = Boolean(_loadedState.integrationInstalled)
 
     var found = _loadedState.ok ? Model.findTheme(themes, _loadedState.theme) : null
     if (!found) found = Model.fallbackTheme(themes, currentXcursor)
@@ -233,17 +234,20 @@ Item {
     applyProcess.command = Model.applyArguments(helperPath, _activeApply.theme, _activeApply.size,
       _activeApply.kind === "preview")
     applyProcess.running = true
+    applyWatchdog.restart()
   }
 
   function persistState() {
-    if (!stateDirReady) { _savePending = true; return }
-    _savePending = false
     var doc = Model.stateDocument(
       committedTheme,
       committedSize,
-      importedThemes
+      importedThemes,
+      integrationConsent,
+      integrationInstalled
     )
-    stateFile.setText(doc)
+    stateWriteProcess.command = [helperPath, "state-write", "--state", doc]
+    stateWriteProcess.running = true
+    stateWriteWatchdog.restart()
   }
 
   function indexOfCommitted() {
@@ -254,33 +258,60 @@ Item {
     return -1
   }
 
-  function themeSummary(theme) {
-    if (!theme) return "Unavailable"
-    if (theme.subtitle) return theme.subtitle
-    if (theme.formats.length === 2) return "Hyprcursor + XCursor"
-    return theme.formats[0] === "hyprcursor" ? "Hyprcursor" : "XCursor"
-  }
-
   function restoreConfigured() {
     if (committedTheme) enqueueApply(committedTheme, committedSize, "restore")
   }
 
-  // File Chooser & Import API
+  // ===========================================================================
+  // Desktop Integration API
+  // ===========================================================================
+
+  function checkIntegrationStatus() {
+    if (integrationStatusProcess.running) return
+    integrationStatusProcess.command = [helperPath, "integration-status"]
+    integrationStatusProcess.running = true
+    integrationStatusWatchdog.restart()
+  }
+
+  function installIntegration() {
+    if (integrationInstallProcess.running || integrationRemoveProcess.running) return
+    integrationLoading = true
+    integrationError = ""
+    integrationInstallProcess.command = [helperPath, "integration-install", "--source", pluginRoot]
+    integrationInstallProcess.running = true
+    integrationInstallWatchdog.restart()
+  }
+
+  function removeIntegration() {
+    if (integrationInstallProcess.running || integrationRemoveProcess.running) return
+    integrationLoading = true
+    integrationError = ""
+    integrationRemoveProcess.command = [helperPath, "integration-remove"]
+    integrationRemoveProcess.running = true
+    integrationRemoveWatchdog.restart()
+  }
+
+  // ===========================================================================
+  // File Chooser, Browser, Import API
+  // ===========================================================================
+
   function chooseAndImportFile() {
     if (chooseFileProcess.running || importProcess.running) return
     chooseFileProcess.running = true
+    chooseFileWatchdog.restart()
   }
 
   function importTheme(sourcePath, optionalName) {
     if (!sourcePath || importProcess.running) return
     lastError = ""
     statusText = "Importing theme…"
-    var args = [helperPath, "import", "--source", sourcePath]
+    var args = [helperPath, "import", "--source", String(sourcePath)]
     if (optionalName) {
-      args.push("--name", String(optionalName))
+      args.push("--name", Model.sanitizeString(optionalName, 100))
     }
     importProcess.command = args
     importProcess.running = true
+    importWatchdog.restart()
   }
 
   function removeImportedTheme(theme) {
@@ -292,90 +323,208 @@ Item {
       if (fb) enqueueApply(fb, committedSize, "commit")
     }
     rolesCache = ({})
-    removeImportProcess.command = [helperPath, "remove-imported", "--id", theme.id]
+    removeImportProcess.command = [helperPath, "remove-imported", "--id", String(theme.id)]
     removeImportProcess.running = true
+    removeImportWatchdog.restart()
   }
 
   function openThemeFolder(theme) {
-    if (!theme || !theme.path) return
-    Util.execDetached("xdg-open " + Util.shellQuote(theme.path))
+    if (!theme || !theme.path || openFolderProcess.running) return
+    openFolderProcess.command = [helperPath, "open-folder", "--path", String(theme.path)]
+    openFolderProcess.running = true
+    openFolderWatchdog.restart()
   }
 
   function renameImportedTheme(theme, newName) {
     if (!theme || !theme.id || !newName || renameImportProcess.running) return
     lastError = ""
     rolesCache = ({})
-    renameImportProcess.command = [helperPath, "rename-imported", "--id", theme.id, "--name", String(newName).trim()]
+    renameImportProcess.command = [helperPath, "rename-imported", "--id", String(theme.id), "--name", Model.sanitizeString(newName, 100)]
     renameImportProcess.running = true
+    renameImportWatchdog.restart()
   }
 
-  Process {
-    id: stateDirProcess
-    command: ["mkdir", "-p", root.stateDir]
-    property bool complete: false
-    onExited: function(exitCode) {
-      complete = true
-      root.stateDirReady = exitCode === 0
-      if (!root.stateDirReady) root.lastError = "Could not create the cursor settings directory"
-      else if (root._savePending) root.persistState()
-    }
-  }
-  property bool stateDirReady: false
-
-  FileView {
-    id: stateFile
-    path: root.statePath
-    watchChanges: false
-    atomicWrites: true
-    printErrors: false
-    onLoaded: {
-      root._loadedState = Model.parseState(text())
-      root._stateLoaded = true
-      root.initialize("")
-    }
-    onLoadFailed: {
-      root._loadedState = Model.parseState("")
-      root._stateLoaded = true
-      root.initialize("")
-    }
+  function browseDirectory(path) {
+    if (listDirProcess.running) return
+    browserLoading = true
+    browserError = ""
+    var target = path ? String(path) : (browserPath || "")
+    listDirProcess.command = [helperPath, "list-dir", "--path", target]
+    listDirProcess.running = true
+    listDirWatchdog.restart()
   }
 
-  Process {
-    id: snapshotProcess
-    running: false
-    command: []
-    onExited: function(exitCode) {
-      cleanupHelperProcess.command = [root.helperPath, "install-cleanup-helper",
-        "--source", root.pluginRoot]
-      cleanupHelperProcess.running = true
-    }
-  }
+  // ===========================================================================
+  // PROCESS DEFINITIONS WITH WATCHDOG TIMERS
+  // ===========================================================================
 
-  Process {
-    id: cleanupHelperProcess
-    running: false
-    command: []
-    onExited: function(exitCode) {
-      registerAppProcess.command = [root.helperPath, "register-app",
-        "--source", root.pluginRoot]
-      registerAppProcess.running = true
-    }
-  }
-
-  Process {
-    id: registerAppProcess
-    running: false
-    command: []
-    stderr: StdioCollector { id: registerAppStderr; waitForEnd: true }
-    onExited: function(exitCode) {
-      if (exitCode !== 0) {
-        console.warn("sanjyay.cursor-theme-manager: app registration failed:",
-          root.elide(registerAppStderr.text || "unknown error"))
+  // 1. State Read Process
+  Timer {
+    id: stateReadWatchdog
+    interval: 6000
+    repeat: false
+    onTriggered: {
+      if (stateReadProcess.running) {
+        stateReadProcess.running = false
+        root._loadedState = Model.parseState("")
+        root._stateLoaded = true
+        root.initialize("")
       }
-      root.refresh(true)
     }
   }
 
+  Process {
+    id: stateReadProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: stateReadStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      stateReadWatchdog.stop()
+      var text = exitCode === 0 ? (stateReadStdout.text || "") : ""
+      root._loadedState = Model.parseState(text)
+      root._stateLoaded = true
+      root.initialize("")
+    }
+  }
+
+  // 2. State Write Process
+  Timer {
+    id: stateWriteWatchdog
+    interval: 6000
+    repeat: false
+    onTriggered: if (stateWriteProcess.running) stateWriteProcess.running = false
+  }
+
+  Process {
+    id: stateWriteProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      stateWriteWatchdog.stop()
+    }
+  }
+
+  // 3. Integration Status Process
+  Timer {
+    id: integrationStatusWatchdog
+    interval: 10000
+    repeat: false
+    onTriggered: if (integrationStatusProcess.running) integrationStatusProcess.running = false
+  }
+
+  Process {
+    id: integrationStatusProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: integrationStatusStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      integrationStatusWatchdog.stop()
+      if (exitCode === 0) {
+        try {
+          var res = JSON.parse(integrationStatusStdout.text || "{}")
+          if (res.ok) {
+            root.integrationInstalled = Boolean(res.installed)
+            root.integrationConsent = Boolean(res.consent)
+            root.integrationPaths = res.paths || []
+            root.integrationChanged()
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  // 4. Integration Install Process
+  Timer {
+    id: integrationInstallWatchdog
+    interval: 15000
+    repeat: false
+    onTriggered: {
+      if (integrationInstallProcess.running) {
+        integrationInstallProcess.running = false
+        root.integrationLoading = false
+        root.integrationError = "Integration installation timed out"
+      }
+    }
+  }
+
+  Process {
+    id: integrationInstallProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: integrationInstallStdout; waitForEnd: true }
+    stderr: StdioCollector { id: integrationInstallStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      integrationInstallWatchdog.stop()
+      root.integrationLoading = false
+      if (exitCode === 0) {
+        root.integrationInstalled = true
+        root.integrationConsent = true
+        root.integrationError = ""
+        root.persistState()
+        root.checkIntegrationStatus()
+      } else {
+        var err = "Integration installation failed"
+        try {
+          var p = JSON.parse(integrationInstallStdout.text || "{}")
+          if (p.error) err = p.error
+        } catch (e) {
+          if (integrationInstallStderr.text) err = root.elide(integrationInstallStderr.text)
+        }
+        root.integrationError = err
+      }
+      root.integrationChanged()
+    }
+  }
+
+  // 5. Integration Remove Process
+  Timer {
+    id: integrationRemoveWatchdog
+    interval: 15000
+    repeat: false
+    onTriggered: {
+      if (integrationRemoveProcess.running) {
+        integrationRemoveProcess.running = false
+        root.integrationLoading = false
+        root.integrationError = "Integration removal timed out"
+      }
+    }
+  }
+
+  Process {
+    id: integrationRemoveProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: integrationRemoveStdout; waitForEnd: true }
+    stderr: StdioCollector { id: integrationRemoveStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      integrationRemoveWatchdog.stop()
+      root.integrationLoading = false
+      if (exitCode === 0) {
+        root.integrationInstalled = false
+        root.integrationConsent = false
+        root.integrationError = ""
+        root.persistState()
+        root.checkIntegrationStatus()
+      } else {
+        root.integrationError = root.elide(integrationRemoveStderr.text || "Failed to remove desktop integration")
+      }
+      root.integrationChanged()
+    }
+  }
+
+  // 6. Discovery Process
+  Timer {
+    id: discoverWatchdog
+    interval: 12000
+    repeat: false
+    onTriggered: {
+      if (discoverProcess.running) {
+        discoverProcess.running = false
+        root.scanning = false
+        root.lastError = "Cursor discovery timed out"
+      }
+    }
+  }
 
   Process {
     id: discoverProcess
@@ -384,6 +533,7 @@ Item {
     stdout: StdioCollector { id: discoverStdout; waitForEnd: true; onStreamFinished: root._discoverOutput = text }
     stderr: StdioCollector { id: discoverStderr; waitForEnd: true; onStreamFinished: root._discoverError = text }
     onExited: function(exitCode) {
+      discoverWatchdog.stop()
       root.scanning = false
       if (exitCode === 0) root.parseDiscovery(discoverStdout.text || root._discoverOutput)
       else {
@@ -393,12 +543,21 @@ Item {
     }
   }
 
+  // 7. Fetch Roles Process
+  Timer {
+    id: fetchRolesWatchdog
+    interval: 7000
+    repeat: false
+    onTriggered: if (fetchRolesProcess.running) fetchRolesProcess.running = false
+  }
+
   Process {
     id: fetchRolesProcess
     running: false
     command: []
     stdout: StdioCollector { id: fetchRolesStdout; waitForEnd: true }
     onExited: function(exitCode) {
+      fetchRolesWatchdog.stop()
       var fetchingTheme = root._activeFetchingTheme
       root._activeFetchingTheme = ""
       if (exitCode === 0) {
@@ -424,12 +583,21 @@ Item {
     }
   }
 
+  // 8. Prefetch Roles Process
+  Timer {
+    id: prefetchRolesWatchdog
+    interval: 18000
+    repeat: false
+    onTriggered: if (prefetchRolesProcess.running) prefetchRolesProcess.running = false
+  }
+
   Process {
     id: prefetchRolesProcess
     running: false
     command: []
     stdout: StdioCollector { id: prefetchRolesStdout; waitForEnd: true }
     onExited: function(exitCode) {
+      prefetchRolesWatchdog.stop()
       if (exitCode === 0) {
         try {
           var allRes = JSON.parse(prefetchRolesStdout.text || "{}")
@@ -451,13 +619,18 @@ Item {
     }
   }
 
-  function browseDirectory(path) {
-    if (listDirProcess.running) return
-    browserLoading = true
-    browserError = ""
-    var target = path ? String(path) : (browserPath || "")
-    listDirProcess.command = [helperPath, "list-dir", "--path", target]
-    listDirProcess.running = true
+  // 9. List Directory Process
+  Timer {
+    id: listDirWatchdog
+    interval: 6000
+    repeat: false
+    onTriggered: {
+      if (listDirProcess.running) {
+        listDirProcess.running = false
+        root.browserLoading = false
+        root.browserError = "Directory reading timed out"
+      }
+    }
   }
 
   Process {
@@ -467,6 +640,7 @@ Item {
     stdout: StdioCollector { id: listDirStdout; waitForEnd: true }
     stderr: StdioCollector { id: listDirStderr; waitForEnd: true }
     onExited: function(exitCode) {
+      listDirWatchdog.stop()
       root.browserLoading = false
       var raw = String(listDirStdout.text || "").trim()
       if (exitCode === 0 && raw) {
@@ -491,15 +665,39 @@ Item {
     }
   }
 
+  // 10. Choose File Process
+  Timer {
+    id: chooseFileWatchdog
+    interval: 60000
+    repeat: false
+    onTriggered: if (chooseFileProcess.running) chooseFileProcess.running = false
+  }
+
   Process {
     id: chooseFileProcess
     running: false
     command: [root.helperPath, "choose-file"]
     stdout: StdioCollector { id: chooseFileStdout; waitForEnd: true }
     onExited: function(exitCode) {
+      chooseFileWatchdog.stop()
       var selected = String(chooseFileStdout.text || "").trim()
       if (exitCode === 0 && selected.length > 0) {
         root.importTheme(selected)
+      }
+    }
+  }
+
+  // 11. Import Process
+  Timer {
+    id: importWatchdog
+    interval: 130000
+    repeat: false
+    onTriggered: {
+      if (importProcess.running) {
+        importProcess.running = false
+        root.lastError = "Import operation timed out"
+        root.statusText = "Import failed"
+        root.importFailed("Import operation timed out")
       }
     }
   }
@@ -511,6 +709,7 @@ Item {
     stdout: StdioCollector { id: importStdout; waitForEnd: true }
     stderr: StdioCollector { id: importStderr; waitForEnd: true }
     onExited: function(exitCode) {
+      importWatchdog.stop()
       var raw = String(importStdout.text || "").trim()
       try {
         var parsed = JSON.parse(raw)
@@ -539,11 +738,20 @@ Item {
     }
   }
 
+  // 12. Remove Import Process
+  Timer {
+    id: removeImportWatchdog
+    interval: 12000
+    repeat: false
+    onTriggered: if (removeImportProcess.running) removeImportProcess.running = false
+  }
+
   Process {
     id: removeImportProcess
     running: false
     command: []
     onExited: function(exitCode) {
+      removeImportWatchdog.stop()
       if (exitCode === 0) {
         root.statusText = "Imported theme removed"
         root.refresh(true)
@@ -553,6 +761,14 @@ Item {
     }
   }
 
+  // 13. Rename Import Process
+  Timer {
+    id: renameImportWatchdog
+    interval: 12000
+    repeat: false
+    onTriggered: if (renameImportProcess.running) renameImportProcess.running = false
+  }
+
   Process {
     id: renameImportProcess
     running: false
@@ -560,6 +776,7 @@ Item {
     stdout: StdioCollector { id: renameImportStdout; waitForEnd: true }
     stderr: StdioCollector { id: renameImportStderr; waitForEnd: true }
     onExited: function(exitCode) {
+      renameImportWatchdog.stop()
       if (exitCode === 0) {
         root.rolesCache = ({})
         root.statusText = "Theme renamed"
@@ -570,6 +787,24 @@ Item {
     }
   }
 
+  // 14. Open Folder Process
+  Timer {
+    id: openFolderWatchdog
+    interval: 6000
+    repeat: false
+    onTriggered: if (openFolderProcess.running) openFolderProcess.running = false
+  }
+
+  Process {
+    id: openFolderProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      openFolderWatchdog.stop()
+    }
+  }
+
+  // 15. Apply Process
   Timer {
     id: previewTimer
     interval: 120
@@ -581,6 +816,21 @@ Item {
     }
   }
 
+  Timer {
+    id: applyWatchdog
+    interval: 12000
+    repeat: false
+    onTriggered: {
+      if (applyProcess.running) {
+        applyProcess.running = false
+        root.applying = false
+        root.lastError = "Cursor apply operation timed out"
+        root._activeApply = null
+        root.startQueuedApply()
+      }
+    }
+  }
+
   Process {
     id: applyProcess
     running: false
@@ -588,6 +838,7 @@ Item {
     stdout: StdioCollector { id: applyStdout; waitForEnd: true; onStreamFinished: root._applyStdout = text }
     stderr: StdioCollector { id: applyStderr; waitForEnd: true; onStreamFinished: root._applyStderr = text }
     onExited: function(exitCode) {
+      applyWatchdog.stop()
       var request = root._activeApply
       root.applying = false
       if (exitCode !== 0) {

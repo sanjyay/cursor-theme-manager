@@ -20,6 +20,7 @@ Row {
   Text {
     anchors.verticalCenter: parent.verticalCenter
     text: "Cursor size:"
+    textFormat: Text.PlainText
     color: Color.popups.text
     font.family: Style.font.family
     font.pixelSize: Style.font.body
@@ -46,6 +47,7 @@ Row {
       Text {
         anchors.centerIn: parent
         text: "−"
+        textFormat: Text.PlainText
         color: decBtn.canDec ? Color.popups.text : Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.title
@@ -79,6 +81,7 @@ Row {
       Text {
         anchors.centerIn: parent
         text: root.committedSize + " px"
+        textFormat: Text.PlainText
         color: Color.popups.text
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
@@ -102,6 +105,7 @@ Row {
       Text {
         anchors.centerIn: parent
         text: "+"
+        textFormat: Text.PlainText
         color: incBtn.canInc ? Color.popups.text : Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.title

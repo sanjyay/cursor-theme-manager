@@ -27,7 +27,10 @@ tests/cursorctl.test.sh
 echo "=== 8. Removal Lifecycle Shell Tests ==="
 tests/removal_lifecycle.test.sh
 
-echo "=== 9. QML Lint Validation ==="
+echo "=== 9. Adversarial Security Tests ==="
+python3 "$ROOT/tests/security_adversarial.test.py"
+
+echo "=== 10. QML Lint Validation ==="
 qmllint -I /usr/share/omarchy/shell Panel.qml CursorService.qml components/*.qml
 qmllint tests/manual-cursor-roles.qml
 

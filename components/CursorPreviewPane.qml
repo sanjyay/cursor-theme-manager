@@ -62,6 +62,7 @@ Item {
       // Right Header: Preview Title
       Text {
         text: "Cursor Theme Preview"
+        textFormat: Text.PlainText
         color: Color.popups.text
         font.family: Style.font.family
         font.pixelSize: Style.font.title
@@ -130,7 +131,7 @@ Item {
                     visible: source !== ""
                   }
 
-                  // Understated Hotspot Indicator (only visible on hover when coordinates are valid)
+                  // Understated Hotspot Indicator
                   Rectangle {
                     visible: roleMouse.containsMouse && roleCol.modelData.hotspotX >= 0 && roleCol.modelData.hotspotY >= 0
                     x: Math.round(roleCol.modelData.hotspotX * parent.width) - width / 2
@@ -156,6 +157,7 @@ Item {
               Text {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: roleCol.modelData.label
+                textFormat: Text.PlainText
                 color: roleMouse.containsMouse ? Color.accent : Color.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
@@ -198,7 +200,8 @@ Item {
             spacing: Style.space(8)
 
             Text {
-              text: root.theme ? (root.theme.displayName || root.theme.id) : "No theme selected"
+              text: root.theme ? (root.theme.displayName || root.theme.id || "") : "No theme selected"
+              textFormat: Text.PlainText
               color: Color.popups.text
               font.family: Style.font.family
               font.pixelSize: Style.font.body
@@ -220,6 +223,7 @@ Item {
               visible: cleanSubtitle.length > 0
               anchors.verticalCenter: parent.verticalCenter
               text: "• " + cleanSubtitle
+              textFormat: Text.PlainText
               color: Color.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -253,6 +257,7 @@ Item {
                     id: fmtLabel
                     anchors.centerIn: parent
                     text: modelData === "hyprcursor" ? "Hyprcursor" : "XCursor"
+                    textFormat: Text.PlainText
                     color: Color.popups.text
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption - 2
@@ -274,38 +279,38 @@ Item {
               border.color: Util.alpha(Color.popups.text, 0.18)
               border.width: 1
 
-                Text {
-                  anchors.centerIn: parent
-                  text: "⋯"
-                  color: Color.popups.text
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: true
-                }
+              Text {
+                anchors.centerIn: parent
+                text: "⋯"
+                textFormat: Text.PlainText
+                color: Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+              }
 
-                MouseArea {
-                  id: contextMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: contextMenu.open()
-                }
+              MouseArea {
+                id: contextMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: contextMenu.open()
+              }
 
-                Menu {
-                  id: contextMenu
-                  y: contextBtn.height + 4
-                  MenuItem {
-                    text: "Open folder"
-                    onTriggered: if (root.theme) root.openFolderRequested(root.theme)
-                  }
-                  MenuItem {
-                    text: "Rename"
-                    onTriggered: if (root.theme) root.renameThemeRequested(root.theme)
-                  }
-                  MenuItem {
-                    text: "Remove"
-                    onTriggered: if (root.theme) root.removeThemeRequested(root.theme)
-                  }
+              Menu {
+                id: contextMenu
+                y: contextBtn.height + 4
+                MenuItem {
+                  text: "Open folder"
+                  onTriggered: if (root.theme) root.openFolderRequested(root.theme)
+                }
+                MenuItem {
+                  text: "Rename"
+                  onTriggered: if (root.theme) root.renameThemeRequested(root.theme)
+                }
+                MenuItem {
+                  text: "Remove"
+                  onTriggered: if (root.theme) root.removeThemeRequested(root.theme)
                 }
               }
             }
@@ -313,4 +318,5 @@ Item {
         }
       }
     }
+  }
 }

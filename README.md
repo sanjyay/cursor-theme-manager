@@ -13,7 +13,6 @@ Cursor Theme Manager is a local-first cursor theme manager and previewer for Oma
 
 ## Features
 
-- **Standalone Application:** Installs a desktop entry (`Cursor Theme Manager`) and launcher command (`omarchy-cursor-switcher`). Open and configure your cursor directly from your application launcher or terminal.
 - **Local Theme Discovery:** Scans standard system icon directories (`/usr/share/icons`, `/usr/local/share/icons`, `$XDG_DATA_DIRS/icons`) and user directories (`~/.local/share/icons`, `~/.icons`).
 - **Clear Theme Classification:** Accurately categorizes discovered themes into **System**, **User**, and **Imported** sources.
 - **Dynamic Role Previews:** Automatically extracts and renders preview cards for semantic cursor roles (`Default`, `Pointer`, `Text`, `Move`, `Resize`, `Wait`). If a theme does not define a role (e.g., static themes without an animated `Wait` cursor), the card is omitted gracefully and remaining previews automatically reflow and center.
@@ -24,6 +23,9 @@ Cursor Theme Manager is a local-first cursor theme manager and previewer for Oma
 - **Automatic Hyprcursor Compilation:** Legacy XCursor themes are automatically converted to native Hyprcursor packages on-the-fly using `hyprcursor-util`.
 - **Safe Imported-Theme Management:** Rename, open directory, or safely remove themes imported through the plugin directly from the UI or CLI. Destructive actions are restricted strictly to plugin-owned imported themes.
 - **Compositor-Aware Persistence:** Instantly applies changes via `hyprctl setcursor` and `gsettings`, updating UWSM environment files (`~/.config/uwsm/env.d/90-omarchy-cursor-switcher`) and D-Bus activation environments for new applications.
+- **Optional Desktop Integration:** Optional user-consented desktop integration installs desktop entries (`omarchy-cursor-switcher.desktop`) and terminal launcher commands (`omarchy-cursor-switcher`) with transactional installation and clean rollback.
+- **Hardened Subprocess Supervisor:** Bounded stream selectors, strict wall-clock deadlines, and process-group isolation ensure child tools cannot exhaust memory or orphan background processes.
+- **Descriptor-Held Private State:** Secure state directory (`$XDG_STATE_HOME/cursor-theme-manager/`, mode `0700`) with descriptor-held durable writes and schema validation.
 - **Zero Network Access:** Operates completely offline with zero runtime network requests, downloads, or background telemetry.
 - **Fully Responsive:** Fluid layouts designed for full-screen, split tiled (50/50), or compact floating windows.
 
@@ -76,16 +78,15 @@ omarchy plugin enable sanjyay.cursor-theme-manager
 
 ## Launching & Configuring
 
-Cursor Theme Manager integrates with standard desktop launchers and Omarchy shell controls:
+Cursor Theme Manager integrates with standard Omarchy shell controls:
 
-- **Application Launcher:** Open your application launcher (Omarchy drawer, Rofi, Fuzzel, etc.) and search for **Cursor Theme Manager** (or *Cursor Theme*, *Mouse*, *Pointer*).
-- **Command Line:** Run `omarchy-cursor-switcher` from any terminal.
 - **Omarchy Shell IPC:**
   ```bash
   omarchy-shell shell summon sanjyay.cursor-theme-manager '{}'
   omarchy-shell shell toggle sanjyay.cursor-theme-manager '{}'
   omarchy-shell shell hide sanjyay.cursor-theme-manager
   ```
+- **Optional Desktop Entry & CLI:** Enable **Desktop Integration** from within the in-app settings modal to install `omarchy-cursor-switcher.desktop` and the `omarchy-cursor-switcher` CLI command.
 
 ---
 
@@ -137,242 +138,6 @@ The following popular open-source cursor themes are compatible with Cursor Theme
 | **Bibata** | Abdulkaiz Khatri (`ful1e5`) | GPL-3.0 | [ful1e5/Bibata_Cursor](https://github.com/ful1e5/Bibata_Cursor) |
 | **Catppuccin** | Catppuccin Community | GPL-3.0 | [catppuccin/cursors](https://github.com/catppuccin/cursors) |
 
-### Installing Recommended Themes
-
-Cursor Theme Manager does not download these themes automatically. The commands below are optional convenience instructions using each project's upstream distribution method. Review the upstream project before installing or downloading a theme.
-
-<details>
-<summary><strong>Banana</strong> — ful1e5</summary>
-
-**Upstream:** [ful1e5/banana-cursor](https://github.com/ful1e5/banana-cursor) • **Version:** v2.0.0
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S banana-cursor-bin
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Official Release Archive**
-
-```bash
-curl -fL \
-  -o ~/Downloads/Banana.tar.xz \
-  'https://github.com/ful1e5/banana-cursor/releases/download/v2.0.0/Banana.tar.xz'
-```
-
-*Optional integrity check:*
-```bash
-echo "9d2c4003315b3fc39b47c52dbfd6211d499db154b0fbb1c3c4dd9c0023561bf0  $HOME/Downloads/Banana.tar.xz" | sha256sum -c -
-```
-
-Then in Cursor Theme Manager: `Import → Downloads → Banana.tar.xz`
-
-</details>
-
-<details>
-<summary><strong>Phinger</strong> — phisch</summary>
-
-**Upstream:** [phisch/phinger-cursors](https://github.com/phisch/phinger-cursors) • **Version:** v2.1
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S phinger-cursors
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Official Release Archive**
-
-```bash
-curl -fL \
-  -o ~/Downloads/phinger-cursors-variants.tar.bz2 \
-  'https://github.com/phisch/phinger-cursors/releases/download/v2.1/phinger-cursors-variants.tar.bz2'
-```
-
-*Optional integrity check:*
-```bash
-echo "ddb7310c62bf8e0e2798a24f8a867e4af7b17a39757ba45c85e13f3988f646fc  $HOME/Downloads/phinger-cursors-variants.tar.bz2" | sha256sum -c -
-```
-
-Then in Cursor Theme Manager: `Import → Downloads → phinger-cursors-variants.tar.bz2`
-
-</details>
-
-<details>
-<summary><strong>Oreo</strong> — varlesh</summary>
-
-**Upstream:** [varlesh/oreo-cursors](https://github.com/varlesh/oreo-cursors)
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S oreo-cursors-bin
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Upstream Release Download**
-
-Upstream distributes pre-built packages through Pling / OpenDesktop:
-
-1. Download the desired color variant from the upstream [Oreo Cursors Pling Page](https://www.pling.com/p/1360254/).
-2. In Cursor Theme Manager, choose `Import` and select the downloaded archive.
-
-</details>
-
-<details>
-<summary><strong>Volantes</strong> — varlesh</summary>
-
-**Upstream:** [varlesh/volantes-cursors](https://github.com/varlesh/volantes-cursors)
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S volantes-cursors
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Upstream Release Download**
-
-Upstream distributes pre-built archives through Pling / OpenDesktop:
-
-1. Download the desired variant archive from the upstream [Volantes Cursors Pling Page](https://www.pling.com/p/1356095/).
-2. In Cursor Theme Manager, choose `Import` and select the downloaded archive.
-
-</details>
-
-<details>
-<summary><strong>Nordzy</strong> — gboehm</summary>
-
-**Upstream:** [guillaumeboehm/Nordzy-cursors](https://github.com/guillaumeboehm/Nordzy-cursors) • **Version:** v2.4.0
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S nordzy-cursors
-# or for native hyprcursors:
-yay -S nordzy-hyprcursors
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Official Release Archive**
-
-For XCursor:
-```bash
-curl -fL \
-  -o ~/Downloads/Nordzy-cursors.tar.gz \
-  'https://github.com/guillaumeboehm/Nordzy-cursors/releases/download/v2.4.0/Nordzy-cursors.tar.gz'
-```
-
-*Optional integrity check:*
-```bash
-echo "3451c1221d58562a5eb647c45f3f7b5e2bbfe0aacf10d9cbc899bc36e5239e5a  $HOME/Downloads/Nordzy-cursors.tar.gz" | sha256sum -c -
-```
-
-For native Hyprcursor:
-```bash
-curl -fL \
-  -o ~/Downloads/Nordzy-hyprcursors.tar.gz \
-  'https://github.com/guillaumeboehm/Nordzy-cursors/releases/download/v2.4.0/Nordzy-hyprcursors.tar.gz'
-```
-
-*Optional integrity check:*
-```bash
-echo "d13767cd6d4757ddc3722e407d7a5f3422a4e4cce231495b7cf4d1be3e7a8b35  $HOME/Downloads/Nordzy-hyprcursors.tar.gz" | sha256sum -c -
-```
-
-Then in Cursor Theme Manager: `Import → Downloads → Nordzy-*.tar.gz`
-
-</details>
-
-<details>
-<summary><strong>Capitaine</strong> — keeferrourke</summary>
-
-**Upstream:** [keeferrourke/capitaine-cursors](https://github.com/keeferrourke/capitaine-cursors) • **Arch Package:** `extra/capitaine-cursors` (v4-3)
-
-**Option 1 — Official Arch Repository (Recommended)**
-
-```bash
-sudo pacman -S capitaine-cursors
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Upstream Release Download**
-
-1. Download pre-compiled variant packages from the upstream [Capitaine Cursors Pling Page](https://www.pling.com/p/1148692/).
-2. In Cursor Theme Manager, choose `Import` and select the downloaded archive.
-
-</details>
-
-<details>
-<summary><strong>Bibata</strong> — ful1e5</summary>
-
-**Upstream:** [ful1e5/Bibata_Cursor](https://github.com/ful1e5/Bibata_Cursor) • **Version:** v2.0.7
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S bibata-cursor-theme-bin
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Official Release Archive**
-
-```bash
-curl -fL \
-  -o ~/Downloads/Bibata-Modern-Classic.tar.xz \
-  'https://github.com/ful1e5/Bibata_Cursor/releases/download/v2.0.7/Bibata-Modern-Classic.tar.xz'
-```
-
-*Optional integrity check:*
-```bash
-echo "7d3495864e5bbef02f5e77de760b2905903b63c71495a78ef6306d19a3b556d8  $HOME/Downloads/Bibata-Modern-Classic.tar.xz" | sha256sum -c -
-```
-
-Then in Cursor Theme Manager: `Import → Downloads → Bibata-Modern-Classic.tar.xz`
-
-*(All variants archive: `Bibata.tar.xz`)*
-
-</details>
-
-<details>
-<summary><strong>Catppuccin</strong> — Catppuccin</summary>
-
-**Upstream:** [catppuccin/cursors](https://github.com/catppuccin/cursors) • **Version:** v2.0.0
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S catppuccin-cursors-mocha
-# or: yay -S catppuccin-cursors-latte catppuccin-cursors-frappe catppuccin-cursors-macchiato
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Official Release Archive**
-
-```bash
-curl -fL \
-  -o ~/Downloads/catppuccin-mocha-dark-cursors.zip \
-  'https://github.com/catppuccin/cursors/releases/download/v2.0.0/catppuccin-mocha-dark-cursors.zip'
-```
-
-*Optional integrity check:*
-```bash
-echo "a4d976491bdb1b1311b2de88327cad3f1c66c2d9da896e0c56362a660c802585  $HOME/Downloads/catppuccin-mocha-dark-cursors.zip" | sha256sum -c -
-```
-
-Then in Cursor Theme Manager: `Import → Downloads → catppuccin-mocha-dark-cursors.zip`
-
-</details>
-
 ---
 
 ## Managing Imported Themes & Ownership Safety
@@ -401,7 +166,7 @@ scripts/cursorctl remove-imported --id CursorSwitcher-Imported-Bibata-1a2b3c4d5e
 
 ---
 
-## Architecture
+## Architecture & Security Hardening
 
 ```
 Local Filesystem Icon Directories (~/.local/share/icons, /usr/share/icons, etc.)
@@ -416,39 +181,22 @@ Multi-Role Preview Generation & Hotspot Metadata Extraction
 Compositor-Aware Application (hyprctl setcursor, gsettings, UWSM env, D-Bus)
 ```
 
-```
-User-Selected Local Archive / Folder
-  │
-  ▼
-Security Validation & Sandbox Extraction
-  │
-  ▼
-XCursor → Hyprcursor Compilation (via hyprcursor-util if needed)
-  │
-  ▼
-Atomic Install to ~/.local/share/icons/CursorSwitcher-Imported-*
-```
-
----
-
-## Security & Import Hardening
-
 Cursor Theme Manager adheres strictly to defensive security standards:
 
 - **Zero Runtime Network Access:** No automatic downloads, curl/wget execution, or remote dependencies.
-- **Untrusted Input Hardening:** All user-provided archives and directories are validated and isolated prior to extraction.
-- **No Script Execution:** Cursor Theme Manager never executes installer scripts (`install.sh`, `setup.sh`, `Makefile`, `.sh`, `.exe`, `.bat`, etc.) inside theme archives.
-- **Path Traversal Protection:** Extraction strictly forbids relative directory traversal (`..`), absolute paths, device nodes, FIFOs, and symlinks pointing outside the theme directory.
-- **Resource Limits:** Enforces decompression caps to prevent decompression bombs:
+- **Centralized Bounded Process Supervision:** All external subprocesses (`hyprcursor-util`, `xcur2png`, `gsettings`, `systemctl`, `hyprctl`, `xdg-open`) run in isolated process groups under `runtime_safety.run_bounded` with hard memory and wall-clock limits. Exceeding byte limits immediately terminates the process group.
+- **Private Descriptor-Held State:** State is stored in a private directory (`$XDG_STATE_HOME/cursor-theme-manager/`, mode `0700`) and written relative to an open directory descriptor (`dir_fd`) with `fsync`, preventing symlink race attacks.
+- **Transactional Integration with Rollback:** Optional desktop integration uses staged transactional file operations with automatic rollback if any stage fails.
+- **Non-Destructive Restoration:** Restoration strictly limits scope to allowlisted cursor variables and never executes arbitrary resets if snapshot data is missing or invalid.
+- **Strict Plain-Text UI:** Every dynamic user-interface text sink explicitly enforces `textFormat: Text.PlainText`.
+- **Decompression Bomb Protection:**
   - Maximum archive size: **100 MB**
   - Maximum extracted content size: **750 MB**
   - Maximum file count: **10,000 files**
-- **Atomic Operations:** Installs and renames use temporary staging directories with atomic POSIX replacement operations.
-- **Protected Destructive Actions:** Remove and Rename operations are strictly restricted to themes managed by Cursor Theme Manager (verified via `.omarchy-cursor-switcher-imported`), preventing accidental deletion of system or user files.
 
 ---
 
-## Removal
+## Removal & Cleanup
 
 To completely remove the plugin:
 
@@ -457,7 +205,7 @@ omarchy plugin remove sanjyay.cursor-theme-manager
 ```
 
 Removal automatically:
-1. Restores the pre-existing cursor theme and size captured prior to plugin installation (or system default if none was captured).
+1. Restores the pre-existing cursor theme and size captured prior to plugin installation.
 2. Cleans up generated application desktop shortcuts, launchers, and icons.
 3. Removes UWSM configuration fragments and temporary preview caches.
 

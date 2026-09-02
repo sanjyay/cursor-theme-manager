@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Fast, secure directory browser and cursor candidate inspector for Omarchy Cursor Switcher.
-Returns JSON with directories, cursor archives, and cursor theme folders.
+Fast, secure directory browser and cursor candidate inspector for Cursor Theme Manager.
+Returns strictly bounded JSON with directories, cursor archives, and cursor theme folders.
 """
 
 import sys
@@ -10,6 +10,17 @@ import re
 import json
 import argparse
 from pathlib import Path
+
+# Add script dir to path
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from runtime_safety import (
+    sanitize_text, emit_bounded_json,
+    MAX_DIRECTORY_ENTRIES, LIMIT_STDOUT_LARGE,
+    MAX_LEN_FILENAME, MAX_LEN_PATH, MAX_LEN_DISPLAY_NAME
+)
 
 ARCHIVE_EXTENSIONS = {
     ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2", ".tar", ".zip"
@@ -44,7 +55,11 @@ def is_cursor_theme_dir(dir_path_str: str) -> tuple[bool, str]:
         has_hypr_dir = False
         index_file_path = None
         with os.scandir(dir_path_str) as it:
+            count = 0
             for entry in it:
+                count += 1
+                if count > 200:
+                    break
                 n = entry.name.lower()
                 if n == "cursors" and entry.is_dir():
                     has_cursors = True
@@ -67,7 +82,7 @@ def is_cursor_theme_dir(dir_path_str: str) -> tuple[bool, str]:
                                 break
                 except Exception:
                     pass
-            return True, theme_name
+            return True, sanitize_text(theme_name, max_len=MAX_LEN_DISPLAY_NAME)
     except (PermissionError, OSError):
         return False, ""
     return False, ""
@@ -94,15 +109,23 @@ def list_directory(target_path_str: str) -> dict:
     can_go_up = bool(parent_path and parent_path != str(target_path))
 
     entries = []
+    truncated = False
     try:
         with os.scandir(target_path) as it:
             for entry in it:
-                name = entry.name
-                # Skip hidden files unless in .local/share/icons or .icons
+                if len(entries) >= MAX_DIRECTORY_ENTRIES:
+                    truncated = True
+                    break
+
+                name = sanitize_text(entry.name, max_len=MAX_LEN_FILENAME)
+                if not name:
+                    continue
+
+                # Skip hidden files unless in icons directory
                 if name.startswith(".") and not (target_path.name in ["icons", ".icons"] or name in [".icons"]):
                     continue
 
-                full_path_str = entry.path
+                full_path_str = sanitize_text(entry.path, max_len=MAX_LEN_PATH)
                 try:
                     is_dir = entry.is_dir(follow_symlinks=True)
                     is_file = entry.is_file(follow_symlinks=True)
@@ -110,14 +133,14 @@ def list_directory(target_path_str: str) -> dict:
                     continue
 
                 if is_dir:
-                    is_theme, theme_name = is_cursor_theme_dir(full_path_str)
+                    is_theme, theme_name = is_cursor_theme_dir(entry.path)
                     entries.append({
                         "name": name,
                         "path": full_path_str,
                         "is_dir": True,
                         "is_archive": False,
                         "is_theme_dir": is_theme,
-                        "theme_name": theme_name if is_theme else name,
+                        "theme_name": sanitize_text(theme_name if is_theme else name, max_len=MAX_LEN_DISPLAY_NAME),
                         "size_str": "Cursor theme" if is_theme else "Folder",
                         "sort_order": 0 if is_theme else 1
                     })
@@ -141,45 +164,49 @@ def list_directory(target_path_str: str) -> dict:
     except (PermissionError, OSError) as err:
         return {
             "ok": False,
-            "error": f"Cannot access directory: {err}",
-            "path": str(target_path),
-            "parent": parent_path,
+            "error": sanitize_text(f"Cannot access directory: {err}", max_len=256),
+            "path": sanitize_text(str(target_path), max_len=MAX_LEN_PATH),
+            "parent": sanitize_text(parent_path, max_len=MAX_LEN_PATH),
             "can_go_up": can_go_up,
-            "entries": []
+            "entries": [],
+            "truncated": False
         }
 
     # Sort: cursor themes first, then regular folders alphabetically, then archives alphabetically
     entries.sort(key=lambda x: (x["sort_order"], x["name"].lower()))
 
-    # Build breadcrumbs
+    # Build breadcrumbs (capped at 32 depth)
     breadcrumbs = []
     curr = target_path
-    while curr != curr.parent:
+    depth = 0
+    while curr != curr.parent and depth < 32:
         breadcrumbs.append({
-            "name": curr.name or "/",
-            "path": str(curr)
+            "name": sanitize_text(curr.name or "/", max_len=64),
+            "path": sanitize_text(str(curr), max_len=MAX_LEN_PATH)
         })
         curr = curr.parent
+        depth += 1
     breadcrumbs.append({"name": "/", "path": "/"})
     breadcrumbs.reverse()
 
     return {
         "ok": True,
-        "path": str(target_path),
-        "parent": parent_path,
+        "path": sanitize_text(str(target_path), max_len=MAX_LEN_PATH),
+        "parent": sanitize_text(parent_path, max_len=MAX_LEN_PATH),
         "can_go_up": can_go_up,
         "breadcrumbs": breadcrumbs,
-        "entries": entries
+        "entries": entries,
+        "truncated": truncated
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Omarchy File Browser Helper")
+    parser = argparse.ArgumentParser(description="Cursor Theme Manager File Browser Helper")
     parser.add_argument("--path", default="~/Downloads", help="Directory path to list")
     args = parser.parse_args()
 
     result = list_directory(args.path)
-    print(json.dumps(result))
+    emit_bounded_json(result, max_bytes=LIMIT_STDOUT_LARGE)
 
 
 if __name__ == "__main__":
