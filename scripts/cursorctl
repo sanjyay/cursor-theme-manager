@@ -132,6 +132,8 @@ def get_preview_path(theme_dir: Path) -> str:
 def run_discover():
     home = Path(os.environ.get("HOME", os.path.expanduser("~")))
     data_home = Path(os.environ.get("XDG_DATA_HOME", str(home / ".local" / "share")))
+    user_icons = data_home / "icons"
+    data_home = Path(os.environ.get("XDG_DATA_HOME", str(home / ".local" / "share")))
     roots = [data_home / "icons", home / ".icons"]
     sys_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
     for d in sys_dirs:
@@ -232,6 +234,24 @@ def run_discover():
                 idx_comment = read_ini_key(theme_dir / "index.theme", "Comment")
                 subtitle = idx_comment if idx_comment else "User"
 
+            hypr_val = hypr if (hypr and hypr != "-") else "-"
+            xcur_val = xcursor if (xcursor and xcursor != "-") else "-"
+
+            runtime_theme = hypr_val if hypr_val != "-" else xcur_val
+            runtime_prepared = (hypr_val != "-")
+            if not runtime_prepared and xcur_val != "-":
+                for cand in user_icons.iterdir():
+                    if cand.is_dir() and cand.name.startswith(f"CursorSwitcher-XCursor-{base}-"):
+                        if (cand / "manifest.hl").is_file() and (cand / ".cursor-theme-manager-generated").is_file():
+                            runtime_theme = cand.name
+                            hypr_val = cand.name
+                            runtime_prepared = True
+                            if "hyprcursor" not in formats:
+                                formats.append("hyprcursor")
+                            break
+            if runtime_theme == "-":
+                runtime_theme = base
+
             theme_preview = get_preview_path(theme_dir)
 
             theme_record = {
@@ -239,8 +259,10 @@ def run_discover():
                 "displayName": sanitize_text(display, max_len=MAX_LEN_DISPLAY_NAME),
                 "family": sanitize_text(display, max_len=MAX_LEN_DISPLAY_NAME),
                 "subtitle": sanitize_text(subtitle, max_len=MAX_LEN_SUBTITLE),
-                "hyprcursor": sanitize_text(hypr, max_len=MAX_LEN_THEME_ID),
-                "xcursor": sanitize_text(xcursor, max_len=MAX_LEN_THEME_ID),
+                "hyprcursor": sanitize_text(hypr_val, max_len=MAX_LEN_THEME_ID),
+                "xcursor": sanitize_text(xcur_val, max_len=MAX_LEN_THEME_ID),
+                "runtimeTheme": sanitize_text(runtime_theme, max_len=MAX_LEN_THEME_ID),
+                "runtimePrepared": bool(runtime_prepared),
                 "path": path_str,
                 "formats": formats,
                 "imported": is_imported,
@@ -524,6 +546,105 @@ def run_persist_size(hypr: str, xcursor: str, size: int):
     os.replace(hypr_tmp, hypr_file)
 
 
+def run_capture_baseline():
+    st = secure_state.read_state()
+    existing_baseline = st.get("preCtmCursor") or st.get("originalCursor")
+    if not (existing_baseline and existing_baseline.get("captured")):
+        baseline = secure_state.capture_original_cursor()
+        st["preCtmCursor"] = baseline
+        st["originalCursor"] = baseline
+        st["cursorModifiedByCtm"] = True
+        if not secure_state.write_state(st):
+            sys.stderr.write("cursorctl: failed to persist pre-CTM baseline\n")
+            sys.exit(1)
+    emit_bounded_json({"ok": True, "preCtmCursor": st.get("preCtmCursor")})
+    sys.exit(0)
+
+
+def run_persist_theme(theme_json: str, size: int):
+    if size not in secure_state.SUPPORTED_SIZES:
+        sys.stderr.write(f"cursorctl: unsupported cursor size: {size}\n")
+        sys.exit(1)
+
+    try:
+        theme = json.loads(theme_json)
+    except Exception as e:
+        sys.stderr.write(f"cursorctl: invalid theme json: {e}\n")
+        sys.exit(1)
+
+    hypr = theme.get("hyprcursor", "-")
+    xcursor = theme.get("xcursor", "-")
+    if hypr != "-" and not valid_name(hypr):
+        hypr = "-"
+    if xcursor != "-" and not valid_name(xcursor):
+        xcursor = "-"
+
+    # 1. Atomic state update (immutable preCtmCursor baseline)
+    st = secure_state.read_state()
+    st["theme"] = theme
+    st["size"] = size
+    st["cursorModifiedByCtm"] = True
+    if not (st.get("preCtmCursor") and st["preCtmCursor"].get("captured")):
+        baseline = secure_state.capture_original_cursor()
+        st["preCtmCursor"] = baseline
+        st["originalCursor"] = baseline
+    secure_state.write_state(st)
+
+    # 2. GTK cursor theme & size via gsettings
+    if xcursor and xcursor != "-":
+        run_bounded(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", xcursor], timeout=1.5)
+    run_bounded(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)], timeout=1.5)
+
+    # 3. Environment updates (systemd & dbus)
+    assignments = [f"XCURSOR_SIZE={size}", f"HYPRCURSOR_SIZE={size}"]
+    if hypr and hypr != "-":
+        assignments.append(f"HYPRCURSOR_THEME={hypr}")
+    if xcursor and xcursor != "-":
+        assignments.append(f"XCURSOR_THEME={xcursor}")
+
+    run_bounded(["systemctl", "--user", "set-environment"] + assignments, timeout=1.5)
+    run_bounded(["dbus-update-activation-environment", "--systemd"] + assignments, timeout=1.5)
+
+    # 4. Composite Hyprland environment eval in single socket command
+    hypr_env = "" if not hypr or hypr == "-" else hypr
+    xcur_env = "" if not xcursor or xcursor == "-" else xcursor
+    eval_code = f'hl.env("HYPRCURSOR_THEME", "{hypr_env}"); hl.env("HYPRCURSOR_SIZE", "{size}"); hl.env("XCURSOR_THEME", "{xcur_env}"); hl.env("XCURSOR_SIZE", "{size}")'
+    run_bounded(["hyprctl", "eval", eval_code], timeout=1.5)
+
+    # 5. UWSM environment drop-in files (atomic write)
+    home = os.environ.get("HOME", os.path.expanduser("~"))
+    config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
+    common_dir = os.path.join(config_home, "uwsm", "env.d")
+    hypr_dir = os.path.join(config_home, "uwsm", "env-hyprland.d")
+    os.makedirs(common_dir, exist_ok=True)
+    os.makedirs(hypr_dir, exist_ok=True)
+
+    common_file = os.path.join(common_dir, "90-omarchy-cursor-switcher")
+    hypr_file = os.path.join(hypr_dir, "90-omarchy-cursor-switcher")
+
+    common_tmp = common_file + f".tmp.{os.getpid()}"
+    hypr_tmp = hypr_file + f".tmp.{os.getpid()}"
+
+    with open(common_tmp, "w", encoding="utf-8") as f:
+        f.write("# Managed by sanjyay.cursor-theme-manager.\n")
+        if xcursor and xcursor != "-":
+            f.write(f"export XCURSOR_THEME='{xcursor}'\n")
+        f.write(f"export XCURSOR_SIZE='{size}'\n")
+
+    with open(hypr_tmp, "w", encoding="utf-8") as f:
+        f.write("# Managed by sanjyay.cursor-theme-manager.\n")
+        if not hypr or hypr == "-":
+            f.write("unset HYPRCURSOR_THEME\n")
+        else:
+            f.write(f"export HYPRCURSOR_THEME='{hypr}'\n")
+        f.write(f"export HYPRCURSOR_SIZE='{size}'\n")
+
+    os.chmod(common_tmp, 0o600)
+    os.chmod(hypr_tmp, 0o600)
+    os.replace(common_tmp, common_file)
+    os.replace(hypr_tmp, hypr_file)
+
+
 # ==============================================================================
 # APPLY THEME
 # ==============================================================================
@@ -652,6 +773,26 @@ def main():
                 i += 1
         res = run_ensure_hyprcursor(hypr, xcursor, theme_path)
         sys.stdout.write(res + "\n")
+        sys.exit(0)
+
+    elif cmd == "capture-baseline":
+        run_capture_baseline()
+
+    elif cmd == "persist-theme":
+        theme_json = "{}"
+        size = 24
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--theme" and i + 1 < len(sys.argv):
+                theme_json = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--size" and i + 1 < len(sys.argv):
+                try: size = int(sys.argv[i+1])
+                except ValueError: pass
+                i += 2
+            else:
+                i += 1
+        run_persist_theme(theme_json, size)
+        emit_bounded_json({"ok": True})
         sys.exit(0)
 
     elif cmd == "persist-size":

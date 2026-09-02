@@ -62,7 +62,15 @@ Item {
   property int _sizeRequestGeneration: 0
   property int _activeLiveGeneration: 0
 
-  // Trailing-edge live apply debounce timer (90 ms quiet window)
+  // Theme State, Runtime Caching & Monotonic Generation Tracking
+  property var runtimeThemeCache: ({})
+  property var liveAppliedTheme: null
+  property int _themeRequestGeneration: 0
+  property int _activeThemeGeneration: 0
+  property var _preparingTheme: null
+  property int _preparingGeneration: 0
+
+  // Trailing-edge live size apply debounce timer (90 ms quiet window)
   Timer {
     id: trailingLiveSizeTimer
     interval: 90
@@ -76,6 +84,14 @@ Item {
     interval: 150
     repeat: false
     onTriggered: root.flushFinalSizePersistence()
+  }
+
+  // Silent theme persistence debounce timer (200 ms quiet window)
+  Timer {
+    id: persistThemeDebounceTimer
+    interval: 200
+    repeat: false
+    onTriggered: root.flushFinalThemePersistence()
   }
 
   signal themesChangedByScan()
@@ -259,11 +275,93 @@ Item {
     if (!theme) return
     previewTimer.stop()
     _debouncedPreview = null
+
+    _themeRequestGeneration++
+    var gen = _themeRequestGeneration
+
+    // 1. Synchronously update UI selection immediately (0 ms latency)
     committedTheme = theme
-    if (root._loadedState) root._loadedState.cursorModifiedByCtm = true
-    enqueueApply(theme, committedSize, "commit")
-    fetchRoles(theme.displayName || theme.id, theme.path || "")
-    persistState()
+    statusText = (theme.displayName || theme.id) + " · " + committedSize + " px"
+
+    // 2. Ensure baseline is durably captured on first-ever CTM apply
+    if (root._loadedState && !root._loadedState.cursorModifiedByCtm) {
+      root._loadedState.cursorModifiedByCtm = true
+      baselineCaptureProcess.command = [helperPath, "capture-baseline"]
+      baselineCaptureProcess.running = true
+    }
+
+    // 3. Resolve runtime identity
+    var resolved = resolveRuntimeTheme(theme)
+    if (resolved.prepared) {
+      // FAST PATH: Direct hyprctl setcursor (~10-15 ms)
+      startLiveThemeSetcursor(resolved.name, committedSize, gen, theme)
+    } else {
+      // PREPARE PATH: Convert XCursor to Hyprcursor in background
+      statusText = "Preparing " + (theme.displayName || theme.id) + "…"
+      _preparingTheme = theme
+      _preparingGeneration = gen
+      prepareThemeProcess.command = [
+        helperPath, "ensure-hyprcursor",
+        "--xcursor", theme.id,
+        "--theme-path", theme.path || ""
+      ]
+      prepareThemeProcess.running = true
+      prepareThemeWatchdog.restart()
+    }
+
+    // Fetch / load preview roles in background (never blocks live setcursor)
+    if (theme.displayName || theme.id) {
+      fetchRoles(theme.displayName || theme.id, theme.path || "")
+    }
+  }
+
+  function resolveRuntimeTheme(theme) {
+    if (!theme) return { name: "Adwaita", prepared: true }
+    var id = theme.id || ""
+    if (runtimeThemeCache[id]) {
+      return runtimeThemeCache[id]
+    }
+
+    if (theme.runtimeTheme && theme.runtimePrepared) {
+      var entry1 = { name: theme.runtimeTheme, prepared: true }
+      runtimeThemeCache[id] = entry1
+      return entry1
+    }
+
+    if (theme.hyprcursor && theme.hyprcursor !== "-") {
+      var entry2 = { name: theme.hyprcursor, prepared: true }
+      runtimeThemeCache[id] = entry2
+      return entry2
+    }
+
+    if (theme.formats && theme.formats.indexOf("hyprcursor") >= 0 && theme.xcursor) {
+      var entry3 = { name: theme.xcursor, prepared: true }
+      runtimeThemeCache[id] = entry3
+      return entry3
+    }
+
+    return { name: theme.xcursor || id, prepared: false }
+  }
+
+  function startLiveThemeSetcursor(runtimeThemeName, size, generation, themeObj) {
+    _activeThemeGeneration = generation
+    liveThemeProcess.command = ["hyprctl", "setcursor", runtimeThemeName, String(size)]
+    liveThemeProcess.running = true
+    liveThemeWatchdog.restart()
+  }
+
+  function flushFinalThemePersistence() {
+    if (!committedTheme) return
+    var doc = JSON.stringify(committedTheme)
+    var sz = committedSize
+
+    persistThemeProcess.command = [
+      helperPath, "persist-theme",
+      "--theme", doc,
+      "--size", String(sz)
+    ]
+    persistThemeProcess.running = true
+    persistThemeWatchdog.restart()
   }
 
   function commitSize(size) {
@@ -999,6 +1097,107 @@ Item {
     command: []
     onExited: function(exitCode) {
       persistSizeWatchdog.stop()
+    }
+  }
+
+  // 10c. Fast Baseline Capture Process (First-Ever Apply Only)
+  Timer {
+    id: baselineCaptureWatchdog
+    interval: 3000
+    repeat: false
+    onTriggered: if (baselineCaptureProcess.running) baselineCaptureProcess.running = false
+  }
+
+  Process {
+    id: baselineCaptureProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      baselineCaptureWatchdog.stop()
+    }
+  }
+
+  // 10d. Background Theme Preparation Process (XCursor -> Hyprcursor)
+  Timer {
+    id: prepareThemeWatchdog
+    interval: 12000
+    repeat: false
+    onTriggered: {
+      if (prepareThemeProcess.running) {
+        prepareThemeProcess.running = false
+        root._preparingTheme = null
+        root._preparingGeneration = 0
+      }
+    }
+  }
+
+  Process {
+    id: prepareThemeProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: prepareThemeStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      prepareThemeWatchdog.stop()
+      var prepTheme = root._preparingTheme
+      var prepGen = root._preparingGeneration
+      root._preparingTheme = null
+      root._preparingGeneration = 0
+
+      if (exitCode === 0 && prepTheme) {
+        var runtimeName = String(prepareThemeStdout.text || "").trim()
+        if (runtimeName) {
+          prepTheme.hyprcursor = runtimeName
+          prepTheme.runtimeTheme = runtimeName
+          prepTheme.runtimePrepared = true
+          root.runtimeThemeCache[prepTheme.id] = { name: runtimeName, prepared: true }
+
+          if (prepGen >= root._themeRequestGeneration && root.committedTheme && root.committedTheme.id === prepTheme.id) {
+            root.statusText = (prepTheme.displayName || prepTheme.id) + " · " + root.committedSize + " px"
+            root.startLiveThemeSetcursor(runtimeName, root.committedSize, prepGen, prepTheme)
+          }
+        }
+      }
+    }
+  }
+
+  // 10e. Fast-Path Live Theme Setcursor Process
+  Timer {
+    id: liveThemeWatchdog
+    interval: 1500
+    repeat: false
+    onTriggered: if (liveThemeProcess.running) liveThemeProcess.running = false
+  }
+
+  Process {
+    id: liveThemeProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      liveThemeWatchdog.stop()
+      var completedGen = root._activeThemeGeneration
+      root._activeThemeGeneration = 0
+
+      if (exitCode === 0 && completedGen >= root._themeRequestGeneration) {
+        root.liveAppliedTheme = root.committedTheme
+        root.persistThemeDebounceTimer.restart()
+      }
+    }
+  }
+
+  // 10f. Dedicated Silent Theme Persistence Process (Zero setcursor calls)
+  Timer {
+    id: persistThemeWatchdog
+    interval: 5000
+    repeat: false
+    onTriggered: if (persistThemeProcess.running) persistThemeProcess.running = false
+  }
+
+  Process {
+    id: persistThemeProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      persistThemeWatchdog.stop()
     }
   }
 
