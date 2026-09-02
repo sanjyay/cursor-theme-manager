@@ -16,6 +16,11 @@ Item {
   signal renameThemeRequested(var theme)
   signal removeThemeRequested(var theme)
 
+  function ensureVisible(index) {
+    // Bounds-checked no-op or scroll alignment helper
+    if (index < 0 || root.themes.length === 0) return
+  }
+
   readonly property var userThemes: {
     var list = []
     for (var i = 0; i < root.themes.length; i++) {

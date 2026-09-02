@@ -85,8 +85,9 @@ assert.strictEqual(filtered[1].sourceType, "user")
 assert.strictEqual(filtered[2].displayName, "Adwaita")
 assert.strictEqual(filtered[2].sourceType, "system")
 
-// Internal generated theme exclusion
+// Internal generated theme exclusion vs imported theme preservation
 const mockWithInternal = mockDiscovered.concat([
+  { id: "CursorSwitcher-Imported-Banana-9134e802e21a", displayName: "Banana", hyprcursor: "CursorSwitcher-XCursor-CursorSwitcher-Imported-Banana-9134e802e21a-f50e2d2168bc", xcursor: "CursorSwitcher-Imported-Banana-9134e802e21a", formats: ["xcursor", "hyprcursor"], path: "/home/user/.local/share/icons/CursorSwitcher-Imported-Banana-9134e802e21a", sourceType: "imported", imported: true },
   { id: "CursorSwitcher-Themed-Banana-08ede60d3562", displayName: "CursorSwitcher-Themed-Banana", hyprcursor: "CursorSwitcher-Themed-Banana-08ede60d3562", xcursor: "CursorSwitcher-Themed-Banana-08ede60d3562", formats: ["hyprcursor", "xcursor"], path: "/home/user/.local/share/icons/CursorSwitcher-Themed-Banana-08ede60d3562" },
   { id: "CursorSwitcher-XCursor-Adwaita-2a4b6c8d", displayName: "CursorSwitcher-XCursor-Adwaita", hyprcursor: "CursorSwitcher-XCursor-Adwaita-2a4b6c8d", xcursor: "Adwaita", formats: ["hyprcursor"], path: "/home/user/.local/share/icons/CursorSwitcher-XCursor-Adwaita-2a4b6c8d" },
   { id: "CursorSwitcher-Preview-Banana", displayName: "CursorSwitcher-Preview-Banana", hyprcursor: "CursorSwitcher-Preview-Banana", xcursor: "Banana", formats: ["hyprcursor"] },
@@ -97,7 +98,9 @@ assert.strictEqual(normalizedClean.some(t => t.id.startsWith("CursorSwitcher-The
 assert.strictEqual(normalizedClean.some(t => t.id.startsWith("CursorSwitcher-XCursor-")), false)
 assert.strictEqual(normalizedClean.some(t => t.id.startsWith("CursorSwitcher-Preview-")), false)
 assert.strictEqual(normalizedClean.some(t => t.displayName === "Extracted Theme"), false)
-assert.strictEqual(normalizedClean.length, 3)
+// The imported theme Banana MUST be present!
+assert.strictEqual(normalizedClean.some(t => t.displayName === "Banana" && t.imported === true), true)
+assert.strictEqual(normalizedClean.length, 4)
 
 // Fallback handling
 assert.strictEqual(Model.findTheme(filtered, "Adwaita").displayName, "Adwaita")

@@ -9,7 +9,7 @@ Item {
 
   property var shell: null
   property var manifest: null
-  readonly property string pluginRoot: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
+  readonly property string pluginRoot: (manifest && manifest.__sourceDir) ? String(manifest.__sourceDir) : ((manifest && manifest.sourceDir) ? String(manifest.sourceDir) : (Quickshell.env("HOME") + "/.config/omarchy/plugins/sanjyay.cursor-theme-manager"))
   readonly property string helperPath: pluginRoot + "/scripts/cursorctl"
 
   property var themes: []
@@ -115,8 +115,6 @@ Item {
 
   function start() {
     if (_started) return
-    var sourceRoot = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
-    if (sourceRoot === "") { startupTimer.restart(); return }
     _started = true
 
     // Load state from secure state helper

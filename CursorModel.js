@@ -67,9 +67,8 @@ function isInternalTheme(name, path) {
 function isThemeVisible(theme) {
   if (!theme) return false
   if (theme.displayName === "Extracted Theme") return false
-  return !isInternalTheme(theme.id, theme.path) &&
-         !isInternalTheme(theme.displayName, theme.hyprcursor) &&
-         !isInternalTheme(theme.xcursor, "")
+  if (theme.imported || theme.sourceType === "imported") return true
+  return !isInternalTheme(theme.id, theme.path)
 }
 
 function normalizedTheme(raw) {
