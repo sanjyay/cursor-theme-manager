@@ -327,6 +327,7 @@ Item {
                 id: themeList
                 anchors.fill: parent
                 themes: root.service ? root.service.themes : []
+                modelVersion: root.service ? root.service.themeModelVersion : 0
                 committedTheme: root.service ? root.service.committedTheme : null
                 committedIndex: root.service ? root.service.indexOfCommitted() : -1
                 cursorIndex: root.themeIndex

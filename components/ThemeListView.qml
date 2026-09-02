@@ -16,12 +16,15 @@ Item {
   signal renameThemeRequested(var theme)
   signal removeThemeRequested(var theme)
 
+  property int modelVersion: 0
+
   function ensureVisible(index) {
     // Bounds-checked no-op or scroll alignment helper
     if (index < 0 || root.themes.length === 0) return
   }
 
   readonly property var userThemes: {
+    var _v = root.modelVersion
     var list = []
     for (var i = 0; i < root.themes.length; i++) {
       var t = root.themes[i]
@@ -33,6 +36,7 @@ Item {
   }
 
   readonly property var systemThemes: {
+    var _v = root.modelVersion
     var list = []
     for (var i = 0; i < root.themes.length; i++) {
       var t = root.themes[i]

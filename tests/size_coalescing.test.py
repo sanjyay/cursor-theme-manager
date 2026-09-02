@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test Suite: Cursor Theme & Size Fast-Path, Trailing-Edge Apply, Silent Persistence, and First-Run Lifecycle.
+Test Suite: Cursor Theme & Size Fast-Path, Post-Import Model Synchronization, and First-Run Lifecycle.
 Formally verifies:
 A. Cached theme live apply uses direct hyprctl setcursor (~10-15ms) without full apply --commit.
 B. Trailing-edge size debouncing executes exactly ONE hyprctl setcursor per burst.
@@ -9,9 +9,11 @@ D. persist-theme and persist-size perform ZERO theme conversions, ZERO directory
 E. Baseline (preCtmCursor) remains immutable across rapid theme and size switches.
 F. First-ever CTM apply securely captures baseline before modifying the system cursor.
 G. Rapid theme clicking coalesces to latest requested theme with monotonic generation safety.
-H. "Not now" creates ZERO durable state.json files and zero integration artifacts.
-I. Reinstall after declined or enabled integration correctly requires first-run setup.
-J. Test suite remains 100% hermetic and isolated from real HOME/XDG roots.
+H. Post-import model synchronization: newly imported theme is immediately present in model without restart.
+I. Rename & remove model synchronization: updates/removes cards immediately without restart.
+J. "Not now" creates ZERO durable state.json files and zero integration artifacts.
+K. Reinstall after declined or enabled integration correctly requires first-run setup.
+L. Test suite remains 100% hermetic and isolated from real HOME/XDG roots.
 """
 
 import os
@@ -150,7 +152,6 @@ exit 0
 
     def test_F_first_ever_capture_baseline_immutability(self):
         """F. First-ever apply captures preCtmCursor baseline and keeps it immutable across future switches."""
-        # Clean initial state
         state_file = self.iso.state_dir / "state.json"
         if state_file.exists():
             state_file.unlink()
@@ -162,7 +163,6 @@ exit 0
         self.assertIsNotNone(baseline0)
         self.assertTrue(baseline0.get("captured"))
 
-        # Multiple subsequent theme and size switches
         for tname in ["Banana", "Yaru", "Bibata", "Nordzy"]:
             theme_obj = {"id": tname, "displayName": tname, "hyprcursor": tname, "xcursor": tname}
             subprocess.run([str(self.cursorctl), "persist-theme", "--theme", json.dumps(theme_obj), "--size", "40"], env=self.env, capture_output=True)
@@ -171,8 +171,77 @@ exit 0
         st1 = secure_state.read_state()
         self.assertEqual(st1.get("preCtmCursor"), baseline0, "Baseline preCtmCursor was mutated across theme switches!")
 
-    def test_G_not_now_dismissal_leaves_zero_durable_state(self):
-        """G. Clicking 'Not now' leaves zero state.json files and zero integration artifacts."""
+    def test_G_post_import_model_synchronization(self):
+        """G. Newly imported theme appears immediately in discover and normalized model without restart."""
+        # Create a mock source theme in sandbox
+        tmp_src = self.iso.root / "mock_test_banana"
+        tmp_src.mkdir()
+        (tmp_src / "cursors").mkdir()
+        shutil.copy2("/usr/share/icons/Adwaita/cursors/left_ptr", tmp_src / "cursors" / "left_ptr")
+        (tmp_src / "index.theme").write_text("[Icon Theme]\nName=TestBanana\n", encoding="utf-8")
+
+        res_imp = subprocess.run([str(self.cursorctl), "import", "--source", str(tmp_src)], env=self.env, capture_output=True, text=True)
+        self.assertEqual(res_imp.returncode, 0)
+        imp_data = json.loads(res_imp.stdout)
+        imp_id = imp_data["theme"]["id"]
+
+        # Run discovery immediately (same as CTM does post-import)
+        res_disc = subprocess.run([str(self.cursorctl), "discover"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(res_disc.returncode, 0)
+        disc_data = json.loads(res_disc.stdout)
+
+        # Verify via node that normalizeThemes includes the imported theme
+        node_script = f"""
+const fs = require('fs');
+let code = fs.readFileSync('{ROOT}/CursorModel.js', 'utf8');
+code = code.replace('.pragma library', '');
+eval(code);
+
+const rawThemes = {json.dumps(disc_data['themes'])};
+const normalized = normalizeThemes(rawThemes);
+const found = normalized.filter(t => t.id === '{imp_id}' || t.displayName === 'TestBanana');
+console.log(JSON.stringify({{ count: found.length, item: found[0] || null }}));
+"""
+        res_node = subprocess.run(["node", "-e", node_script], capture_output=True, text=True)
+        self.assertEqual(res_node.returncode, 0)
+        node_out = json.loads(res_node.stdout)
+        self.assertEqual(node_out["count"], 1, "Imported theme did not appear exactly once in normalized model!")
+        self.assertTrue(node_out["item"]["imported"])
+        self.assertEqual(node_out["item"]["sourceType"], "imported")
+
+    def test_H_rename_and_remove_model_synchronization(self):
+        """H. Renaming and removing an imported theme updates model immediately without restart."""
+        tmp_src = self.iso.root / "mock_test_banana2"
+        tmp_src.mkdir()
+        (tmp_src / "cursors").mkdir()
+        shutil.copy2("/usr/share/icons/Adwaita/cursors/left_ptr", tmp_src / "cursors" / "left_ptr")
+        (tmp_src / "index.theme").write_text("[Icon Theme]\nName=ToRename\n", encoding="utf-8")
+
+        res_imp = subprocess.run([str(self.cursorctl), "import", "--source", str(tmp_src)], env=self.env, capture_output=True, text=True)
+        imp_data = json.loads(res_imp.stdout)
+        imp_id = imp_data["theme"]["id"]
+
+        # Rename
+        res_ren = subprocess.run([str(self.cursorctl), "rename-imported", "--id", imp_id, "--name", "SweetBanana"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(res_ren.returncode, 0)
+
+        res_disc1 = subprocess.run([str(self.cursorctl), "discover"], env=self.env, capture_output=True, text=True)
+        disc_data1 = json.loads(res_disc1.stdout)
+        renamed = [t for t in disc_data1["themes"] if t["id"] == imp_id]
+        self.assertEqual(len(renamed), 1)
+        self.assertEqual(renamed[0]["displayName"], "SweetBanana")
+
+        # Remove
+        res_rem = subprocess.run([str(self.cursorctl), "remove-imported", "--id", imp_id], env=self.env, capture_output=True, text=True)
+        self.assertEqual(res_rem.returncode, 0)
+
+        res_disc2 = subprocess.run([str(self.cursorctl), "discover"], env=self.env, capture_output=True, text=True)
+        disc_data2 = json.loads(res_disc2.stdout)
+        removed = [t for t in disc_data2["themes"] if t["id"] == imp_id]
+        self.assertEqual(len(removed), 0, "Removed theme was still found in discovery!")
+
+    def test_I_not_now_dismissal_leaves_zero_durable_state(self):
+        """I. Clicking 'Not now' leaves zero state.json files and zero integration artifacts."""
         state_file = self.iso.state_dir / "state.json"
         if state_file.exists():
             state_file.unlink()
@@ -180,7 +249,7 @@ exit 0
         res = subprocess.run([str(self.cursorctl), "integration-dismiss-prompt"], env=self.env, capture_output=True, text=True)
         self.assertEqual(res.returncode, 0)
 
-        self.assertFalse(state_file.exists(), "integration-dismiss-prompt created state.json on disk!")
+        self.assertFalse(state_file.exists())
         paths = integration_manager.get_paths()
         for key in ["desktop", "cleanup", "path_unit", "service_unit"]:
             self.assertFalse(os.path.exists(paths[key]))
@@ -190,8 +259,8 @@ exit 0
         self.assertFalse(st_data["enabled"])
         self.assertFalse(st_data["promptSeen"])
 
-    def test_H_stale_prompt_seen_without_integration_requires_setup(self):
-        """H. A stale state file with integrationPromptSeen=true but integrationEnabled=false requires setup."""
+    def test_J_stale_prompt_seen_without_integration_requires_setup(self):
+        """J. A stale state file with integrationPromptSeen=true but integrationEnabled=false requires setup."""
         secure_state.write_state({
             "version": 2,
             "theme": {"displayName": "Adwaita", "xcursor": "Adwaita"},
@@ -206,8 +275,8 @@ exit 0
         self.assertFalse(st_data["enabled"])
         self.assertFalse(st_data["promptSeen"])
 
-    def test_I_isolation_guaranteed(self):
-        """I. All tests remain strictly hermetic and bounded within isolated sandbox."""
+    def test_K_isolation_guaranteed(self):
+        """K. All tests remain strictly hermetic and bounded within isolated sandbox."""
         self.assert_safe_path(self.iso.state_dir)
         self.assert_safe_path(self.iso.user_icons)
         self.assertFalse((REAL_USER_HOME / ".local" / "state" / "cursor-theme-manager" / "mock_tmp.tmp").exists())

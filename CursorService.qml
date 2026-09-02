@@ -69,6 +69,9 @@ Item {
   property int _activeThemeGeneration: 0
   property var _preparingTheme: null
   property int _preparingGeneration: 0
+  property bool _pendingDiscoveryRefresh: false
+  property string _pendingSelectionThemeId: ""
+  property int themeModelVersion: 0
 
   // Trailing-edge live size apply debounce timer (90 ms quiet window)
   Timer {
@@ -150,8 +153,13 @@ Item {
   }
 
   function refresh(force) {
-    if (!_started || scanning || discoverProcess.running) return
+    if (!_started) return
+    if (scanning || discoverProcess.running) {
+      if (force) _pendingDiscoveryRefresh = true
+      return
+    }
     if (!force && lastScanMs > 0 && Date.now() - lastScanMs < 30000) return
+    _pendingDiscoveryRefresh = false
     scanning = true
     _discoverOutput = ""
     _discoverError = ""
@@ -165,14 +173,45 @@ Item {
   function parseDiscovery(raw) {
     try {
       var parsed = JSON.parse(String(raw || ""))
-      themes = Model.normalizeThemes(parsed.themes)
+      var normalized = Model.normalizeThemes(parsed.themes)
+      themes = normalized
+      themeModelVersion++
       lastScanMs = Date.now()
       _scanLoaded = true
       lastError = ""
       themesChangedByScan()
+
+      // Populate runtimeThemeCache for any newly discovered themes
+      for (var i = 0; i < normalized.length; i++) {
+        var t = normalized[i]
+        if (t && t.runtimeTheme && t.runtimePrepared) {
+          runtimeThemeCache[t.id] = { name: t.runtimeTheme, prepared: true }
+        }
+      }
+
       if (!ready) {
         initialize(parsed.currentXcursor || "")
+      } else if (_pendingSelectionThemeId) {
+        // Select and apply the newly imported/renamed theme from the authoritative refreshed model
+        var foundTheme = null
+        for (var j = 0; j < themes.length; j++) {
+          if (themes[j].id === _pendingSelectionThemeId || themes[j].displayName === _pendingSelectionThemeId) {
+            foundTheme = themes[j]
+            break
+          }
+        }
+        _pendingSelectionThemeId = ""
+        if (foundTheme) {
+          commitTheme(foundTheme)
+        }
       } else if (committedTheme) {
+        // Reconcile committedTheme reference to authoritative object in refreshed themes
+        for (var k = 0; k < themes.length; k++) {
+          if (Model.themeEquals(themes[k], committedTheme)) {
+            committedTheme = themes[k]
+            break
+          }
+        }
         fetchRoles(committedTheme.displayName || committedTheme.id, committedTheme.path || "")
       }
       prefetchAllRoles()
@@ -763,10 +802,16 @@ Item {
     onExited: function(exitCode) {
       discoverWatchdog.stop()
       root.scanning = false
-      if (exitCode === 0) root.parseDiscovery(discoverStdout.text || root._discoverOutput)
-      else {
+      if (exitCode === 0) {
+        root.parseDiscovery(discoverStdout.text || root._discoverOutput)
+      } else {
         root.lastError = root.elide(discoverStderr.text || root._discoverError || "Cursor discovery failed")
         console.warn("sanjyay.cursor-theme-manager:", root.lastError)
+      }
+
+      if (root._pendingDiscoveryRefresh) {
+        root._pendingDiscoveryRefresh = false
+        Qt.callLater(function() { root.refresh(true) })
       }
     }
   }
@@ -945,11 +990,15 @@ Item {
           var msg = parsed.alreadyImported ? "Already imported: " + parsed.theme.displayName : "Successfully imported " + parsed.theme.displayName
           root.statusText = msg
           root.lastError = ""
-          root.refresh(true)
-          var importedObj = Model.normalizedTheme(parsed.theme)
-          if (importedObj) {
-            root.commitTheme(importedObj)
+
+          // Register runtime cache mapping if available from import
+          if (parsed.theme.hyprcursor) {
+            root.runtimeThemeCache[parsed.theme.id] = { name: parsed.theme.hyprcursor, prepared: true }
           }
+
+          // Set pending selection so that discovery selects and applies the authoritative theme from the model
+          root._pendingSelectionThemeId = parsed.theme.id || parsed.theme.displayName
+          root.refresh(true)
           root.importCompleted(parsed.theme, msg)
         } else {
           var err = parsed.error || "Failed to import cursor theme"
