@@ -8,6 +8,7 @@ All external tool execution is supervised via runtime_safety.run_bounded.
 import sys
 import os
 import re
+import stat
 import json
 import shutil
 import tarfile
@@ -46,6 +47,55 @@ FORBIDDEN_EXTENSIONS = {
 FORBIDDEN_NAMES = {
     "install.sh", "setup.sh", "install", "setup", "configure", "postinstall.sh"
 }
+
+IMPORTED_ID_RE = re.compile(r"^CursorSwitcher-Imported-[A-Za-z0-9_-]{1,220}$")
+
+
+def read_managed_import_marker(path: str, expected_id: str = ""):
+    """Read a bounded, no-follow import marker and verify its management identity."""
+    try:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > 65536:
+                return None
+            raw = os.read(fd, 65537)
+            if len(raw) > 65536:
+                return None
+            meta = json.loads(raw.decode("utf-8", errors="strict"))
+        finally:
+            os.close(fd)
+        if not isinstance(meta, dict) or meta.get("kind") != "imported-user-theme":
+            return None
+        marker_id = meta.get("id")
+        if not isinstance(marker_id, str) or not IMPORTED_ID_RE.fullmatch(marker_id):
+            return None
+        if expected_id and marker_id != expected_id:
+            return None
+        return meta
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+        return None
+
+
+def read_managed_text_marker(path: str, required: str):
+    try:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > 4096:
+                return None
+            text = os.read(fd, 4097).decode("utf-8", errors="strict")
+            return text if len(text.encode("utf-8")) <= 4096 and required in text else None
+        finally:
+            os.close(fd)
+    except (OSError, UnicodeError):
+        return None
 
 
 def sanitize_filename(name: str) -> str:
@@ -143,10 +193,10 @@ def validate_theme_security(theme_root: str):
                     try:
                         with open(full, "rb") as f:
                             header = f.read(4)
-                            if header == b"\x7fELF":
-                                raise ValueError(f"Forbidden ELF executable binary in theme: {name}")
-                    except Exception:
-                        pass
+                    except OSError:
+                        continue
+                    if header == b"\x7fELF":
+                        raise ValueError(f"Forbidden ELF executable binary in theme: {name}")
 
 
 def extract_archive_safely(archive_path: str, stage_dir: str):
@@ -172,6 +222,11 @@ def extract_archive_safely(archive_path: str, stage_dir: str):
                 ext = os.path.splitext(base_name)[1]
                 if ext in FORBIDDEN_EXTENSIONS:
                     raise ValueError(f"Forbidden file extension in ZIP: {info.filename}")
+                unix_mode = (info.external_attr >> 16) & 0xFFFF
+                if stat.S_ISLNK(unix_mode):
+                    raise ValueError(f"Symbolic links are forbidden in ZIP archives: {info.filename}")
+                if info.flag_bits & 0x1:
+                    raise ValueError(f"Encrypted ZIP entries are unsupported: {info.filename}")
                 total_bytes += info.file_size
                 if total_bytes > MAX_EXTRACTED_BYTES:
                     raise ValueError(f"Extracted content exceeds size limit of {MAX_EXTRACTED_BYTES // (1024*1024)} MB")
@@ -190,7 +245,8 @@ def extract_archive_safely(archive_path: str, stage_dir: str):
                 if m.isdev() or m.ischr() or m.isblk() or m.isfifo():
                     raise ValueError(f"Special/device files are forbidden in archive: {m.name}")
                 if m.issym() or m.islnk():
-                    if not is_safe_relpath(m.linkname):
+                    resolved_link = os.path.normpath(os.path.join(os.path.dirname(m.name), m.linkname))
+                    if not is_safe_relpath(resolved_link):
                         raise ValueError(f"Symlink escapes root in archive: {m.name} -> {m.linkname}")
                 base_name = os.path.basename(m.name).lower()
                 if base_name in FORBIDDEN_NAMES:
@@ -201,10 +257,9 @@ def extract_archive_safely(archive_path: str, stage_dir: str):
                 total_bytes += m.size
                 if total_bytes > MAX_EXTRACTED_BYTES:
                     raise ValueError(f"Extracted content exceeds size limit of {MAX_EXTRACTED_BYTES // (1024*1024)} MB")
-            if hasattr(tarfile, 'data_filter'):
-                tf.extractall(stage_dir, filter='data')
-            else:
-                tf.extractall(stage_dir)
+            if not hasattr(tarfile, 'data_filter'):
+                raise ValueError("This Python version lacks safe TAR extraction support")
+            tf.extractall(stage_dir, filter='data')
             return
     except Exception as e:
         if isinstance(e, ValueError):
@@ -307,8 +362,8 @@ def copy_theme_atomically(src_dir: str, dst_dir: str):
     temp_dst = tempfile.mkdtemp(prefix=".install-", dir=parent)
     try:
         shutil.copytree(src_dir, temp_dst, dirs_exist_ok=True, symlinks=True)
-        if os.path.exists(dst_dir):
-            shutil.rmtree(dst_dir)
+        if os.path.lexists(dst_dir):
+            raise ValueError(f"Refusing to replace existing theme directory: {dst_dir}")
         os.rename(temp_dst, dst_dir)
     finally:
         if os.path.exists(temp_dst):
@@ -321,16 +376,11 @@ def check_existing_hash(icons_dir: str, content_hash: str):
         return None
     for entry in os.listdir(icons_dir):
         full = os.path.join(icons_dir, entry)
-        if os.path.isdir(full) and entry.startswith("CursorSwitcher-Imported-"):
+        if os.path.isdir(full) and not os.path.islink(full) and IMPORTED_ID_RE.fullmatch(entry):
             marker = os.path.join(full, ".omarchy-cursor-switcher-imported")
-            if os.path.isfile(marker):
-                try:
-                    with open(marker, "r", encoding="utf-8") as f:
-                        meta = json.load(f)
-                        if meta.get("contentHash") == content_hash:
-                            return meta
-                except Exception:
-                    pass
+            meta = read_managed_import_marker(marker, entry)
+            if meta and meta.get("contentHash") == content_hash:
+                return meta
     return None
 
 
@@ -445,7 +495,7 @@ def run_remove(theme_id: str):
     if not theme_id:
         return {"ok": False, "error": "Missing theme ID"}
 
-    if not theme_id.startswith("CursorSwitcher-Imported-") or "/" in theme_id or ".." in theme_id:
+    if not IMPORTED_ID_RE.fullmatch(theme_id):
         return {"ok": False, "error": "Refusing to remove theme: not a valid imported theme ID"}
 
     home = os.environ.get("HOME", "")
@@ -453,12 +503,12 @@ def run_remove(theme_id: str):
     icons_dir = os.path.join(data_home, "icons")
     target = os.path.join(icons_dir, theme_id)
 
-    if not os.path.isdir(target):
+    if not os.path.isdir(target) or os.path.islink(target):
         return {"ok": False, "error": f"Imported theme directory not found: {target}"}
 
     marker1 = os.path.join(target, ".cursor-theme-manager-imported")
     marker2 = os.path.join(target, ".omarchy-cursor-switcher-imported")
-    if not os.path.isfile(marker1) and not os.path.isfile(marker2):
+    if not (read_managed_import_marker(marker1, theme_id) or read_managed_import_marker(marker2, theme_id)):
         return {"ok": False, "error": f"Directory is not managed by Cursor Theme Manager import: {target}"}
 
     shutil.rmtree(target)
@@ -469,19 +519,16 @@ def run_remove(theme_id: str):
             continue
         gen_marker = os.path.join(full, ".cursor-theme-manager-generated")
         conv_marker = os.path.join(full, ".omarchy-cursor-switcher-converted")
-        if os.path.isfile(gen_marker) or os.path.isfile(conv_marker):
+        gen_text = read_managed_text_marker(gen_marker, "kind=conversion-cache")
+        legacy_text = read_managed_text_marker(conv_marker, "1.0")
+        if gen_text or legacy_text:
             if (
                 entry.startswith(f"CursorSwitcher-XCursor-{theme_id}") or
                 entry.startswith(f"CursorSwitcher-Themed-{theme_id}")
             ):
                 shutil.rmtree(full, ignore_errors=True)
-            elif os.path.isfile(gen_marker):
-                try:
-                    txt = Path(gen_marker).read_text(encoding="utf-8")
-                    if f"sourceTheme={theme_id}" in txt:
-                        shutil.rmtree(full, ignore_errors=True)
-                except Exception:
-                    pass
+            elif gen_text and f"sourceTheme={theme_id}" in gen_text:
+                shutil.rmtree(full, ignore_errors=True)
 
     cache_home = os.environ.get("XDG_CACHE_HOME", os.path.join(home, ".cache"))
     theme_cache = os.path.join(cache_home, "omarchy", "cursor-previews", theme_id)
@@ -499,7 +546,7 @@ def run_rename(theme_id: str, new_name: str):
     if not clean_name:
         return {"ok": False, "error": "Invalid theme name"}
 
-    if not theme_id.startswith("CursorSwitcher-Imported-") or "/" in theme_id or ".." in theme_id:
+    if not IMPORTED_ID_RE.fullmatch(theme_id):
         return {"ok": False, "error": "Refusing to rename theme: not a valid imported theme ID"}
 
     home = os.environ.get("HOME", "")
@@ -507,18 +554,16 @@ def run_rename(theme_id: str, new_name: str):
     icons_dir = os.path.join(data_home, "icons")
     target = os.path.join(icons_dir, theme_id)
 
-    if not os.path.isdir(target):
+    if not os.path.isdir(target) or os.path.islink(target):
         return {"ok": False, "error": f"Imported theme directory not found: {target}"}
 
     marker1 = os.path.join(target, ".cursor-theme-manager-imported")
     marker2 = os.path.join(target, ".omarchy-cursor-switcher-imported")
-    if not os.path.isfile(marker1) and not os.path.isfile(marker2):
+    meta = read_managed_import_marker(marker1, theme_id) or read_managed_import_marker(marker2, theme_id)
+    if not meta:
         return {"ok": False, "error": f"Directory is not managed by Cursor Theme Manager import: {target}"}
 
-    active_marker = marker1 if os.path.isfile(marker1) else marker2
     try:
-        with open(active_marker, "r", encoding="utf-8") as f:
-            meta = json.load(f)
         meta["displayName"] = clean_name
         with open(marker1, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)

@@ -124,12 +124,25 @@ def extract_role_from_hlc(hlc_path, out_file_base):
         hotspot_x = -1.0
         hotspot_y = -1.0
         with zipfile.ZipFile(hlc_path, "r") as zf:
-            names = zf.namelist()
+            infos = zf.infolist()
+            if len(infos) > 4096:
+                return None, -1.0, -1.0
+            names = [info.filename for info in infos]
+
+            def bounded_member(name, limit):
+                info = zf.getinfo(name)
+                if info.file_size > limit:
+                    raise ValueError("HLC member exceeds preview limit")
+                with zf.open(info, "r") as member:
+                    data = member.read(limit + 1)
+                if len(data) > limit:
+                    raise ValueError("HLC member exceeds preview limit")
+                return data
             # Try to read meta.hl for hotspot (bounded read)
             meta_names = [n for n in names if n == "meta.hl" or n.endswith("/meta.hl")]
             if meta_names:
                 try:
-                    meta_text = zf.read(meta_names[0])[:8192].decode("utf-8", errors="ignore")
+                    meta_text = bounded_member(meta_names[0], 8192).decode("utf-8", errors="ignore")
                     define_size = 24.0
                     for line in meta_text.splitlines():
                         line = line.strip()
@@ -154,14 +167,14 @@ def extract_role_from_hlc(hlc_path, out_file_base):
             svgs = [n for n in names if n.endswith(".svg")]
             if svgs:
                 out_path = out_file_base.with_suffix(".svg")
-                out_path.write_bytes(zf.read(svgs[0])[:512 * 1024])
+                out_path.write_bytes(bounded_member(svgs[0], 512 * 1024))
                 return str(out_path), hotspot_x, hotspot_y
 
             pngs = [n for n in names if n.endswith(".png")]
             if pngs:
                 pngs.sort(key=lambda n: len(n))
                 out_path = out_file_base.with_suffix(".png")
-                out_path.write_bytes(zf.read(pngs[-1])[:512 * 1024])
+                out_path.write_bytes(bounded_member(pngs[-1], 512 * 1024))
                 return str(out_path), hotspot_x, hotspot_y
     except Exception:
         pass

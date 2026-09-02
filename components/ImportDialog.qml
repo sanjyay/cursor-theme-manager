@@ -10,6 +10,7 @@ Item {
   property bool active: false
   property var selectedEntry: null
   property string modalError: ""
+  property string duplicateNotice: ""
   property int selectedIndex: -1
 
   signal closed()
@@ -32,6 +33,7 @@ Item {
     selectedEntry = null
     selectedIndex = -1
     modalError = ""
+    duplicateNotice = ""
     active = true
     if (service) {
       service.browseDirectory(service.browserPath || "~/Downloads")
@@ -46,6 +48,7 @@ Item {
     selectedEntry = null
     selectedIndex = -1
     modalError = ""
+    duplicateNotice = ""
     root.closed()
   }
 
@@ -53,6 +56,7 @@ Item {
     if (!selectedEntry || !service) return
     if (selectedEntry.is_archive || selectedEntry.is_theme_dir) {
       modalError = ""
+      duplicateNotice = ""
       service.importTheme(selectedEntry.path)
     } else if (selectedEntry.is_dir) {
       service.browseDirectory(selectedEntry.path)
@@ -63,10 +67,15 @@ Item {
 
   Connections {
     target: root.service
-    function onImportCompleted(theme, message) {
-      root.close()
+    function onImportCompleted(theme, message, alreadyImported) {
+      if (alreadyImported) {
+        root.duplicateNotice = Model.sanitizeString(message, 256) || "This cursor theme is already imported"
+      } else {
+        root.close()
+      }
     }
     function onImportFailed(error) {
+      root.duplicateNotice = ""
       root.modalError = Model.sanitizeString(error, 256) || "Failed to import cursor theme"
     }
     function onBrowserEntriesChanged() {
@@ -93,12 +102,20 @@ Item {
 
     Keys.onEscapePressed: function(event) {
       event.accepted = true
-      root.close()
+      if (root.duplicateNotice !== "") {
+        root.duplicateNotice = ""
+      } else {
+        root.close()
+      }
     }
 
     Keys.onReturnPressed: function(event) {
       event.accepted = true
-      root.importCurrent()
+      if (root.duplicateNotice !== "") {
+        root.duplicateNotice = ""
+      } else {
+        root.importCurrent()
+      }
     }
 
     Keys.onUpPressed: function(event) {
@@ -776,6 +793,75 @@ Item {
             font.pixelSize: Style.font.bodySmall
             elide: Text.ElideRight
             maximumLineCount: 1
+          }
+        }
+      }
+    }
+
+    // Existing-theme acknowledgement
+    Rectangle {
+      anchors.fill: dialogBox
+      radius: Style.cornerRadius
+      color: Util.alpha(Color.popups.background, 0.97)
+      border.color: Color.popups.border
+      border.width: 1
+      visible: root.duplicateNotice !== ""
+      z: 110
+
+      MouseArea {
+        anchors.fill: parent
+      }
+
+      Column {
+        anchors.centerIn: parent
+        width: Math.min(parent.width - Style.space(48), Style.space(420))
+        spacing: Style.space(14)
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: "Already Imported"
+          textFormat: Text.PlainText
+          color: Color.popups.text
+          font.family: Style.font.family
+          font.pixelSize: Style.font.title
+          font.bold: true
+        }
+
+        Text {
+          width: parent.width
+          text: root.duplicateNotice
+          textFormat: Text.PlainText
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          horizontalAlignment: Text.AlignHCenter
+          wrapMode: Text.Wrap
+        }
+
+        Rectangle {
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: acknowledgeLabel.implicitWidth + Style.space(28)
+          height: Style.space(32)
+          radius: Style.cornerRadius - 2
+          color: acknowledgeMouse.containsMouse ? Color.accent : Util.alpha(Color.accent, 0.85)
+
+          Text {
+            id: acknowledgeLabel
+            anchors.centerIn: parent
+            text: "OK"
+            textFormat: Text.PlainText
+            color: Color.popups.background
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+          }
+
+          MouseArea {
+            id: acknowledgeMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.duplicateNotice = ""
           }
         }
       }

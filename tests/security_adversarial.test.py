@@ -183,6 +183,50 @@ while True:
             os.unlink(pid_file)
             self.assertFalse(is_pid_alive(pid), f"Process {pid} that ignored SIGTERM was not killed by SIGKILL")
 
+    def test_unknown_environment_override_is_stripped(self):
+        env = runtime_safety.get_secure_subprocess_env({
+            "HYPRLAND_INSTANCE_SIGNATURE": "safe-session",
+            "GCONV_PATH": "/tmp/attacker",
+            "QT_PLUGIN_PATH": "/tmp/attacker",
+            "PATH": "/tmp/attacker"
+        })
+        self.assertEqual(env["HYPRLAND_INSTANCE_SIGNATURE"], "safe-session")
+        self.assertNotIn("GCONV_PATH", env)
+        self.assertNotIn("QT_PLUGIN_PATH", env)
+        self.assertEqual(env["PATH"], runtime_safety.SAFE_SYSTEM_PATH)
+
+    def test_resolver_revalidates_cached_executable_permissions(self):
+        tool_dir = Path(self.test_dir) / "trusted-tools"
+        tool_dir.mkdir(mode=0o700)
+        tool = tool_dir / "demo-tool"
+        tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        tool.chmod(0o700)
+        resolved = runtime_safety._resolve_executable_from_roots(
+            "demo-tool", [str(tool_dir)], allow_non_root=True
+        )
+        self.assertEqual(resolved, str(tool.resolve()))
+        tool.chmod(0o722)
+        self.assertIsNone(runtime_safety._resolve_executable_from_roots(
+            "demo-tool", [str(tool_dir)], allow_non_root=True
+        ))
+
+    def test_bidirectional_pipes_do_not_bypass_deadline(self):
+        helper = (
+            "import sys\n"
+            "sys.stdout.buffer.write(b'O' * 131072)\n"
+            "sys.stdout.buffer.flush()\n"
+            "data = sys.stdin.buffer.read()\n"
+            "sys.stderr.write(str(len(data)))\n"
+        )
+        payload = b"I" * (512 * 1024)
+        res = runtime_safety.run_bounded(
+            [sys.executable, "-c", helper], input_data=payload,
+            stdout_limit=200000, timeout=3.0
+        )
+        self.assertTrue(res.ok, res.error)
+        self.assertEqual(len(res.stdout_bytes), 131072)
+        self.assertEqual(res.stderr.strip(), str(len(payload)))
+
 
 class TestLegacyStateMigrationAdversarial(IsolatedTestCase):
     """Verifies that legacy state migration strictly validates file type, ownership, size, and schema BEFORE parsing."""
@@ -207,6 +251,15 @@ class TestLegacyStateMigrationAdversarial(IsolatedTestCase):
             self.assertIsNone(res, "Symlink legacy state file must be rejected")
         finally:
             os.close(dir_fd)
+
+    def test_valid_first_run_migration_is_non_recursive_and_durable(self):
+        legacy_path = os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy", "cursor-switcher.json")
+        with open(legacy_path, "w", encoding="utf-8") as f:
+            json.dump({"version": 2, "size": 32}, f)
+        state = secure_state.read_state()
+        self.assertEqual(state["size"], 32)
+        self.assertTrue((self.iso.state_dir / "state.json").is_file())
+        self.assertFalse(os.path.exists(legacy_path))
 
     def test_fifo_named_pipe_legacy_file_rejected(self):
         legacy_path = os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy", "cursor-switcher.json")
@@ -335,6 +388,15 @@ class TestStateDirectorySecurity(IsolatedTestCase):
 
         self.assertEqual(victim_dir.stat().st_mode & 0o777, 0o755)
 
+    def test_user_writable_intermediate_directory_rejected(self):
+        unsafe_parent = Path(os.environ["HOME"]) / "unsafe-state-parent"
+        unsafe_parent.mkdir(mode=0o700)
+        os.chmod(unsafe_parent, 0o777)
+        os.environ["XDG_STATE_HOME"] = str(unsafe_parent / "state")
+        with self.assertRaises(secure_state.SecurityError):
+            secure_state.open_held_state_dir()
+        self.assertEqual(unsafe_parent.stat().st_mode & 0o777, 0o777)
+
     def test_state_dir_regular_file_rejected_without_mutation(self):
         state_dir_path = Path(secure_state.get_state_dir_path())
         if state_dir_path.exists():
@@ -410,6 +472,34 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
         self.assertIn("X-CursorThemeManager-Owned=true", desktop_content)
         self.assertIn("Exec=omarchy-shell shell toggle sanjyay.cursor-theme-manager", desktop_content)
 
+    def test_enable_does_not_modify_live_plugin_directory(self):
+        plugin_dir = self.iso.plugin_dir
+        before_entries = sorted(os.listdir(plugin_dir))
+        before_stat = os.lstat(plugin_dir)
+
+        res = integration_manager.enable_integration()
+
+        self.assertTrue(res["ok"])
+        after_stat = os.lstat(plugin_dir)
+        self.assertEqual(sorted(os.listdir(plugin_dir)), before_entries)
+        self.assertEqual(after_stat.st_mtime_ns, before_stat.st_mtime_ns)
+        self.assertTrue(integration_manager.get_status()["enabled"])
+
+    def test_enabled_state_write_cannot_erase_installation_instance(self):
+        res = integration_manager.enable_integration()
+        self.assertTrue(res["ok"])
+
+        partial_qml_state = secure_state.read_state()
+        partial_qml_state.pop("integrationInstanceId", None)
+        partial_qml_state.pop("integrationPluginFingerprint", None)
+        partial_qml_state["integrationEnabled"] = True
+        secure_state.write_state(partial_qml_state)
+
+        state = secure_state.read_state()
+        self.assertEqual(state["integrationInstanceId"], res["instanceId"])
+        self.assertEqual(state["integrationPluginFingerprint"], res["pluginFingerprint"])
+        self.assertTrue(integration_manager.get_status()["enabled"])
+
     def test_transactional_rollback_on_failure_injection(self):
         # Inject systemctl failure to force rollback
         def failing_run_bounded(cmd, *args, **kwargs):
@@ -440,6 +530,20 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
         with open(paths["desktop"]) as f:
             self.assertIn("ForeignApp", f.read())
 
+    def test_foreign_non_desktop_artifact_collisions_are_refused(self):
+        paths = integration_manager.get_paths()
+        for key in ("cleanup", "path_unit", "service_unit"):
+            with self.subTest(key=key):
+                target = paths[key]
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with open(target, "w", encoding="utf-8") as f:
+                    f.write("foreign file: preserve me\n")
+                res = integration_manager.enable_integration()
+                self.assertFalse(res["ok"])
+                with open(target, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "foreign file: preserve me\n")
+                os.unlink(target)
+
     def test_foreign_desktop_file_removal_refusal(self):
         paths = integration_manager.get_paths()
         os.makedirs(os.path.dirname(paths["desktop"]), exist_ok=True)
@@ -452,22 +556,156 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
         self.assertTrue(os.path.exists(paths["desktop"]))
 
     def test_watcher_noop_when_plugin_directory_still_exists(self):
+        # Real UI startup creates a token before Integration is enabled. The
+        # standalone cleanup copy must derive the same token fingerprint.
+        identity = integration_manager.ensure_installation_identity()
+        self.assertTrue(identity["ok"], identity)
+
         # Enable integration
-        integration_manager.enable_integration()
+        res_enable = integration_manager.enable_integration()
+        self.assertTrue(res_enable["ok"])
+        instance_id = res_enable["instanceId"]
+        plugin_fingerprint = res_enable["pluginFingerprint"]
         paths = integration_manager.get_paths()
 
-        # Create plugin directory to simulate active plugin
-        plugin_dir = os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy", "plugins", "sanjyay.cursor-theme-manager")
-        os.makedirs(plugin_dir, exist_ok=True)
-
-        # Run cleanup helper
-        res = runtime_safety.run_bounded([sys.executable, paths["cleanup"]], timeout=3.0)
+        # Run cleanup helper for the still-current plugin installation.
+        res = runtime_safety.run_bounded([
+            sys.executable, paths["cleanup"], "--instance", instance_id,
+            "--plugin-fingerprint", plugin_fingerprint
+        ], timeout=3.0)
         self.assertTrue(res.ok)
 
         # Verify nothing was deleted
         self.assertTrue(os.path.exists(paths["desktop"]))
         self.assertTrue(os.path.exists(paths["cleanup"]))
         self.assertTrue(os.path.exists(paths["path_unit"]))
+
+    def test_old_cleanup_compare_and_delete_preserves_new_instance_state(self):
+        identity_a = integration_manager.ensure_installation_identity()
+        self.assertTrue(identity_a["ok"], identity_a)
+        enabled_a = integration_manager.enable_integration()
+        self.assertTrue(enabled_a["ok"], enabled_a)
+        old_instance = enabled_a["instanceId"]
+        old_fingerprint = enabled_a["pluginFingerprint"]
+
+        old_state = secure_state.read_state()
+        old_state["preCtmCursor"] = {
+            "captured": True,
+            "gtkThemeSet": True, "gtkTheme": "Adwaita",
+            "gtkSizeSet": True, "gtkSize": 24,
+            "liveRestoreBackend": "gtk",
+            "liveRestoreTheme": "Adwaita", "liveRestoreSize": 24,
+        }
+        old_state["cursorModifiedByCtm"] = True
+        secure_state.write_state(old_state)
+
+        plugin_dir = self.iso.plugin_dir
+        shutil.rmtree(plugin_dir)
+        plugin_dir.mkdir()
+        identity_b = integration_manager.ensure_installation_identity()
+        self.assertTrue(identity_b["ok"], identity_b)
+
+        def restore_then_publish_new_state(_baseline):
+            new_state = secure_state.read_state()
+            new_state["integrationEnabled"] = False
+            new_state["integrationPromptSeen"] = False
+            new_state["integrationInstanceId"] = None
+            new_state["integrationPluginFingerprint"] = identity_b["pluginFingerprint"]
+            secure_state.write_state(new_state)
+            return True
+
+        with mock.patch.object(cleanup_helper, "restore_cursor", side_effect=restore_then_publish_new_state), \
+             mock.patch.object(cleanup_helper, "run_cmd"):
+            with self.assertRaises(SystemExit) as finished:
+                cleanup_helper.execute_cleanup(old_instance, old_fingerprint)
+        self.assertEqual(finished.exception.code, 0)
+
+        preserved = secure_state.read_state()
+        self.assertEqual(preserved["integrationPluginFingerprint"], identity_b["pluginFingerprint"])
+        self.assertTrue((self.iso.state_dir / "state.json").is_file())
+
+    def test_remove_immediate_reinstall_race_cleans_old_instance_safely(self):
+        # 1. Enable integration for instance ABC
+        res = integration_manager.enable_integration()
+        self.assertTrue(res["ok"])
+        old_instance = res["instanceId"]
+        old_fingerprint = res["pluginFingerprint"]
+        paths = integration_manager.get_paths()
+
+        # 2. Simulate plugin directory removed then immediately re-created by fresh install (instance XYZ)
+        plugin_dir = os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy", "plugins", "sanjyay.cursor-theme-manager")
+        shutil.rmtree(plugin_dir)
+        os.makedirs(plugin_dir)
+
+        # A new QML instance can start before the old systemd cleanup. It must
+        # neither replay the old selected cursor nor replace the recovery state.
+        stale_status = integration_manager.get_status()
+        self.assertTrue(stale_status["recoveryPending"])
+        old_state = secure_state.read_state()
+        old_state["theme"] = {
+            "displayName": "Banana", "hyprcursor": "Banana",
+            "xcursor": "Banana", "path": "/tmp/Banana"
+        }
+        old_state["size"] = 64
+        old_state["cursorModifiedByCtm"] = True
+        old_state["preCtmCursor"] = {
+            "captured": True,
+            "gtkThemeSet": True, "gtkTheme": "Adwaita",
+            "gtkSizeSet": True, "gtkSize": 24,
+            "liveRestoreBackend": "gtk",
+            "liveRestoreTheme": "Adwaita", "liveRestoreSize": 24,
+        }
+        old_state["importedThemes"] = ["PreservedImport"]
+        secure_state.write_state(old_state)
+
+        state_read = runtime_safety.run_bounded(
+            [sys.executable, str(SCRIPTS_DIR / "cursorctl"), "state-read"],
+            timeout=3.0
+        )
+        self.assertTrue(state_read.ok, state_read.error)
+        new_view = json.loads(state_read.stdout)
+        self.assertTrue(new_view["recoveryPending"])
+        self.assertIsNone(new_view["theme"])
+        self.assertFalse(new_view.get("cursorModifiedByCtm", False), new_view)
+        self.assertFalse(new_view["integrationEnabled"])
+        self.assertEqual(secure_state.read_state()["importedThemes"], ["PreservedImport"])
+
+        refused = integration_manager.enable_integration()
+        self.assertFalse(refused["ok"])
+        self.assertTrue(refused["recoveryPending"])
+        self.assertEqual(secure_state.read_state()["integrationInstanceId"], old_instance)
+
+        # 3. Old cleanup helper runs with --instance <old_instance>
+        # The live-restore command itself is covered by the dedicated tests;
+        # keep this race test hermetic while exercising real cleanup ordering.
+        with mock.patch("cleanup_helper.restore_cursor", return_value=True), \
+             mock.patch("cleanup_helper.run_cmd"):
+            with self.assertRaises(SystemExit) as finished:
+                cleanup_helper.execute_cleanup(old_instance, old_fingerprint)
+        self.assertEqual(finished.exception.code, 0)
+
+        # 4. Assert old persistent integration artifacts are removed
+        self.assertFalse(os.path.exists(paths["desktop"]))
+        self.assertFalse(os.path.exists(paths["path_unit"]))
+        self.assertFalse(os.path.exists(paths["service_unit"]))
+
+        # 5. Assert new installation does NOT inherit integration
+        st_after = integration_manager.get_status()
+        self.assertFalse(st_after["enabled"])
+        self.assertFalse(st_after["promptSeen"])
+
+    def test_stale_state_startup_does_not_inherit_integration_enabled(self):
+        # Pre-seed stale state file claiming integration is enabled for instance ABC
+        st = secure_state.read_state()
+        st["integrationEnabled"] = True
+        st["integrationPromptSeen"] = True
+        st["integrationInstanceId"] = "abcdef1234567890"
+        st["integrationPluginFingerprint"] = "a" * 64
+        secure_state.write_state(st)
+
+        status = integration_manager.get_status()
+        self.assertFalse(status["enabled"])
+        self.assertFalse(status["promptSeen"])
 
     def test_idempotent_cleanup(self):
         # Enable integration
@@ -528,6 +766,28 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
         self.assertIsNone(hostile_cursor["hyprcursorTheme"])
         self.assertIsNone(hostile_cursor["gtkSize"])
 
+    def test_live_baseline_prefers_queryable_gtk_over_stale_environment(self):
+        def fake_run(argv, **kwargs):
+            joined = " ".join(argv)
+            if "cursor-theme" in joined:
+                out = b"'Adwaita'\n"
+            elif "cursor-size" in joined:
+                out = b"24\n"
+            elif "show-environment" in joined:
+                out = b"HYPRCURSOR_THEME=Nordzy\nHYPRCURSOR_SIZE=48\nXCURSOR_THEME=Nordzy\nXCURSOR_SIZE=48\n"
+            else:
+                out = b""
+            return runtime_safety.BoundedResult(0, out, b"")
+
+        with mock.patch("runtime_safety.run_bounded", side_effect=fake_run), \
+             mock.patch("runtime_safety.resolve_system_executable", side_effect=lambda name: f"/usr/bin/{name}"), \
+             mock.patch.object(secure_state, "has_cursor_data", return_value=True):
+            baseline = secure_state.capture_original_cursor()
+        self.assertEqual(baseline["hyprcursorTheme"], "Nordzy")
+        self.assertEqual(baseline["gtkTheme"], "Adwaita")
+        self.assertEqual(baseline["liveRestoreTheme"], "Adwaita")
+        self.assertEqual(baseline["liveRestoreSize"], 24)
+
 
 
     def test_default_cursor_resolution_loop_detection_and_security(self):
@@ -542,6 +802,68 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
 
         resolved = secure_state.resolve_default_cursor_theme(roots=[loop_dir])
         self.assertIsNone(resolved)
+
+    def _live_restore_baseline(self):
+        return {
+            "captured": True,
+            "liveRestoreBackend": "gtk",
+            "liveRestoreTheme": "Adwaita",
+            "liveRestoreSize": 24,
+            "gtkThemeSet": True,
+            "gtkTheme": "Adwaita",
+            "gtkSizeSet": True,
+            "gtkSize": 24,
+            "hyprcursorThemeSet": False,
+            "xcursorThemeSet": False,
+        }
+
+    def _exercise_live_restore(self, live_result):
+        calls = []
+
+        def fake_run(args, env_override=None, **kwargs):
+            calls.append((list(args), dict(env_override or {})))
+            if "setcursor" in args:
+                return live_result
+            return cleanup_helper.CommandResult(ok=True, exit_code=0, argv=list(args))
+
+        with mock.patch.object(cleanup_helper, "run_cmd", side_effect=fake_run), \
+             mock.patch.object(cleanup_helper, "find_hyprland_instance", return_value="test-hypr-instance"), \
+             mock.patch.object(cleanup_helper, "resolve_system_executable", return_value="/usr/bin/hyprctl"), \
+             mock.patch.object(cleanup_helper, "has_cursor_data", return_value=True):
+            result = cleanup_helper.restore_cursor(self._live_restore_baseline())
+        return result, calls
+
+    def test_live_restore_invokes_exact_baseline_after_persistent_stages(self):
+        result, calls = self._exercise_live_restore(
+            cleanup_helper.CommandResult(ok=True, exit_code=0, argv=["/usr/bin/hyprctl"])
+        )
+        self.assertTrue(result)
+        self.assertEqual(calls[-1][0], ["/usr/bin/hyprctl", "setcursor", "Adwaita", "24"])
+        self.assertEqual(calls[-1][1]["HYPRLAND_INSTANCE_SIGNATURE"], "test-hypr-instance")
+        self.assertTrue(any(call[0][0] == "gsettings" for call in calls[:-1]))
+        self.assertTrue(any(call[0][0] == "systemctl" for call in calls[:-1]))
+
+    def test_live_restore_nonzero_is_failure(self):
+        result, _ = self._exercise_live_restore(
+            cleanup_helper.CommandResult(ok=False, exit_code=1, stderr="connection failed", argv=["/usr/bin/hyprctl"])
+        )
+        self.assertFalse(result)
+
+    def test_live_restore_timeout_is_failure(self):
+        result, _ = self._exercise_live_restore(
+            cleanup_helper.CommandResult(ok=False, exit_code=124, timed_out=True, error="command timed out", argv=["/usr/bin/hyprctl"])
+        )
+        self.assertFalse(result)
+
+    def test_missing_hyprland_instance_never_reports_live_success(self):
+        calls = []
+        with mock.patch.dict(os.environ, {"HYPRLAND_INSTANCE_SIGNATURE": ""}), \
+             mock.patch.object(cleanup_helper, "run_cmd", side_effect=lambda args, **kwargs: calls.append(list(args)) or cleanup_helper.CommandResult(ok=True, exit_code=0, argv=list(args))), \
+             mock.patch.object(cleanup_helper, "find_hyprland_instance", return_value=None), \
+             mock.patch.object(cleanup_helper, "resolve_system_executable", return_value="/usr/bin/hyprctl"), \
+             mock.patch.object(cleanup_helper, "has_cursor_data", return_value=True):
+            self.assertFalse(cleanup_helper.restore_cursor(self._live_restore_baseline()))
+        self.assertFalse(any("setcursor" in call for call in calls))
 
     def test_live_restore_failure_preserves_baseline_and_state(self):
         paths = integration_manager.get_paths()
@@ -571,16 +893,29 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
         st["cursorModifiedByCtm"] = True
         secure_state.write_state(st)
 
+        generated_cache = self.iso.user_icons / "CursorSwitcher-XCursor-FailureCase-deadbeef0000"
+        generated_cache.mkdir(parents=True)
+        (generated_cache / ".cursor-theme-manager-generated").write_text(
+            "version=1\nkind=conversion-cache\nsourceTheme=FailureCase\n", encoding="utf-8"
+        )
+
+        # Simulate plugin removal in isolated test environment
+        plugin_dir = os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy", "plugins", "sanjyay.cursor-theme-manager")
+        if os.path.exists(plugin_dir):
+            shutil.rmtree(plugin_dir)
+
         # Run cleanup helper with uninstalled theme causing restore failure
         res_fail = runtime_safety.run_bounded([sys.executable, paths["cleanup"]], timeout=3.0)
         self.assertFalse(res_fail.ok)
         self.assertIn("critical failure", res_fail.stderr)
+        self.assertNotIn("Previous cursor configuration restored", res_fail.stdout)
 
         # Ensure state file and units are preserved for retry
         self.assertTrue(os.path.exists(paths["cleanup"]))
         self.assertTrue(os.path.exists(paths["path_unit"]))
         state_file = os.path.join(os.environ["XDG_STATE_HOME"], "cursor-theme-manager", "state.json")
         self.assertTrue(os.path.exists(state_file))
+        self.assertTrue(generated_cache.is_dir(), "Generated cache was deleted before live restore succeeded")
 
 
 
@@ -639,6 +974,11 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
                 "preCtmCursor": None
             }))
 
+        # Simulate plugin removal in isolated test environment
+        plugin_dir = os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy", "plugins", "sanjyay.cursor-theme-manager")
+        if os.path.exists(plugin_dir):
+            shutil.rmtree(plugin_dir)
+
         # Run cleanup helper
         res_clean = runtime_safety.run_bounded([sys.executable, paths["cleanup"]], timeout=3.0)
         self.assertFalse(res_clean.ok)
@@ -695,10 +1035,18 @@ class TestExecutableTrustAndHostilePath(IsolatedTestCase):
     """
     Verifies that CTM rejects user-writable PATH binaries, executes only root-owned system binaries,
     and strips dangerous code-injection environment variables.
+
+    This class inherits IsolatedTestCase for sandboxed home dirs and run_bounded mocking but
+    deliberately STOPS the resolver patcher so tests exercise the real production resolver.
     """
 
     def setUp(self):
         super().setUp()
+        # Stop BOTH patchers — we need to call the REAL production resolver AND real run_bounded
+        # to verify they reject hostile paths. We manage them manually here.
+        self._patcher_resolve.stop()
+        self._patcher_run.stop()
+
         self.evil_bin = Path(self.test_dir) / "evil_bin"
         self.evil_bin.mkdir(parents=True, exist_ok=True)
         self.sentinel = Path(self.test_dir) / "pwned_sentinel.txt"
@@ -716,17 +1064,122 @@ class TestExecutableTrustAndHostilePath(IsolatedTestCase):
             "PATH": f"{self.evil_bin}:{os.environ.get('PATH', '')}"
         }
 
+    def tearDown(self):
+        # Replace both patchers with unstarted ones so IsolatedTestCase.tearDown safely calls .stop()
+        self._patcher_resolve = mock.patch("runtime_safety.resolve_system_executable")
+        self._patcher_run = mock.patch("runtime_safety.run_bounded")
+        super().tearDown()
+
     def test_resolver_never_resolves_hostile_path_binaries(self):
-        for tool_name in ["hyprctl", "gsettings", "systemctl", "hyprcursor-util"]:
-            resolved = runtime_safety.resolve_system_executable(tool_name)
-            self.assertIsNotNone(resolved)
+        runtime_safety._RESOLVED_TOOL_CACHE.clear()
+        try:
+            for tool_name in ["hyprctl", "gsettings", "systemctl", "hyprcursor-util"]:
+                resolved = runtime_safety.resolve_system_executable(tool_name)
+                if resolved is not None:
+                    self.assertFalse(
+                        resolved.startswith(str(self.evil_bin)),
+                        f"Resolver returned hostile path executable: {resolved}"
+                    )
+                    self.assertTrue(
+                        resolved.startswith("/usr/bin/") or resolved.startswith("/bin/"),
+                        f"Resolved binary not in trusted system directory: {resolved}"
+                    )
+        finally:
+            runtime_safety._RESOLVED_TOOL_CACHE.clear()
+
+    def test_production_resolver_ignores_hostile_ctm_test_mock_bin_and_path(self):
+        """
+        Security regression: resolve_system_executable() must NEVER read CTM_TEST_MOCK_BIN
+        or PATH and must never return a binary from a hostile directory, regardless of
+        what those environment variables are set to.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="ctm-evil-") as evil_tmp:
+            evil_bin = Path(evil_tmp)
+            sentinel = evil_bin / "EVIL_WAS_EXECUTED"
+
+            # Plant fake binaries in the evil directory
+            for tool_name in ["hyprctl", "gsettings", "systemctl", "hyprcursor-util"]:
+                fake_script = evil_bin / tool_name
+                fake_script.write_text(
+                    f"#!/bin/sh\ntouch '{sentinel}'\necho 'PWNED: {tool_name}'\nexit 0\n"
+                )
+                fake_script.chmod(0o755)
+
+            # Inject both hostile env vars
+            saved_mock_bin = os.environ.pop("CTM_TEST_MOCK_BIN", None)
+            saved_path = os.environ.get("PATH", "")
+            os.environ["CTM_TEST_MOCK_BIN"] = str(evil_bin)
+            os.environ["PATH"] = f"{evil_bin}:{saved_path}"
+            runtime_safety._RESOLVED_TOOL_CACHE.clear()
+
+            try:
+                for tool_name in ["hyprctl", "gsettings", "systemctl", "hyprcursor-util"]:
+                    resolved = runtime_safety.resolve_system_executable(tool_name)
+                    if resolved is not None:
+                        self.assertFalse(
+                            str(evil_bin) in resolved,
+                            f"Production resolver returned evil-bin path for {tool_name}: {resolved}"
+                        )
+            finally:
+                runtime_safety._RESOLVED_TOOL_CACHE.clear()
+                os.environ["PATH"] = saved_path
+                if saved_mock_bin is not None:
+                    os.environ["CTM_TEST_MOCK_BIN"] = saved_mock_bin
+                else:
+                    os.environ.pop("CTM_TEST_MOCK_BIN", None)
+
+            # Sentinel must never have been created — no fake binary was run
             self.assertFalse(
-                resolved.startswith(str(self.evil_bin)),
-                f"Resolver returned hostile path executable: {resolved}"
+                sentinel.exists(),
+                "CTM_TEST_MOCK_BIN / hostile PATH caused production resolver to load a fake binary!"
             )
-            self.assertTrue(
-                resolved.startswith("/usr/bin/") or resolved.startswith("/bin/"),
-                f"Resolved binary not in trusted system directory: {resolved}"
+
+    def test_persistent_cleanup_helper_ignores_hostile_ctm_test_mock_bin(self):
+        """
+        Security regression: the installed cleanup_helper must not honor CTM_TEST_MOCK_BIN.
+        We import it directly (as production does) and verify its resolver ignores the env var.
+        """
+        import tempfile
+        import importlib.util
+        cleanup_src = ROOT / "scripts" / "cleanup_helper.py"
+        spec = importlib.util.spec_from_file_location("cleanup_helper_prod", cleanup_src)
+        ch = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ch)
+
+        with tempfile.TemporaryDirectory(prefix="ctm-evil-cleanup-") as evil_tmp:
+            evil_bin = Path(evil_tmp)
+            sentinel = evil_bin / "EVIL_CLEANUP_WAS_EXECUTED"
+
+            for tool_name in ["hyprctl", "gsettings", "systemctl"]:
+                fake_script = evil_bin / tool_name
+                fake_script.write_text(
+                    f"#!/bin/sh\ntouch '{sentinel}'\necho 'CLEANUP_PWNED: {tool_name}'\nexit 0\n"
+                )
+                fake_script.chmod(0o755)
+
+            saved_mock_bin = os.environ.pop("CTM_TEST_MOCK_BIN", None)
+            os.environ["CTM_TEST_MOCK_BIN"] = str(evil_bin)
+            ch._RESOLVED_TOOL_CACHE.clear()
+
+            try:
+                for tool_name in ["hyprctl", "gsettings", "systemctl"]:
+                    resolved = ch.resolve_system_executable(tool_name)
+                    if resolved is not None:
+                        self.assertFalse(
+                            str(evil_bin) in resolved,
+                            f"cleanup_helper.resolve_system_executable returned evil-bin path for {tool_name}: {resolved}"
+                        )
+            finally:
+                ch._RESOLVED_TOOL_CACHE.clear()
+                if saved_mock_bin is not None:
+                    os.environ["CTM_TEST_MOCK_BIN"] = saved_mock_bin
+                else:
+                    os.environ.pop("CTM_TEST_MOCK_BIN", None)
+
+            self.assertFalse(
+                sentinel.exists(),
+                "CTM_TEST_MOCK_BIN caused cleanup_helper to execute a hostile fake binary!"
             )
 
     def test_run_bounded_never_executes_hostile_path_binaries(self):
@@ -756,6 +1209,7 @@ class TestExecutableTrustAndHostilePath(IsolatedTestCase):
             [sys.executable, "-c", probe_code],
             env={**self.env, "PYTHONPATH": "/evil/python/path", "LD_PRELOAD": "/evil/lib.so"}
         )
+
     def test_missing_trusted_tools_hyprctl_fails_closed(self):
         # Simulate environment where hyprctl does not exist in any trusted bin dir
         with mock.patch("runtime_safety.resolve_system_executable", return_value=None):
@@ -770,6 +1224,12 @@ class TestExecutableTrustAndHostilePath(IsolatedTestCase):
         self.assertNotIn('|| "/usr/bin/hyprctl"', qml_content)
         self.assertNotIn("|| '/usr/bin/hyprctl'", qml_content)
         self.assertNotIn('hyprBin = "/usr/bin/hyprctl"', qml_content)
+
+    def test_qml_persists_and_refreshes_integration_instance_id(self):
+        qml_content = (ROOT / "CursorService.qml").read_text(encoding="utf-8")
+        self.assertIn("integrationInstanceId: integrationInstanceId", qml_content)
+        self.assertIn("integrationPluginFingerprint: integrationPluginFingerprint", qml_content)
+        self.assertIn("root.integrationInstanceId = res.instanceId", qml_content)
 
 
 if __name__ == "__main__":

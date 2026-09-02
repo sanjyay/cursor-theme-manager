@@ -18,6 +18,11 @@ import os
 import re
 import stat
 import json
+import hashlib
+import fcntl
+import signal
+import time
+import selectors
 import subprocess
 import shutil
 from pathlib import Path
@@ -55,19 +60,43 @@ DANGEROUS_ENV_VARS = {
 _RESOLVED_TOOL_CACHE: Dict[str, Optional[str]] = {}
 
 
+def _cleanup_checkpoint(_stage: str) -> None:
+    """No-op lifecycle boundary used by deterministic interruption tests."""
+    return
+
+
+def _trusted_directory(path: str) -> bool:
+    try:
+        st = os.stat(path, follow_symlinks=False)
+        return stat.S_ISDIR(st.st_mode) and st.st_uid == 0 and not (st.st_mode & 0o022)
+    except OSError:
+        return False
+
+
 def resolve_system_executable(name: str) -> Optional[str]:
     """
-    Resolves an external executable from fixed system directories only.
-    Verifies regular file, executable permissions, root-owned (UID 0),
-    not group/world writable, and resolved canonical target resides under system roots.
+    Resolves an external system executable from fixed system directories only.
+    Zero environment overrides. Never examines PATH or any environment variable.
+    Verifies:
+      - regular file
+      - executable permissions
+      - root-owned (UID 0)
+      - not group- or world-writable
+      - resolved canonical target also resides under trusted system roots and is root-owned
+    Returns canonical path or None if unavailable/invalid.
     """
     if not name or not isinstance(name, str):
         return None
 
-    if name in _RESOLVED_TOOL_CACHE:
-        return _RESOLVED_TOOL_CACHE[name]
-
     resolved_path: Optional[str] = None
+    canonical_roots = []
+    for root in TRUSTED_BIN_DIRS:
+        real_root = os.path.realpath(root)
+        root_is_trusted = _trusted_directory(real_root) and all(
+            _trusted_directory(str(parent)) for parent in Path(real_root).parents
+        )
+        if real_root not in canonical_roots and root_is_trusted:
+            canonical_roots.append(real_root)
     if name.startswith("/"):
         candidates = [name]
     else:
@@ -75,12 +104,31 @@ def resolve_system_executable(name: str) -> Optional[str]:
 
     for candidate in candidates:
         try:
-            if not os.path.exists(candidate):
-                continue
             real_path = os.path.realpath(candidate)
-            if not any(real_path == d or real_path.startswith(d + "/") for d in TRUSTED_BIN_DIRS):
+            containing_root = next((d for d in canonical_roots if real_path.startswith(d + "/")), None)
+            if containing_root is None:
                 continue
-            st = os.stat(real_path)
+            relative_parent = os.path.relpath(os.path.dirname(real_path), containing_root)
+            current = containing_root
+            valid_parent = True
+            if relative_parent != ".":
+                for component in relative_parent.split(os.sep):
+                    current = os.path.join(current, component)
+                    if not _trusted_directory(current):
+                        valid_parent = False
+                        break
+            if not valid_parent:
+                continue
+            flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            if hasattr(os, "O_CLOEXEC"):
+                flags |= os.O_CLOEXEC
+            fd = os.open(real_path, flags)
+            try:
+                st = os.fstat(fd)
+            finally:
+                os.close(fd)
             if not stat.S_ISREG(st.st_mode):
                 continue
             if not (st.st_mode & 0o111) or not os.access(real_path, os.X_OK):
@@ -90,7 +138,7 @@ def resolve_system_executable(name: str) -> Optional[str]:
             if st.st_mode & 0o022:
                 continue
 
-            resolved_path = candidate
+            resolved_path = real_path
             break
         except (OSError, PermissionError):
             continue
@@ -108,9 +156,7 @@ def get_secure_subprocess_env(extra_env: Optional[Dict[str, str]] = None) -> Dic
 
     if extra_env:
         for k, v in extra_env.items():
-            if k in DANGEROUS_ENV_VARS:
-                continue
-            if k == "PATH":
+            if k not in ALLOWLISTED_ENV_VARS or k in DANGEROUS_ENV_VARS:
                 continue
             clean_env[k] = str(v)
 
@@ -142,20 +188,120 @@ def get_paths() -> dict:
     }
 
 
-def run_cmd(args, env_override=None, timeout=3.0):
+class CommandResult:
+    def __init__(self, ok=False, exit_code=1, stdout="", stderr="", timed_out=False,
+                 limit_exceeded=False, argv=None, error=""):
+        self.ok = ok
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+        self.timed_out = timed_out
+        self.limit_exceeded = limit_exceeded
+        self.argv = argv or []
+        self.error = error
+
+
+def run_cmd(args, env_override=None, timeout=3.0, stdout_limit=65536, stderr_limit=65536):
     if not args:
-        return False, "", "Empty arguments"
+        return CommandResult(error="Empty arguments")
     raw_cmd = str(args[0])
     resolved = resolve_system_executable(raw_cmd)
     if resolved is None:
-        return False, "", f"Required system tool '{raw_cmd}' is unavailable or failed validation"
+        error = f"Required system tool '{raw_cmd}' is unavailable or failed validation"
+        return CommandResult(exit_code=127, error=error, stderr=error, argv=[raw_cmd])
     cmd_args = [resolved] + [str(a) for a in args[1:]]
     secure_env = get_secure_subprocess_env(env_override)
+    proc = None
+    stdout_chunks = []
+    stderr_chunks = []
+    stdout_size = 0
+    stderr_size = 0
+    timed_out = False
+    limit_exceeded = False
+    error = ""
     try:
-        res = subprocess.run(cmd_args, capture_output=True, text=True, timeout=timeout, env=secure_env)
-        return res.returncode == 0, res.stdout, res.stderr
+        proc = subprocess.Popen(
+            cmd_args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, env=secure_env, start_new_session=True
+        )
+        sel = selectors.DefaultSelector()
+        for stream, name in ((proc.stdout, "stdout"), (proc.stderr, "stderr")):
+            os.set_blocking(stream.fileno(), False)
+            sel.register(stream, selectors.EVENT_READ, name)
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                error = f"command timed out after {timeout}s"
+                break
+            for key, _ in sel.select(min(0.1, remaining)):
+                try:
+                    chunk = key.fileobj.read(16384)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    try: sel.unregister(key.fileobj)
+                    except Exception: pass
+                    continue
+                if key.data == "stdout":
+                    stdout_size += len(chunk)
+                    if stdout_size > stdout_limit:
+                        limit_exceeded = True
+                        error = "command stdout exceeded limit"
+                        break
+                    stdout_chunks.append(chunk)
+                else:
+                    stderr_size += len(chunk)
+                    if stderr_size > stderr_limit:
+                        limit_exceeded = True
+                        error = "command stderr exceeded limit"
+                        break
+                    stderr_chunks.append(chunk)
+            if limit_exceeded or (proc.poll() is not None and not sel.get_map()):
+                break
+        sel.close()
     except Exception as e:
-        return False, "", str(e)
+        error = str(e)
+    finally:
+        if proc is not None:
+            if timed_out or limit_exceeded or proc.poll() is None:
+                try: os.killpg(proc.pid, signal.SIGTERM)
+                except OSError: pass
+                deadline = time.monotonic() + 0.2
+                while proc.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                if proc.poll() is None:
+                    try: os.killpg(proc.pid, signal.SIGKILL)
+                    except OSError: pass
+            try: proc.wait(timeout=0.5)
+            except Exception: pass
+            for stream in (proc.stdout, proc.stderr):
+                if stream:
+                    try: stream.close()
+                    except OSError: pass
+    code = proc.returncode if proc and proc.returncode is not None else 1
+    if timed_out:
+        code = 124
+    elif limit_exceeded:
+        code = 125
+    stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+    stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+    return CommandResult(
+        ok=code == 0 and not timed_out and not limit_exceeded,
+        exit_code=code, stdout=stdout, stderr=stderr, timed_out=timed_out,
+        limit_exceeded=limit_exceeded, argv=cmd_args, error=error
+    )
+
+
+def log_command_result(stage: str, result: CommandResult) -> None:
+    sys.stderr.write(f"cursorctl cleanup: {stage} argv={json.dumps(result.argv)}\n")
+    sys.stderr.write(
+        f"cursorctl cleanup: {stage} exit={result.exit_code} "
+        f"timeout={str(result.timed_out).lower()} output_limit={str(result.limit_exceeded).lower()}\n"
+    )
+    sys.stderr.write(f"cursorctl cleanup: {stage} stdout={result.stdout.strip()!r}\n")
+    sys.stderr.write(f"cursorctl cleanup: {stage} stderr={(result.stderr.strip() or result.error)!r}\n")
 
 
 def find_hyprland_instance():
@@ -164,9 +310,13 @@ def find_hyprland_instance():
     xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     hypr_dir = Path(xdg_runtime) / "hypr"
     if hypr_dir.is_dir():
-        for d in hypr_dir.iterdir():
-            if d.is_dir() and (d / ".socket.sock").exists():
-                return d.name
+        candidates = [
+            d.name for d in hypr_dir.iterdir()
+            if d.is_dir() and not d.is_symlink() and (d / ".socket.sock").is_socket()
+        ]
+        # Never guess between multiple compositor sessions.
+        if len(candidates) == 1:
+            return candidates[0]
     return None
 
 
@@ -200,7 +350,82 @@ def has_cursor_data(theme_name: str) -> bool:
     return False
 
 
-def is_file_owned_by_us(filepath: str) -> bool:
+def read_instance_marker(marker_path: str) -> Optional[str]:
+    if not os.path.exists(marker_path):
+        return None
+    try:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(marker_path, flags)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > 256:
+                return None
+            raw = os.read(fd, 256).decode("utf-8", errors="ignore").strip()
+            if re.match(r'^[a-fA-F0-9]{16,64}$', raw):
+                return raw
+            return None
+        finally:
+            os.close(fd)
+    except Exception:
+        return None
+
+
+def read_installation_token(plugin_path: str) -> Optional[str]:
+    """Read the same durable per-install token used by the live plugin."""
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        dir_flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        dir_flags |= os.O_CLOEXEC
+    try:
+        dir_fd = os.open(plugin_path, dir_flags)
+    except OSError:
+        return None
+    try:
+        dst = os.fstat(dir_fd)
+        if not stat.S_ISDIR(dst.st_mode) or dst.st_uid != os.getuid():
+            return None
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            fd = os.open(".installation_instance", flags, dir_fd=dir_fd)
+        except OSError:
+            return None
+        try:
+            st = os.fstat(fd)
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or
+                    stat.S_IMODE(st.st_mode) != 0o600 or st.st_size > 65):
+                return None
+            raw = os.read(fd, 65).decode("ascii", errors="strict").strip()
+            return raw if re.fullmatch(r"[a-f0-9]{32}", raw) else None
+        except (OSError, UnicodeError):
+            return None
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dir_fd)
+
+
+def get_plugin_installation_fingerprint(plugin_path: str) -> Optional[str]:
+    token = read_installation_token(plugin_path)
+    if token:
+        return hashlib.sha256(token.encode("ascii")).hexdigest()
+    # Legacy installations did not have a token; retain their inode identity
+    # only as a compatibility fallback.
+    try:
+        st = os.lstat(plugin_path)
+        if not (stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)):
+            return None
+        identity = f"{st.st_dev}:{st.st_ino}".encode("ascii")
+        return hashlib.sha256(identity).hexdigest()
+    except OSError:
+        return None
+
+
+def is_file_owned_by_us(filepath: str, expected_instance: Optional[str] = None) -> bool:
     try:
         flags = os.O_RDONLY | os.O_NONBLOCK
         if hasattr(os, "O_NOFOLLOW"):
@@ -208,104 +433,281 @@ def is_file_owned_by_us(filepath: str) -> bool:
         fd = os.open(filepath, flags)
         try:
             st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > 8192:
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > 131072:
                 return False
-            content = os.read(fd, 8192).decode("utf-8", errors="ignore")
-            return (OWNERSHIP_MARKER in content) and (PLUGIN_ID in content)
+            content = os.read(fd, 131072).decode("utf-8", errors="ignore")
+            if (OWNERSHIP_MARKER not in content) or (PLUGIN_ID not in content):
+                return False
+            if expected_instance:
+                return f"X-CursorThemeManager-Instance={expected_instance}" in content
+            return True
         finally:
             os.close(fd)
     except Exception:
         return False
 
 
-def read_secure_state():
-    paths = get_paths()
-    state_dir = paths["state_dir"]
-    if not os.path.isdir(state_dir):
-        return None
+def marker_contains(path: str, required: str, max_bytes: int = 65536) -> bool:
     try:
-        flags = os.O_RDONLY | os.O_DIRECTORY
+        flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
-        dir_fd = os.open(state_dir, flags)
+        fd = os.open(path, flags)
         try:
-            st = os.fstat(dir_fd)
-            if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or (st.st_mode & 0o777) != 0o700:
-                return None
-
-            file_flags = os.O_RDONLY | os.O_NONBLOCK
-            if hasattr(os, "O_NOFOLLOW"):
-                file_flags |= os.O_NOFOLLOW
-
-            file_fd = os.open("state.json", file_flags, dir_fd=dir_fd)
-            try:
-                fst = os.fstat(file_fd)
-                if not stat.S_ISREG(fst.st_mode) or fst.st_uid != os.getuid() or fst.st_size > 65536:
-                    return None
-                raw = os.read(file_fd, 65536).decode("utf-8", errors="ignore")
-                data = json.loads(raw)
-                return data if isinstance(data, dict) else None
-            finally:
-                os.close(file_fd)
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > max_bytes:
+                return False
+            content = os.read(fd, max_bytes + 1).decode("utf-8", errors="strict")
+            return len(content.encode("utf-8")) <= max_bytes and required in content
         finally:
-            os.close(dir_fd)
+            os.close(fd)
     except Exception:
+        return False
+
+
+def open_secure_state_dir() -> Optional[int]:
+    """Open the existing state directory without following any path symlink."""
+    paths = get_paths()
+    state_dir = os.path.abspath(paths["state_dir"])
+    parts = Path(state_dir).parts
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    current_fd = -1
+    try:
+        current_fd = os.open("/", flags)
+        for i, component in enumerate(parts[1:], 1):
+            next_fd = os.open(component, flags, dir_fd=current_fd)
+            st = os.fstat(next_fd)
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid not in (0, os.getuid()):
+                os.close(next_fd)
+                raise OSError("untrusted state path component")
+            mode = st.st_mode & 0o7777
+            if i == len(parts) - 1:
+                if st.st_uid != os.getuid() or (mode & 0o777) != 0o700:
+                    os.close(next_fd)
+                    raise OSError("untrusted state directory")
+            elif ((st.st_uid == os.getuid() and mode & 0o022) or
+                  (st.st_uid == 0 and mode & 0o022 and not mode & stat.S_ISVTX)):
+                os.close(next_fd)
+                raise OSError("writable state path component")
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except OSError:
+        if current_fd >= 0:
+            os.close(current_fd)
         return None
+
+
+def read_secure_state_snapshot():
+    dir_fd = open_secure_state_dir()
+    if dir_fd is None:
+        return None, None
+    try:
+        file_flags = os.O_RDONLY | os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            file_flags |= os.O_NOFOLLOW
+
+        file_fd = os.open("state.json", file_flags, dir_fd=dir_fd)
+        try:
+            fst = os.fstat(file_fd)
+            if not stat.S_ISREG(fst.st_mode) or fst.st_uid != os.getuid() or fst.st_size > 65536:
+                return None, None
+            raw = os.read(file_fd, 65537)
+            if len(raw) > 65536:
+                return None, None
+            data = json.loads(raw.decode("utf-8", errors="strict"))
+            return (data, (fst.st_dev, fst.st_ino)) if isinstance(data, dict) else (None, None)
+        finally:
+            os.close(file_fd)
+    except Exception:
+        return None, None
+    finally:
+        os.close(dir_fd)
+
+
+def read_secure_state():
+    state, _identity = read_secure_state_snapshot()
+    return state
+
+
+def state_owned_by_cleanup(state: dict, expected_instance: Optional[str],
+                           expected_plugin_fingerprint: Optional[str]) -> bool:
+    state_fingerprint = state.get("integrationPluginFingerprint") if state else None
+    state_instance = state.get("integrationInstanceId") if state else None
+    if expected_plugin_fingerprint and state_fingerprint:
+        return state_fingerprint == expected_plugin_fingerprint
+    if expected_instance:
+        return state_instance == expected_instance
+    # Legacy cleanup services did not pass ownership arguments. They may clean
+    # the one verified CTM state document only when no newer caller identity
+    # was supplied for comparison.
+    return True
+
+
+def remove_secure_state_dir(expected_instance: Optional[str] = None,
+                            expected_plugin_fingerprint: Optional[str] = None,
+                            expected_identity=None) -> bool:
+    """Locked compare-and-delete of only a state document owned by cleanup.
+
+    The inode is diagnostic, not generation ownership. A same-generation
+    writer may atomically replace state.json after cleanup's initial read; the
+    replacement is still safe to delete when its embedded fingerprint/instance
+    remains the expected old owner. A new generation has a different embedded
+    fingerprint and is preserved.
+    """
+    paths = get_paths()
+    dir_fd = open_secure_state_dir()
+    if dir_fd is None:
+        return False
+    try:
+        fcntl.flock(dir_fd, fcntl.LOCK_EX)
+        file_flags = os.O_RDONLY | os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            file_flags |= os.O_NOFOLLOW
+        try:
+            file_fd = os.open("state.json", file_flags, dir_fd=dir_fd)
+        except FileNotFoundError:
+            return False
+        try:
+            fst = os.fstat(file_fd)
+            if (not stat.S_ISREG(fst.st_mode) or fst.st_uid != os.getuid() or
+                    fst.st_size > 65536):
+                return False
+            identity = (fst.st_dev, fst.st_ino)
+            raw = os.read(file_fd, 65537)
+            if len(raw) > 65536:
+                return False
+            current_state = json.loads(raw.decode("utf-8", errors="strict"))
+            if not isinstance(current_state, dict) or not state_owned_by_cleanup(
+                    current_state, expected_instance, expected_plugin_fingerprint):
+                return False
+            if expected_identity is not None and identity != tuple(expected_identity):
+                sys.stderr.write(
+                    "cursorctl cleanup: state inode changed but remains owned by the old installation; deleting replacement\n"
+                )
+            current = os.stat("state.json", dir_fd=dir_fd, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != identity:
+                return False
+            os.unlink("state.json", dir_fd=dir_fd)
+        finally:
+            os.close(file_fd)
+        os.fsync(dir_fd)
+        held = os.fstat(dir_fd)
+        current = os.lstat(paths["state_dir"])
+        if (current.st_dev, current.st_ino) == (held.st_dev, held.st_ino):
+            os.rmdir(paths["state_dir"])
+        return True
+    except OSError:
+        return False
+    except (UnicodeError, json.JSONDecodeError):
+        return False
+    finally:
+        try:
+            fcntl.flock(dir_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(dir_fd)
+
+
+def recovery_artifacts_present(expected_instance: Optional[str]) -> bool:
+    """Return true when an installed cleanup actor can still process recovery."""
+    paths = get_paths()
+    candidates = (paths["cleanup_exe"], paths["path_unit"], paths["service_unit"])
+    return any(
+        os.path.exists(path) and is_file_owned_by_us(path, expected_instance)
+        for path in candidates
+    )
+
+
+def reconcile_orphaned_state(current_plugin_fingerprint: str) -> dict:
+    """Finish verified recovery when no old cleanup actor remains.
+
+    This is called by the newly installed plugin while its UI is quarantined.
+    It never adopts old state. It restores the immutable old baseline first,
+    then compare-deletes only that old generation's state document.
+    """
+    paths = get_paths()
+    current_fingerprint = get_plugin_installation_fingerprint(paths["plugin_dir"])
+    if (not re.fullmatch(r"[a-f0-9]{64}", str(current_plugin_fingerprint or "")) or
+            current_fingerprint != current_plugin_fingerprint):
+        return {"ok": False, "error": "Current installation identity changed during recovery."}
+
+    state, state_identity = read_secure_state_snapshot()
+    if not state:
+        return {"ok": True, "reconciled": False, "reason": "no-state"}
+    old_fingerprint = state.get("integrationPluginFingerprint")
+    old_instance = state.get("integrationInstanceId")
+    if not old_fingerprint or old_fingerprint == current_plugin_fingerprint:
+        return {"ok": True, "reconciled": False, "reason": "current-state"}
+    if recovery_artifacts_present(old_instance):
+        return {
+            "ok": False, "recoveryPending": True,
+            "error": "The previous installation cleanup is still available."
+        }
+
+    cursor_modified = bool(state.get("cursorModifiedByCtm"))
+    baseline = state.get("preCtmCursor") or state.get("originalCursor")
+    if cursor_modified and not (isinstance(baseline, dict) and baseline.get("captured")):
+        return {
+            "ok": False,
+            "error": "The previous installation changed the cursor but its recovery baseline is incomplete."
+        }
+    if cursor_modified and not restore_cursor(baseline):
+        return {"ok": False, "error": "Could not restore the previous installation's cursor baseline."}
+
+    if not remove_secure_state_dir(old_instance, old_fingerprint, state_identity):
+        latest, _ = read_secure_state_snapshot()
+        if latest and state_owned_by_cleanup(latest, old_instance, old_fingerprint):
+            return {"ok": False, "error": "Could not retire the previous installation's recovery state."}
+        # A concurrently published current-generation document must never be
+        # deleted. Its presence means reconciliation already completed.
+        if latest and latest.get("integrationPluginFingerprint") == current_plugin_fingerprint:
+            return {"ok": True, "reconciled": False, "reason": "current-state-published"}
+        if latest:
+            return {"ok": False, "recoveryPending": True, "error": "Recovery ownership changed; retry shortly."}
+
+    return {"ok": True, "reconciled": True, "retiredPluginFingerprint": old_fingerprint}
 
 
 def restore_cursor(orig) -> bool:
-    """Restores both persistent and live compositor cursor configurations."""
+    """Restore every required persistent stage, then the live compositor."""
     if not isinstance(orig, dict) or not orig.get("captured"):
         return False
 
-    live_success = True
+    live_theme = orig.get("liveRestoreTheme") or orig.get("liveTheme")
+    live_size = orig.get("liveRestoreSize") or orig.get("liveSize") or 24
+    live_backend = orig.get("liveRestoreBackend") or orig.get("liveBackend") or "unknown"
+    sys.stderr.write("cursorctl cleanup: baseline_state_loaded=true\n")
+    sys.stderr.write(f"cursorctl cleanup: baseline_live_backend={live_backend!r}\n")
+    sys.stderr.write(f"cursorctl cleanup: baseline_live_theme={live_theme!r}\n")
+    sys.stderr.write(f"cursorctl cleanup: baseline_live_size={live_size!r}\n")
 
-    # 1. LIVE Hyprland compositor transition
-    if resolve_system_executable("hyprctl"):
-        hypr_env = {}
-        sig = find_hyprland_instance()
-        if sig:
-            hypr_env["HYPRLAND_INSTANCE_SIGNATURE"] = sig
+    all_persistent_ok = True
 
-        live_theme = orig.get("liveRestoreTheme")
-        live_size = orig.get("liveRestoreSize") or 24
-
-        # Fallback if liveRestoreTheme not explicitly present
-        if not live_theme:
-            if orig.get("hyprcursorThemeSet") and orig.get("hyprcursorTheme"):
-                live_theme = orig["hyprcursorTheme"]
-            elif orig.get("xcursorThemeSet") and orig.get("xcursorTheme"):
-                live_theme = orig["xcursorTheme"]
-            elif orig.get("gtkThemeSet") and orig.get("gtkTheme") and orig["gtkTheme"] != "default":
-                live_theme = orig["gtkTheme"]
-            else:
-                live_theme = "Adwaita"
-
-        if live_theme:
-            if not has_cursor_data(live_theme):
-                sys.stderr.write(f"cursorctl: original live theme '{live_theme}' no longer exists on disk; preserving cleanup state for retry.\n")
-                return False
-            ok, out, err = run_cmd(["hyprctl", "setcursor", str(live_theme), str(live_size)], env_override=hypr_env)
-            if not ok:
-                live_success = False
-                sys.stderr.write(f"cursorctl: live restore via hyprctl failed: {err}\n")
-
-    # 2. GTK / gsettings (persistent)
+    # 1. GTK / gsettings persistent configuration.
     if orig.get("gtkThemeSet") and orig.get("gtkTheme"):
-        run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", str(orig["gtkTheme"])])
+        theme_result = run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", str(orig["gtkTheme"])])
     elif orig.get("xcursorThemeSet") and orig.get("xcursorTheme"):
-        run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", str(orig["xcursorTheme"])])
+        theme_result = run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", str(orig["xcursorTheme"])])
     else:
-        run_cmd(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-theme"])
+        theme_result = run_cmd(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-theme"])
+    log_command_result("gsettings_theme_restore", theme_result)
+    all_persistent_ok = all_persistent_ok and theme_result.ok
 
     if orig.get("gtkSizeSet") and orig.get("gtkSize"):
-        run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(orig["gtkSize"])])
+        size_result = run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(orig["gtkSize"])])
     elif orig.get("xcursorSizeSet") and orig.get("xcursorSize"):
-        run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(orig["xcursorSize"])])
+        size_result = run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(orig["xcursorSize"])])
     else:
-        run_cmd(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-size"])
+        size_result = run_cmd(["gsettings", "reset", "org.gnome.desktop.interface", "cursor-size"])
+    log_command_result("gsettings_size_restore", size_result)
+    all_persistent_ok = all_persistent_ok and size_result.ok
 
-    # 3. Systemd & DBus user environment (exact original state)
+    # 2. Systemd & DBus user environment (exact original state).
     set_env = []
     unset_env = []
 
@@ -330,55 +732,142 @@ def restore_cursor(orig) -> bool:
         unset_env.append("XCURSOR_SIZE")
 
     if set_env:
-        run_cmd(["systemctl", "--user", "set-environment"] + set_env)
-        run_cmd(["dbus-update-activation-environment", "--systemd"] + set_env)
+        systemd_set = run_cmd(["systemctl", "--user", "set-environment"] + set_env)
+        dbus_set = run_cmd(["dbus-update-activation-environment", "--systemd"] + set_env)
+        log_command_result("systemd_environment_set", systemd_set)
+        log_command_result("dbus_environment_set", dbus_set)
+        all_persistent_ok = all_persistent_ok and systemd_set.ok and dbus_set.ok
     if unset_env:
-        run_cmd(["systemctl", "--user", "unset-environment"] + unset_env)
+        systemd_unset = run_cmd(["systemctl", "--user", "unset-environment"] + unset_env)
+        log_command_result("systemd_environment_unset", systemd_unset)
+        all_persistent_ok = all_persistent_ok and systemd_unset.ok
 
-    # 4. Remove UWSM drop-in files
+    # 3. Remove only CTM-owned UWSM persistence files.
     paths = get_paths()
-    if os.path.exists(paths["uwsm_common"]):
-        try: os.unlink(paths["uwsm_common"])
-        except OSError: pass
-    if os.path.exists(paths["uwsm_hypr"]):
-        try: os.unlink(paths["uwsm_hypr"])
-        except OSError: pass
+    uwsm_ok = True
+    for uwsm_path in (paths["uwsm_common"], paths["uwsm_hypr"]):
+        if not os.path.lexists(uwsm_path):
+            continue
+        if not marker_contains(uwsm_path, "Managed by sanjyay.cursor-theme-manager"):
+            uwsm_ok = False
+            sys.stderr.write(f"cursorctl cleanup: UWSM restore refused unowned file {uwsm_path!r}\n")
+            continue
+        try:
+            os.unlink(uwsm_path)
+        except OSError as exc:
+            uwsm_ok = False
+            sys.stderr.write(f"cursorctl cleanup: UWSM restore unlink failed for {uwsm_path!r}: {exc}\n")
+    sys.stderr.write(f"cursorctl cleanup: uwsm_restore_ok={str(uwsm_ok).lower()}\n")
+    all_persistent_ok = all_persistent_ok and uwsm_ok
 
-    return live_success
+    # 4. LIVE transition is mandatory and deliberately last. Persistent
+    # environment values are not a substitute for changing the visible cursor.
+    inherited_sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    sig = find_hyprland_instance()
+    hyprctl_path = resolve_system_executable("hyprctl")
+    for env_name in ("HOME", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
+        sys.stderr.write(f"cursorctl cleanup: env_{env_name}={os.environ.get(env_name)!r}\n")
+    sys.stderr.write(f"cursorctl cleanup: env_HYPRLAND_INSTANCE_SIGNATURE={inherited_sig!r}\n")
+    sig_source = "inherited" if sig and inherited_sig else ("runtime-scan" if sig else "missing")
+    sys.stderr.write(f"cursorctl cleanup: HYPRLAND_INSTANCE_SIGNATURE_available={str(bool(sig)).lower()} source={sig_source}\n")
+    sys.stderr.write(f"cursorctl cleanup: trusted_hyprctl={hyprctl_path!r}\n")
+
+    if not isinstance(live_theme, str) or not re.fullmatch(r"[a-zA-Z0-9_. +\-]{1,128}", live_theme):
+        sys.stderr.write("cursorctl cleanup: invalid or missing live restore theme; preserving recovery state\n")
+        return False
+    try:
+        live_size = int(live_size)
+    except (TypeError, ValueError):
+        live_size = 0
+    if not 16 <= live_size <= 256:
+        sys.stderr.write("cursorctl cleanup: invalid live restore size; preserving recovery state\n")
+        return False
+    if not has_cursor_data(live_theme):
+        sys.stderr.write(f"cursorctl cleanup: original live theme {live_theme!r} is unavailable; preserving recovery state\n")
+        return False
+    if not sig or not hyprctl_path:
+        sys.stderr.write("cursorctl cleanup: live Hyprland target unavailable; preserving recovery state\n")
+        return False
+
+    live_result = run_cmd(
+        [hyprctl_path, "setcursor", live_theme, str(live_size)],
+        env_override={"HYPRLAND_INSTANCE_SIGNATURE": sig}
+    )
+    log_command_result("hyprctl_live_restore", live_result)
+    live_ok = live_result.ok
+    sys.stderr.write(f"cursorctl cleanup: persistent_restore_ok={str(all_persistent_ok).lower()}\n")
+    sys.stderr.write(f"cursorctl cleanup: live_restore_ok={str(live_ok).lower()}\n")
+    return all_persistent_ok and live_ok
 
 
-def execute_cleanup():
+def execute_cleanup(expected_instance: Optional[str] = None,
+                    expected_plugin_fingerprint: Optional[str] = None):
     paths = get_paths()
-    # 1. Check if plugin directory still exists
-    if os.path.exists(paths["plugin_dir"]):
-        # Plugin is still present; watcher event was for another plugin change.
-        sys.exit(0)
+    plugin_exists = os.path.exists(paths["plugin_dir"])
 
-    # 2. Plugin is absent! Read secure state
-    state = read_secure_state()
+    if plugin_exists:
+        current_fingerprint = get_plugin_installation_fingerprint(paths["plugin_dir"])
+        if expected_plugin_fingerprint and current_fingerprint == expected_plugin_fingerprint:
+            # Same installation is alive and active; watcher event was for another plugin
+            sys.exit(0)
+        elif not expected_plugin_fingerprint:
+            # Backward compatibility for cleanup services installed by a
+            # marker-based CTM release.
+            marker_path = os.path.join(paths["plugin_dir"], ".installation_instance")
+            current_marker = read_instance_marker(marker_path)
+            if (expected_instance and current_marker == expected_instance) or (
+                    not expected_instance and current_marker is not None):
+                sys.exit(0)
+
+        # If plugin_exists BUT current_marker != expected_instance:
+        # The installation that scheduled this cleanup was removed, and a new installation appeared!
+        # Proceed with cleanup of old instance persistent artifacts.
+
+    # Read state
+    state, state_identity = read_secure_state_snapshot()
+    _cleanup_checkpoint("after-state-load")
 
     # If state is missing because cleanup already ran, exit cleanly
     if state is None and not os.path.exists(paths["desktop_file"]) and not os.path.exists(paths["path_unit"]):
         sys.exit(0)
 
-    # 3. Validate cursorModifiedByCtm and baseline presence
-    cursor_modified = state.get("cursorModifiedByCtm", False) if state else False
-    orig_c = (state.get("preCtmCursor") or state.get("originalCursor")) if state else None
+    # State belongs to this cleanup if:
+    # 1. No expected_instance was specified, OR
+    # 2. State has no instance or matches expected_instance, OR
+    # 3. Plugin directory is completely absent.
+    state_belongs_to_this_cleanup = bool(
+        state and state_owned_by_cleanup(state, expected_instance, expected_plugin_fingerprint)
+    )
 
-    if cursor_modified:
-        if not orig_c or not orig_c.get("captured"):
-            sys.stderr.write("cursorctl: critical error: CTM modified cursor but preCtmCursor baseline is missing or uncaptured. Preserving state and helper for recovery.\n")
-            sys.exit(1)
+    if state_belongs_to_this_cleanup:
+        cursor_modified = state.get("cursorModifiedByCtm", False) if state else False
+        orig_c = (state.get("preCtmCursor") or state.get("originalCursor")) if state else None
 
-    # 4. Restore original cursor if captured
-    if orig_c and orig_c.get("captured"):
-        restore_ok = restore_cursor(orig_c)
-        if not restore_ok:
-            sys.stderr.write("cursorctl: critical failure restoring cursor baseline; preserving state for retry.\n")
-            sys.exit(1)
+        if cursor_modified:
+            if not orig_c or not orig_c.get("captured"):
+                sys.stderr.write("cursorctl: critical error: CTM modified cursor but preCtmCursor baseline is missing or uncaptured. Preserving state and helper for recovery.\n")
+                sys.exit(1)
 
-    # 5. Remove marker-owned desktop file
-    if os.path.exists(paths["desktop_file"]) and is_file_owned_by_us(paths["desktop_file"]):
+        if orig_c and orig_c.get("captured"):
+            restore_ok = restore_cursor(orig_c)
+            if not restore_ok:
+                sys.stderr.write("cursorctl: critical failure restoring cursor baseline; preserving state for retry.\n")
+                sys.exit(1)
+
+        # Remove state directory (state.json)
+        _cleanup_checkpoint("before-compare-delete")
+        if not remove_secure_state_dir(expected_instance, expected_plugin_fingerprint, state_identity):
+            latest_state, _latest_identity = read_secure_state_snapshot()
+            if latest_state and state_owned_by_cleanup(
+                    latest_state, expected_instance, expected_plugin_fingerprint):
+                sys.stderr.write("cursorctl: cleanup could not retire its owned recovery state; preserving helper for retry\n")
+                sys.exit(1)
+            sys.stderr.write("cursorctl cleanup: state ownership changed before deletion; preserving current installation state\n")
+        _cleanup_checkpoint("after-compare-delete")
+
+    _cleanup_checkpoint("before-artifact-cleanup")
+    # Remove marker-owned desktop file (if matching expected_instance or stale)
+    if os.path.exists(paths["desktop_file"]) and is_file_owned_by_us(paths["desktop_file"], expected_instance):
         try:
             os.unlink(paths["desktop_file"])
             if resolve_system_executable("update-desktop-database"):
@@ -386,15 +875,8 @@ def execute_cleanup():
         except OSError:
             pass
 
-    # 6. Remove state directory (state.json)
-    if os.path.isdir(paths["state_dir"]):
-        try:
-            shutil.rmtree(paths["state_dir"], ignore_errors=True)
-        except OSError:
-            pass
-
-    # 7. Self-cleanup: remove systemd units and cleanup executable
-    if os.path.exists(paths["path_unit"]):
+    # Self-cleanup: remove systemd units and cleanup executable
+    if os.path.exists(paths["path_unit"]) and is_file_owned_by_us(paths["path_unit"], expected_instance):
         try:
             run_cmd(["systemctl", "--user", "stop", "cursor-theme-manager-cleanup.path"])
             run_cmd(["systemctl", "--user", "disable", "cursor-theme-manager-cleanup.path"])
@@ -402,7 +884,7 @@ def execute_cleanup():
         except OSError:
             pass
 
-    if os.path.exists(paths["service_unit"]):
+    if os.path.exists(paths["service_unit"]) and is_file_owned_by_us(paths["service_unit"], expected_instance):
         try:
             os.unlink(paths["service_unit"])
         except OSError:
@@ -411,7 +893,7 @@ def execute_cleanup():
     run_cmd(["systemctl", "--user", "daemon-reload"])
 
     # Unlink own executable and remove libexec directory
-    if os.path.exists(paths["cleanup_exe"]):
+    if os.path.exists(paths["cleanup_exe"]) and is_file_owned_by_us(paths["cleanup_exe"], expected_instance):
         try:
             os.unlink(paths["cleanup_exe"])
         except OSError:
@@ -422,7 +904,7 @@ def execute_cleanup():
         except OSError:
             pass
 
-    # 8. Clean up CTM-generated internal conversion caches
+    # Clean up CTM-generated internal conversion caches
     user_icons = os.path.join(paths["data_home"], "icons")
     if os.path.isdir(user_icons):
         try:
@@ -440,11 +922,14 @@ def execute_cleanup():
                     imp_marker2 = os.path.join(entry_path, ".omarchy-cursor-switcher-imported")
 
                     # NEVER delete imported user themes
-                    if os.path.isfile(imp_marker1) or os.path.isfile(imp_marker2):
+                    if marker_contains(imp_marker1, '"kind": "imported-user-theme"') or marker_contains(imp_marker2, '"kind": "imported-user-theme"'):
                         continue
 
                     # Delete ONLY if verified as CTM-generated internal conversion cache
-                    if os.path.isfile(gen_marker) or os.path.isfile(legacy_conv):
+                    managed_name = (entry.startswith("CursorSwitcher-XCursor-") or
+                                    entry.startswith("CursorSwitcher-Themed-"))
+                    if managed_name and (marker_contains(gen_marker, "kind=conversion-cache") or
+                                         marker_contains(legacy_conv, "1.0")):
                         shutil.rmtree(entry_path, ignore_errors=True)
                 except Exception:
                     pass
@@ -459,4 +944,19 @@ def execute_cleanup():
 
 
 if __name__ == "__main__":
-    execute_cleanup()
+    expected_instance = None
+    expected_plugin_fingerprint = None
+    i = 1
+    while i < len(sys.argv):
+        if sys.argv[i] == "--instance" and i + 1 < len(sys.argv):
+            expected_instance = sys.argv[i+1]
+            i += 2
+        elif sys.argv[i] == "--plugin-fingerprint" and i + 1 < len(sys.argv):
+            expected_plugin_fingerprint = sys.argv[i+1]
+            i += 2
+        else:
+            i += 1
+    execute_cleanup(
+        expected_instance=expected_instance,
+        expected_plugin_fingerprint=expected_plugin_fingerprint
+    )

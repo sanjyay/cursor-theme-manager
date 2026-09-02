@@ -236,6 +236,16 @@ class TestCursorImportSecurity(IsolatedTestCase):
         data = json.loads(res.stdout)
         self.assertEqual(data["theme"]["license"], "Unknown")
 
+    def test_13b_elf_payload_without_extension_is_rejected(self):
+        src = self.create_mock_xcursor("ElfPayloadCursor")
+        with open(os.path.join(src, "payload"), "wb") as f:
+            f.write(b"\x7fELF" + b"\x00" * 32)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
+        self.assertNotEqual(res.returncode, 0)
+        data = json.loads(res.stdout)
+        self.assertFalse(data.get("ok"))
+        self.assertIn("elf", data.get("error", "").lower())
+
     def test_14_valid_tar_archive_import(self):
         src = self.create_mock_xcursor("TarCursor")
         tar_path = os.path.join(self.test_dir, "tar_cursor.tar.gz")
@@ -345,6 +355,42 @@ class TestCursorImportSecurity(IsolatedTestCase):
         renamed_theme = next((t for t in disc_data["themes"] if t["id"] == imported_id), None)
         self.assertIsNotNone(renamed_theme)
         self.assertEqual(renamed_theme["displayName"], "BrandNewName")
+
+    def test_22_duplicate_import_opens_existing_theme_notice(self):
+        with open(os.path.join(ROOT_DIR, "CursorService.qml"), encoding="utf-8") as source:
+            service_qml = source.read()
+        with open(os.path.join(ROOT_DIR, "components", "ImportDialog.qml"), encoding="utf-8") as source:
+            dialog_qml = source.read()
+
+        self.assertIn("root.importCompleted(parsed.theme, msg, Boolean(parsed.alreadyImported))", service_qml)
+        self.assertIn("function onImportCompleted(theme, message, alreadyImported)", dialog_qml)
+        self.assertIn("if (alreadyImported)", dialog_qml)
+        self.assertIn("root.duplicateNotice = Model.sanitizeString(message, 256)", dialog_qml)
+        self.assertIn('text: "Already Imported"', dialog_qml)
+        self.assertIn("if (canonical && !parsed.alreadyImported)", service_qml)
+        self.assertIn("if (!parsed.alreadyImported) root.refresh(true)", service_qml)
+
+    def test_23_instance_bound_duplicate_import_reaches_import_parser(self):
+        identity = subprocess.run(
+            [CURSORCTL, "installation-identity"], capture_output=True, text=True, env=self.env
+        )
+        self.assertEqual(identity.returncode, 0, identity.stderr)
+        fingerprint = json.loads(identity.stdout)["pluginFingerprint"]
+        src = self.create_mock_xcursor("BoundDuplicate")
+
+        first = subprocess.run(
+            [CURSORCTL, "import", "--source", src, "--plugin-fingerprint", fingerprint],
+            capture_output=True, text=True, env=self.env
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertFalse(json.loads(first.stdout)["alreadyImported"])
+
+        duplicate = subprocess.run(
+            [CURSORCTL, "import", "--source", src, "--plugin-fingerprint", fingerprint],
+            capture_output=True, text=True, env=self.env
+        )
+        self.assertEqual(duplicate.returncode, 0, duplicate.stderr)
+        self.assertTrue(json.loads(duplicate.stdout)["alreadyImported"])
 
 
 if __name__ == "__main__":

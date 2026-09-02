@@ -33,7 +33,7 @@ Item {
   // Integration & Removal Lifecycle State
   property bool integrationEnabled: false
   property bool setupDismissedThisSession: false
-  readonly property bool setupRequired: !integrationEnabled && !setupDismissedThisSession
+  readonly property bool setupRequired: !recoveryPending && !integrationEnabled && !setupDismissedThisSession
   property bool integrationPromptSeen: integrationEnabled || setupDismissedThisSession
   property bool integrationLoading: false
   property string integrationError: ""
@@ -43,7 +43,17 @@ Item {
   readonly property bool launcherLoading: integrationLoading
   readonly property string launcherError: integrationError
   property string launcherPath: ""
+  property string integrationInstanceId: ""
+  property string integrationPluginFingerprint: ""
+  property string installationInstanceToken: ""
   property string trustedHyprctlPath: ""
+  property bool recoveryPending: false
+  property int _orphanRecoveryAttempts: 0
+  property bool _destroying: false
+  property var _mutationFingerprints: ({})
+  readonly property double _traceEpochMs: Date.now()
+  readonly property string _traceObjectId: String(_traceEpochMs) + "-" + String(Math.random()).slice(2, 10)
+  readonly property bool _traceEnabled: Quickshell.env("CTM_LIFECYCLE_TRACE") === "1"
 
   property bool _started: false
   property bool _stateLoaded: false
@@ -104,7 +114,7 @@ Item {
   }
 
   signal themesChangedByScan()
-  signal importCompleted(var theme, string message)
+  signal importCompleted(var theme, string message, bool alreadyImported)
   signal importFailed(string error)
   signal launcherChanged()
   signal integrationChanged()
@@ -122,14 +132,50 @@ Item {
     return Model.sanitizeString(value, 256)
   }
 
+  function traceLifecycle(eventName, source, extra) {
+    if (!_traceEnabled) return
+    var details = extra || ({})
+    details.elapsedMs = Date.now() - _traceEpochMs
+    details.objectId = _traceObjectId
+    details.pluginRoot = pluginRoot
+    details.fingerprint = integrationPluginFingerprint
+    details.integrationInstanceId = integrationInstanceId
+    details.integrationEnabled = integrationEnabled
+    details.integrationPromptSeen = integrationPromptSeen
+    details.recoveryPending = Boolean(_loadedState && _loadedState.recoveryPending)
+    details.ready = ready
+    details.theme = committedTheme ? (committedTheme.displayName || committedTheme.id || "") : ""
+    details.size = committedSize
+    console.info("CTM_LIFECYCLE", eventName, source || "unspecified", JSON.stringify(details))
+  }
+
+  function acceptMutationBarrierResult(raw) {
+    try {
+      var result = JSON.parse(String(raw || "{}"))
+      if (result.ok && result.preCtmCursor && result.preCtmCursor.captured) {
+        root._loadedState.preCtmCursor = result.preCtmCursor
+        root._loadedState.originalCursor = result.preCtmCursor
+        root._loadedState.cursorModifiedByCtm = true
+      }
+    } catch (e) {}
+  }
+
   function start() {
     if (_started) return
     _started = true
+    traceLifecycle("plugin-start", "startup")
+
+    // Establish B's identity before reading or adopting any external state.
+    installationIdentityProcess.command = [helperPath, "installation-identity"]
+    installationIdentityProcess.running = true
+    installationIdentityWatchdog.restart()
+  }
+
+  function beginStartupReads() {
+    if (_destroying) return
 
     // Load state from secure state helper
-    stateReadProcess.command = [helperPath, "state-read"]
-    stateReadProcess.running = true
-    stateReadWatchdog.restart()
+    requestStateRead("startup")
 
     // Query integration status
     checkLauncherStatus()
@@ -138,10 +184,90 @@ Item {
     refresh(true)
   }
 
+  function requestStateRead(source) {
+    if (_destroying || stateReadProcess.running) return
+    stateReadProcess.command = [helperPath, "state-read"]
+    traceLifecycle("state-read-requested", source || "startup")
+    stateReadProcess.running = true
+    stateReadWatchdog.restart()
+  }
+
+  function enterRecoveryQuarantine() {
+    recoveryPending = true
+    ready = false
+    integrationEnabled = false
+    integrationPromptSeen = false
+    committedTheme = null
+    committedSize = 16
+    requestedSize = 16
+    _stateLoaded = false
+    trailingLiveSizeTimer.stop()
+    commitSizeDebounceTimer.stop()
+    persistThemeDebounceTimer.stop()
+    previewTimer.stop()
+    _queuedApply = null
+    _debouncedPreview = null
+    recoveryPollTimer.restart()
+  }
+
+  function requestOrphanedRecovery() {
+    if (_destroying || recoveryReconcileProcess.running || integrationPluginFingerprint.length === 0 || _orphanRecoveryAttempts >= 2) return
+    _orphanRecoveryAttempts++
+    recoveryReconcileProcess.command = mutationCommand([helperPath, "recovery-reconcile"])
+    traceLifecycle("mutation-requested", "orphaned-recovery", { command: "recovery-reconcile" })
+    recoveryReconcileProcess.running = true
+    recoveryReconcileWatchdog.restart()
+  }
+
+  function cancelMutationWork() {
+    _destroying = true
+    trailingLiveSizeTimer.stop()
+    commitSizeDebounceTimer.stop()
+    persistThemeDebounceTimer.stop()
+    previewTimer.stop()
+    recoveryPollTimer.stop()
+    liveThemeProcess.running = false
+    liveSetcursorProcess.running = false
+    persistThemeProcess.running = false
+    persistSizeProcess.running = false
+    applyProcess.running = false
+    prepareThemeProcess.running = false
+    stateWriteProcess.running = false
+    integrationEnableProcess.running = false
+    integrationDisableProcess.running = false
+    recoveryReconcileProcess.running = false
+  }
+
+  function mutationCommand(args) {
+    var bound = args.slice(0)
+    if (bound.length > 1) _mutationFingerprints[String(bound[1])] = integrationPluginFingerprint
+    bound.push("--plugin-fingerprint", integrationPluginFingerprint)
+    return bound
+  }
+
+  function mutationCallbackIsCurrent(commandName) {
+    return !_destroying && integrationPluginFingerprint.length > 0 &&
+      _mutationFingerprints[commandName] === integrationPluginFingerprint
+  }
+
   onManifestChanged: startupTimer.restart()
-  Component.onCompleted: startupTimer.restart()
+  Component.onCompleted: {
+    traceLifecycle("cursor-service-created", "component-on-completed")
+    startupTimer.restart()
+  }
+  Component.onDestruction: {
+    traceLifecycle("cursor-service-destroyed", "component-destruction")
+    cancelMutationWork()
+  }
 
   Timer { id: startupTimer; interval: 25; repeat: false; onTriggered: root.start() }
+
+  Timer {
+    id: recoveryPollTimer
+    interval: 350
+    repeat: false
+    onTriggered: root.requestStateRead("recovery-reconciliation")
+  }
 
   // Automatic first-run presentation timer (triggers only if setup is required)
   Timer {
@@ -212,7 +338,7 @@ Item {
         }
         _pendingSelectionThemeId = ""
         if (foundTheme) {
-          commitTheme(foundTheme)
+          commitTheme(foundTheme, "import-model-refresh")
         }
       } else if (committedTheme) {
         // Reconcile committedTheme reference to authoritative object in refreshed themes
@@ -270,21 +396,30 @@ Item {
   }
 
   function initialize(currentXcursor) {
-    if (ready || !_stateLoaded || !_scanLoaded) return
+    if (ready || recoveryPending || !_stateLoaded || !_scanLoaded) return
+    traceLifecycle("model-initialize-enter", "model-init", { currentXcursor: currentXcursor, loadedState: _loadedState })
+    var startup = Model.startupDisposition(_loadedState)
+    if (startup.recoveryPending) {
+      enterRecoveryQuarantine()
+      return
+    }
 
     committedSize = Model.validSize(_loadedState.size)
     requestedSize = committedSize
     liveAppliedSize = committedSize
     _persistedSize = committedSize
     importedThemes = _loadedState.importedThemes || []
-    integrationEnabled = Boolean(_loadedState.integrationEnabled || _loadedState.launcherAdded)
-    integrationPromptSeen = integrationEnabled || setupDismissedThisSession
+    integrationInstanceId = _loadedState.integrationInstanceId || ""
+    integrationPluginFingerprint = _loadedState.integrationPluginFingerprint || ""
+    integrationEnabled = startup.integrationEnabled
+    integrationPromptSeen = startup.integrationPromptSeen || setupDismissedThisSession
 
     var found = _loadedState.ok ? Model.findTheme(themes, _loadedState.theme) : null
     if (!found) found = Model.fallbackTheme(themes, currentXcursor)
     committedTheme = found
 
     ready = true
+    traceLifecycle("model-initialize-ready", "model-init", { autoRestore: Boolean(_loadedState.cursorModifiedByCtm && committedTheme) })
     statusText = themes.length ? themes.length + " cursor themes" : "No cursor themes found"
 
     if (_loadedState.ok && !found) {
@@ -293,10 +428,9 @@ Item {
       lastError = "The saved cursor settings were invalid; using a safe fallback"
     }
 
-    if (_loadedState.cursorModifiedByCtm && committedTheme) {
-      enqueueApply(committedTheme, committedSize, "restore")
-      fetchRoles(committedTheme.displayName || committedTheme.id, committedTheme.path || "")
-    } else if (committedTheme) {
+    // Startup is strictly read-only. Even a valid same-installation managed
+    // selection is displayed but never replayed into the compositor.
+    if (committedTheme) {
       fetchRoles(committedTheme.displayName || committedTheme.id, committedTheme.path || "")
     }
 
@@ -318,40 +452,40 @@ Item {
     enqueueApply(committedTheme, committedSize, "cancel")
   }
 
-  function commitTheme(theme) {
-    if (!theme) return
+  function commitTheme(theme, source) {
+    if (!theme || !ready || recoveryPending || _destroying) return
     previewTimer.stop()
     _debouncedPreview = null
 
     _themeRequestGeneration++
     var gen = _themeRequestGeneration
+    traceLifecycle("theme-commit", source || "unspecified", { requestedTheme: theme.displayName || theme.id || "", generation: gen })
 
     // 1. Synchronously update UI selection immediately (0 ms latency)
     committedTheme = theme
     statusText = (theme.displayName || theme.id) + " · " + committedSize + " px"
 
-    // 2. Ensure baseline is durably captured on first-ever CTM apply
-    if (root._loadedState && !root._loadedState.cursorModifiedByCtm) {
-      root._loadedState.cursorModifiedByCtm = true
-      baselineCaptureProcess.command = [helperPath, "capture-baseline"]
-      baselineCaptureProcess.running = true
-    }
+    continueThemeCommit(theme, gen)
+  }
+
+  function continueThemeCommit(theme, gen) {
+    if (!theme) return
 
     // 3. Resolve runtime identity
     var resolved = resolveRuntimeTheme(theme)
     if (resolved.prepared) {
-      // FAST PATH: Direct hyprctl setcursor (~10-15 ms)
+      // FAST PATH: invoke the instance-bound helper's guarded setcursor route.
       startLiveThemeSetcursor(resolved.name, committedSize, gen, theme)
     } else {
       // PREPARE PATH: Convert XCursor to Hyprcursor in background
       statusText = "Preparing " + (theme.displayName || theme.id) + "…"
       _preparingTheme = theme
       _preparingGeneration = gen
-      prepareThemeProcess.command = [
+      prepareThemeProcess.command = mutationCommand([
         helperPath, "ensure-hyprcursor",
         "--xcursor", theme.id,
         "--theme-path", theme.path || ""
-      ]
+      ])
       prepareThemeProcess.running = true
       prepareThemeWatchdog.restart()
     }
@@ -392,12 +526,10 @@ Item {
 
   function startLiveThemeSetcursor(runtimeThemeName, size, generation, themeObj) {
     _activeThemeGeneration = generation
-    if (!root.trustedHyprctlPath) {
-      root.statusText = "Required system tool hyprctl is unavailable or failed validation."
-      root.lastError = "Required system tool \"hyprctl\" is unavailable or failed validation."
-      return
-    }
-    liveThemeProcess.command = [root.trustedHyprctlPath, "setcursor", runtimeThemeName, String(size)]
+    // The helper owns the durable first-mutation barrier and trusted hyprctl
+    // resolution. QML is never allowed to invoke hyprctl directly.
+    liveThemeProcess.command = mutationCommand([helperPath, "setcursor-live", "--theme", runtimeThemeName, "--size", String(size)])
+    traceLifecycle("mutation-command", "explicit-user-theme-click", { command: "setcursor-live", requestedTheme: runtimeThemeName, requestedSize: size, generation: generation })
     liveThemeProcess.running = true
     liveThemeWatchdog.restart()
   }
@@ -407,26 +539,28 @@ Item {
     var doc = JSON.stringify(committedTheme)
     var sz = committedSize
 
-    persistThemeProcess.command = [
+    persistThemeProcess.command = mutationCommand([
       helperPath, "persist-theme",
       "--theme", doc,
       "--size", String(sz)
-    ]
+    ])
+    traceLifecycle("mutation-command", "explicit-user-theme-click", { command: "persist-theme", requestedSize: sz })
     persistThemeProcess.running = true
     persistThemeWatchdog.restart()
   }
 
-  function commitSize(size) {
+  function commitSize(size, source) {
+    if (!ready || recoveryPending || _destroying) return
     previewTimer.stop()
     _debouncedPreview = null
     var target = Model.validSize(size)
+    traceLifecycle("size-commit", source || "unspecified", { requestedSize: target })
     if (target === requestedSize && !liveSetcursorProcess.running && !trailingLiveSizeTimer.running && !commitSizeDebounceTimer.running && target === _persistedSize) return
 
     // 1. Synchronous Instant UI Update (0 ms latency, no subprocess)
     _sizeRequestGeneration++
     requestedSize = target
     committedSize = target
-    if (root._loadedState) root._loadedState.cursorModifiedByCtm = true
     statusText = (committedTheme ? (committedTheme.displayName || committedTheme.id) : "Cursor") + " · " + requestedSize + " px"
 
     // 2. Trailing-edge ONLY live apply: restart debounce timer on every input click
@@ -449,18 +583,13 @@ Item {
     if (!committedTheme) return
     _activeLiveGeneration = generation
 
-    if (!root.trustedHyprctlPath) {
-      root.statusText = "Required system tool hyprctl is unavailable or failed validation."
-      root.lastError = "Required system tool \"hyprctl\" is unavailable or failed validation."
-      return
-    }
-
     var resolvedTheme = committedTheme.hyprcursor || committedTheme.xcursor || committedTheme.id || "Adwaita"
     if (resolvedTheme === "-") {
       resolvedTheme = committedTheme.xcursor || committedTheme.id || "Adwaita"
     }
 
-    liveSetcursorProcess.command = [root.trustedHyprctlPath, "setcursor", resolvedTheme, String(size)]
+    liveSetcursorProcess.command = mutationCommand([helperPath, "setcursor-live", "--theme", resolvedTheme, "--size", String(size)])
+    traceLifecycle("mutation-command", "explicit-user-size-change", { command: "setcursor-live", requestedTheme: resolvedTheme, requestedSize: size, generation: generation })
     liveSetcursorProcess.running = true
     liveSetcursorWatchdog.restart()
   }
@@ -474,20 +603,22 @@ Item {
     var hypr = committedTheme.hyprcursor || "-"
     var xcur = committedTheme.xcursor || "-"
 
-    persistSizeProcess.command = [
+    persistSizeProcess.command = mutationCommand([
       helperPath, "persist-size",
       "--hyprcursor", hypr,
       "--xcursor", xcur,
       "--size", String(finalSize)
-    ]
+    ])
+    traceLifecycle("mutation-command", "explicit-user-size-change", { command: "persist-size", requestedSize: finalSize })
     persistSizeProcess.running = true
     persistSizeWatchdog.restart()
   }
 
   function enqueueApply(theme, size, kind, generation) {
-    if (!theme) return
+    if (!theme || !ready || recoveryPending || _destroying) return
     var gen = generation !== undefined ? generation : (++_sizeRequestGeneration)
     _queuedApply = { theme: theme, size: Model.validSize(size), kind: kind, generation: gen }
+    traceLifecycle("apply-enqueue", kind === "restore" ? "state-restore" : kind, { kind: kind, generation: gen })
     if (!applyProcess.running) startQueuedApply()
   }
 
@@ -498,23 +629,27 @@ Item {
     _applyStdout = ""
     _applyStderr = ""
     applying = true
-    applyProcess.command = Model.applyArguments(helperPath, _activeApply.theme, _activeApply.size,
-      _activeApply.kind === "preview")
+    traceLifecycle("mutation-command", "apply-" + _activeApply.kind, { command: "apply", generation: _activeApply.generation })
+    applyProcess.command = mutationCommand(Model.applyArguments(helperPath, _activeApply.theme, _activeApply.size,
+      _activeApply.kind === "preview"))
     applyProcess.running = true
     applyWatchdog.restart()
   }
 
   function persistState() {
-    var doc = Model.stateDocument(
-      committedTheme,
-      committedSize,
-      importedThemes,
-      integrationPromptSeen,
-      integrationEnabled,
-      _loadedState.cursorModifiedByCtm,
-      _loadedState.preCtmCursor || _loadedState.originalCursor
-    )
-    stateWriteProcess.command = [helperPath, "state-write", "--state", doc]
+    if (!ready || recoveryPending || _destroying) return
+    var doc = Model.stateDocument({
+      theme: committedTheme,
+      size: committedSize,
+      importedThemes: importedThemes,
+      integrationInstanceId: integrationInstanceId,
+      integrationPluginFingerprint: integrationPluginFingerprint,
+      integrationPromptSeen: integrationPromptSeen,
+      integrationEnabled: integrationEnabled,
+      cursorModifiedByCtm: _loadedState.cursorModifiedByCtm,
+      preCtmCursor: _loadedState.preCtmCursor || _loadedState.originalCursor
+    })
+    stateWriteProcess.command = mutationCommand([helperPath, "state-write", "--state", doc])
     stateWriteProcess.running = true
     stateWriteWatchdog.restart()
   }
@@ -538,26 +673,38 @@ Item {
   function checkIntegrationStatus() {
     if (integrationStatusProcess.running) return
     integrationStatusProcess.command = [helperPath, "integration-status"]
+    traceLifecycle("integration-status-requested", "startup-or-reconcile")
     integrationStatusProcess.running = true
     integrationStatusWatchdog.restart()
   }
   function checkLauncherStatus() { checkIntegrationStatus() }
 
-  function enableIntegration() {
-    if (integrationEnableProcess.running || integrationDisableProcess.running) return
+  function enableIntegration(source) {
+    if (!ready || recoveryPending || _destroying || integrationEnableProcess.running || integrationDisableProcess.running) return
     integrationLoading = true
     integrationError = ""
-    integrationEnableProcess.command = [helperPath, "integration-enable"]
+    traceLifecycle("mutation-command", source || "unspecified", { command: "integration-enable" })
+    integrationEnableProcess.command = mutationCommand([helperPath, "integration-enable"])
     integrationEnableProcess.running = true
     integrationEnableWatchdog.restart()
   }
-  function addLauncher() { enableIntegration() }
+
+  function keepPanelOpenAfterIntegration() {
+    var pluginId = manifest && manifest.id ? String(manifest.id) : "sanjyay.cursor-theme-manager"
+    Qt.callLater(function() {
+      if (!root._destroying && root.shell && typeof root.shell.summon === "function") {
+        root.shell.summon(pluginId, "{}")
+      }
+    })
+  }
+  function addLauncher() { enableIntegration("legacy-explicit-user-integration-consent") }
 
   function disableIntegration() {
-    if (integrationEnableProcess.running || integrationDisableProcess.running) return
+    if (!ready || recoveryPending || _destroying || integrationEnableProcess.running || integrationDisableProcess.running) return
     integrationLoading = true
     integrationError = ""
-    integrationDisableProcess.command = [helperPath, "integration-disable"]
+    traceLifecycle("mutation-command", "explicit-user-integration-disable", { command: "integration-disable" })
+    integrationDisableProcess.command = mutationCommand([helperPath, "integration-disable"])
     integrationDisableProcess.running = true
     integrationDisableWatchdog.restart()
   }
@@ -590,7 +737,7 @@ Item {
     if (optionalName) {
       args.push("--name", Model.sanitizeString(optionalName, 100))
     }
-    importProcess.command = args
+    importProcess.command = mutationCommand(args)
     importProcess.running = true
     importWatchdog.restart()
   }
@@ -602,10 +749,10 @@ Item {
     _activeRemovingThemeId = String(theme.id)
     if (committedTheme && (committedTheme.id === theme.id || committedTheme.displayName === theme.displayName)) {
       var fb = Model.fallbackTheme(themes, "Banana")
-      if (fb) commitTheme(fb)
+      if (fb) commitTheme(fb, "remove-imported-fallback")
     }
     rolesCache = ({})
-    removeImportProcess.command = [helperPath, "remove-imported", "--id", String(theme.id)]
+    removeImportProcess.command = mutationCommand([helperPath, "remove-imported", "--id", String(theme.id)])
     removeImportProcess.running = true
     removeImportWatchdog.restart()
   }
@@ -623,7 +770,7 @@ Item {
     _activeRenamingThemeId = String(theme.id)
     _activeRenamingNewName = Model.sanitizeString(newName, 100)
     rolesCache = ({})
-    renameImportProcess.command = [helperPath, "rename-imported", "--id", String(theme.id), "--name", _activeRenamingNewName]
+    renameImportProcess.command = mutationCommand([helperPath, "rename-imported", "--id", String(theme.id), "--name", _activeRenamingNewName])
     renameImportProcess.running = true
     renameImportWatchdog.restart()
   }
@@ -642,6 +789,41 @@ Item {
   // PROCESS DEFINITIONS WITH WATCHDOG TIMERS
   // ===========================================================================
 
+  Timer {
+    id: installationIdentityWatchdog
+    interval: 5000
+    repeat: false
+    onTriggered: {
+      if (installationIdentityProcess.running) installationIdentityProcess.running = false
+      root.lastError = "Could not establish a safe installation identity"
+    }
+  }
+
+  Process {
+    id: installationIdentityProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: installationIdentityStdout; waitForEnd: true }
+    stderr: StdioCollector { id: installationIdentityStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      installationIdentityWatchdog.stop()
+      if (root._destroying) return
+      try {
+        var res = JSON.parse(installationIdentityStdout.text || "{}")
+        if (exitCode === 0 && res.ok && res.instanceToken && res.pluginFingerprint) {
+          root.installationInstanceToken = String(res.instanceToken)
+          root.integrationPluginFingerprint = String(res.pluginFingerprint)
+          root.traceLifecycle("installation-identity-ready", "startup", { instanceToken: root.installationInstanceToken })
+          root.beginStartupReads()
+          return
+        }
+        root.lastError = root.elide(res.error || installationIdentityStderr.text || "Could not establish a safe installation identity")
+      } catch (e) {
+        root.lastError = "Could not establish a safe installation identity"
+      }
+    }
+  }
+
   // 1. State Read Process
   Timer {
     id: stateReadWatchdog
@@ -650,9 +832,9 @@ Item {
     onTriggered: {
       if (stateReadProcess.running) {
         stateReadProcess.running = false
-        root._loadedState = Model.parseState("")
-        root._stateLoaded = true
-        root.initialize("")
+        // Fail closed: an unknown lifecycle state must never be treated as a
+        // fresh installation. Retry without adopting or mutating anything.
+        root.enterRecoveryQuarantine()
       }
     }
   }
@@ -664,13 +846,56 @@ Item {
     stdout: StdioCollector { id: stateReadStdout; waitForEnd: true }
     onExited: function(exitCode) {
       stateReadWatchdog.stop()
+      if (root._destroying) return
       var text = exitCode === 0 ? (stateReadStdout.text || "") : ""
       root._loadedState = Model.parseState(text)
+      root.traceLifecycle("state-read-completed", "startup", { exitCode: exitCode, loadedState: root._loadedState })
       if (root._loadedState && root._loadedState.trustedTools && root._loadedState.trustedTools.hyprctl) {
         root.trustedHyprctlPath = String(root._loadedState.trustedTools.hyprctl)
       }
+      if (root._loadedState.recoveryPending) {
+        root.enterRecoveryQuarantine()
+        if (root._loadedState.recoveryOrphaned) {
+          if (root._orphanRecoveryAttempts < 2) root.requestOrphanedRecovery()
+          else recoveryPollTimer.stop()
+        }
+        return
+      }
+      root.recoveryPending = false
+      root._orphanRecoveryAttempts = 0
       root._stateLoaded = true
       root.initialize("")
+    }
+  }
+
+  Timer {
+    id: recoveryReconcileWatchdog
+    interval: 12000
+    repeat: false
+    onTriggered: {
+      if (recoveryReconcileProcess.running) recoveryReconcileProcess.running = false
+      root.lastError = "Previous cursor recovery timed out; it is safe to retry."
+      recoveryPollTimer.restart()
+    }
+  }
+
+  Process {
+    id: recoveryReconcileProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: recoveryReconcileStdout; waitForEnd: true }
+    stderr: StdioCollector { id: recoveryReconcileStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      recoveryReconcileWatchdog.stop()
+      if (root._destroying) return
+      var message = ""
+      try {
+        var result = JSON.parse(recoveryReconcileStdout.text || "{}")
+        message = result.error ? String(result.error) : ""
+      } catch (e) {}
+      root.traceLifecycle("mutation-completed", "orphaned-recovery", { command: "recovery-reconcile", exitCode: exitCode })
+      if (exitCode !== 0) root.lastError = root.elide(message || recoveryReconcileStderr.text || "Previous cursor recovery could not finish; retry shortly.")
+      recoveryPollTimer.restart()
     }
   }
 
@@ -688,6 +913,8 @@ Item {
     command: []
     onExited: function(exitCode) {
       stateWriteWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("state-write")) return
+      root.traceLifecycle("mutation-completed", "state-write", { command: "state-write", exitCode: exitCode })
     }
   }
 
@@ -706,11 +933,19 @@ Item {
     stdout: StdioCollector { id: integrationStatusStdout; waitForEnd: true }
     onExited: function(exitCode) {
       integrationStatusWatchdog.stop()
+      if (root._destroying) return
       if (exitCode === 0) {
         try {
           var res = JSON.parse(integrationStatusStdout.text || "{}")
           if (res.ok) {
+            root.traceLifecycle("integration-status-completed", "startup-or-reconcile", { exitCode: exitCode, result: res })
+            if (res.recoveryPending) {
+              root.enterRecoveryQuarantine()
+              return
+            }
             root.integrationEnabled = Boolean(res.enabled)
+            root.integrationInstanceId = res.instanceId ? String(res.instanceId) : ""
+            root.integrationPluginFingerprint = res.pluginFingerprint ? String(res.pluginFingerprint) : ""
             root.integrationPromptSeen = root.integrationEnabled || root.setupDismissedThisSession
             root.integrationArtifacts = res.artifacts || ({})
             if (res.paths && res.paths.desktop) root.launcherPath = res.paths.desktop
@@ -744,12 +979,15 @@ Item {
     stderr: StdioCollector { id: integrationEnableStderr; waitForEnd: true }
     onExited: function(exitCode) {
       integrationEnableWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("integration-enable")) return
+      root.traceLifecycle("mutation-completed", "integration-enable", { command: "integration-enable", exitCode: exitCode })
       root.integrationLoading = false
       if (exitCode === 0) {
         root.integrationEnabled = true
         root.integrationPromptSeen = true
         root.integrationError = ""
         root.checkIntegrationStatus()
+        root.keepPanelOpenAfterIntegration()
       } else {
         var err = "Failed to enable integration"
         try {
@@ -787,6 +1025,8 @@ Item {
     stderr: StdioCollector { id: integrationDisableStderr; waitForEnd: true }
     onExited: function(exitCode) {
       integrationDisableWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("integration-disable")) return
+      root.traceLifecycle("mutation-completed", "integration-disable", { command: "integration-disable", exitCode: exitCode })
       root.integrationLoading = false
       if (exitCode === 0) {
         root.integrationEnabled = false
@@ -830,6 +1070,7 @@ Item {
     onExited: function(exitCode) {
       discoverWatchdog.stop()
       root.scanning = false
+      root.traceLifecycle("discovery-completed", "startup-or-refresh", { exitCode: exitCode })
       if (exitCode === 0) {
         root.parseDiscovery(discoverStdout.text || root._discoverOutput)
       } else {
@@ -1011,6 +1252,7 @@ Item {
     stderr: StdioCollector { id: importStderr; waitForEnd: true }
     onExited: function(exitCode) {
       importWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("import")) return
       var raw = String(importStdout.text || "").trim()
       try {
         var parsed = JSON.parse(raw)
@@ -1022,7 +1264,7 @@ Item {
 
           // 1. Immediate canonical theme upsert into live model (0 ms delay - card visible instantly!)
           var canonical = Model.normalizedTheme(parsed.theme)
-          if (canonical) {
+          if (canonical && !parsed.alreadyImported) {
             root.themes = Model.upsertTheme(root.themes, canonical)
             root.themeModelVersion++
             root.themesChangedByScan()
@@ -1032,13 +1274,13 @@ Item {
             }
 
             // 2. Select and live apply immediately
-            root.commitTheme(canonical)
+            root.commitTheme(canonical, "import-completed")
           }
 
-          root.importCompleted(parsed.theme, msg)
+          root.importCompleted(parsed.theme, msg, Boolean(parsed.alreadyImported))
 
           // 3. Background non-blocking reconciliation discovery
-          root.refresh(true)
+          if (!parsed.alreadyImported) root.refresh(true)
         } else {
           var err = parsed.error || "Failed to import cursor theme"
           root.lastError = err
@@ -1068,6 +1310,7 @@ Item {
     command: []
     onExited: function(exitCode) {
       removeImportWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("remove-imported")) return
       if (exitCode === 0) {
         root.statusText = "Imported theme removed"
         if (root._activeRemovingThemeId) {
@@ -1106,6 +1349,7 @@ Item {
     stderr: StdioCollector { id: renameImportStderr; waitForEnd: true }
     onExited: function(exitCode) {
       renameImportWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("rename-imported")) return
       if (exitCode === 0) {
         root.rolesCache = ({})
         root.statusText = "Theme renamed"
@@ -1166,6 +1410,7 @@ Item {
       if (liveSetcursorProcess.running) {
         liveSetcursorProcess.running = false
         root._activeLiveGeneration = 0
+        root.lastError = "Cursor size change timed out; the original cursor remains recoverable."
         if (root._sizeRequestGeneration > root._activeLiveGeneration) {
           trailingLiveSizeTimer.restart()
         }
@@ -1177,14 +1422,21 @@ Item {
     id: liveSetcursorProcess
     running: false
     command: []
+    stdout: StdioCollector { id: liveSetcursorStdout; waitForEnd: true }
+    stderr: StdioCollector { id: liveSetcursorStderr; waitForEnd: true }
     onExited: function(exitCode) {
       liveSetcursorWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("setcursor-live")) return
       var completedGen = root._activeLiveGeneration
       root._activeLiveGeneration = 0
 
       if (exitCode === 0 && completedGen >= root._sizeRequestGeneration) {
+        root.acceptMutationBarrierResult(liveSetcursorStdout.text)
         root.liveAppliedSize = root.requestedSize
-        root.commitSizeDebounceTimer.restart()
+        commitSizeDebounceTimer.restart()
+      } else if (exitCode !== 0) {
+        root.lastError = root.elide(liveSetcursorStderr.text || "The cursor size was not changed because the original cursor could not be saved safely.")
+        root.statusText = "Cursor size change failed"
       }
 
       // If user clicked again while setcursor was in flight
@@ -1208,23 +1460,7 @@ Item {
     command: []
     onExited: function(exitCode) {
       persistSizeWatchdog.stop()
-    }
-  }
-
-  // 10c. Fast Baseline Capture Process (First-Ever Apply Only)
-  Timer {
-    id: baselineCaptureWatchdog
-    interval: 3000
-    repeat: false
-    onTriggered: if (baselineCaptureProcess.running) baselineCaptureProcess.running = false
-  }
-
-  Process {
-    id: baselineCaptureProcess
-    running: false
-    command: []
-    onExited: function(exitCode) {
-      baselineCaptureWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("persist-size")) return
     }
   }
 
@@ -1249,6 +1485,7 @@ Item {
     stdout: StdioCollector { id: prepareThemeStdout; waitForEnd: true }
     onExited: function(exitCode) {
       prepareThemeWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("ensure-hyprcursor")) return
       var prepTheme = root._preparingTheme
       var prepGen = root._preparingGeneration
       root._preparingTheme = null
@@ -1276,21 +1513,32 @@ Item {
     id: liveThemeWatchdog
     interval: 1500
     repeat: false
-    onTriggered: if (liveThemeProcess.running) liveThemeProcess.running = false
+    onTriggered: if (liveThemeProcess.running) {
+      liveThemeProcess.running = false
+      root.lastError = "Cursor theme change timed out; the original cursor remains recoverable."
+      root.statusText = "Cursor theme change failed"
+    }
   }
 
   Process {
     id: liveThemeProcess
     running: false
     command: []
+    stdout: StdioCollector { id: liveThemeStdout; waitForEnd: true }
+    stderr: StdioCollector { id: liveThemeStderr; waitForEnd: true }
     onExited: function(exitCode) {
       liveThemeWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("setcursor-live")) return
       var completedGen = root._activeThemeGeneration
       root._activeThemeGeneration = 0
 
       if (exitCode === 0 && completedGen >= root._themeRequestGeneration) {
+        root.acceptMutationBarrierResult(liveThemeStdout.text)
         root.liveAppliedTheme = root.committedTheme
-        root.persistThemeDebounceTimer.restart()
+        persistThemeDebounceTimer.restart()
+      } else if (exitCode !== 0) {
+        root.lastError = root.elide(liveThemeStderr.text || "The cursor theme was not changed because the original cursor could not be saved safely.")
+        root.statusText = "Cursor theme change failed"
       }
     }
   }
@@ -1309,6 +1557,7 @@ Item {
     command: []
     onExited: function(exitCode) {
       persistThemeWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("persist-theme")) return
     }
   }
 
@@ -1336,6 +1585,7 @@ Item {
     stderr: StdioCollector { id: applyStderr; waitForEnd: true; onStreamFinished: root._applyStderr = text }
     onExited: function(exitCode) {
       applyWatchdog.stop()
+      if (!root.mutationCallbackIsCurrent("apply")) return
       var request = root._activeApply
       root.applying = false
       var reqGen = request ? (request.generation || 0) : 0

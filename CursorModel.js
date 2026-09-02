@@ -228,6 +228,8 @@ function parseState(text) {
     var importedThemes = Array.isArray(raw.importedThemes) ? raw.importedThemes.slice(0, 1024) : []
     var integrationPromptSeen = Boolean(raw.integrationPromptSeen !== undefined ? raw.integrationPromptSeen : (raw.launcherPromptSeen !== undefined ? raw.launcherPromptSeen : raw.integrationConsent))
     var integrationEnabled = Boolean(raw.integrationEnabled !== undefined ? raw.integrationEnabled : (raw.launcherAdded !== undefined ? raw.launcherAdded : raw.integrationInstalled))
+    var integrationInstanceId = (typeof raw.integrationInstanceId === "string" && /^[a-fA-F0-9]{16,64}$/.test(raw.integrationInstanceId)) ? raw.integrationInstanceId : null
+    var integrationPluginFingerprint = (typeof raw.integrationPluginFingerprint === "string" && /^[a-fA-F0-9]{64}$/.test(raw.integrationPluginFingerprint)) ? raw.integrationPluginFingerprint : null
     var originalCursor = (raw.preCtmCursor && typeof raw.preCtmCursor === "object") ? raw.preCtmCursor : ((raw.originalCursor && typeof raw.originalCursor === "object") ? raw.originalCursor : null)
     var cursorModifiedByCtm = Boolean(raw.cursorModifiedByCtm)
 
@@ -237,6 +239,8 @@ function parseState(text) {
       theme: theme,
       size: size,
       importedThemes: importedThemes,
+      integrationInstanceId: integrationInstanceId,
+      integrationPluginFingerprint: integrationPluginFingerprint,
       integrationPromptSeen: integrationPromptSeen,
       integrationEnabled: integrationEnabled,
       launcherPromptSeen: integrationPromptSeen,
@@ -247,7 +251,7 @@ function parseState(text) {
       trustedTools: (raw.trustedTools && typeof raw.trustedTools === "object") ? raw.trustedTools : {}
     }
   } catch (error) {
-    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], launcherPromptSeen: false, launcherAdded: false, trustedTools: {} }
+    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], integrationInstanceId: null, launcherPromptSeen: false, launcherAdded: false, trustedTools: {} }
   }
 }
 
@@ -262,6 +266,8 @@ function stateDocument(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
     } : null
     doc.size = validSize(s.size !== undefined ? s.size : s.manualSize, DefaultSize)
     doc.importedThemes = Array.isArray(s.importedThemes) ? s.importedThemes.slice(0, 1024) : []
+    doc.integrationInstanceId = (typeof s.integrationInstanceId === "string" && /^[a-fA-F0-9]{16,64}$/.test(s.integrationInstanceId)) ? s.integrationInstanceId : null
+    doc.integrationPluginFingerprint = (typeof s.integrationPluginFingerprint === "string" && /^[a-fA-F0-9]{64}$/.test(s.integrationPluginFingerprint)) ? s.integrationPluginFingerprint : null
     doc.integrationPromptSeen = Boolean(s.integrationPromptSeen !== undefined ? s.integrationPromptSeen : (s.launcherPromptSeen !== undefined ? s.launcherPromptSeen : s.integrationConsent))
     doc.integrationEnabled = Boolean(s.integrationEnabled !== undefined ? s.integrationEnabled : (s.launcherAdded !== undefined ? s.launcherAdded : s.integrationInstalled))
     doc.launcherPromptSeen = doc.integrationPromptSeen
@@ -329,6 +335,21 @@ function themeEquals(a, b) {
          (sanitizeString(a.displayName, 256) === sanitizeString(b.displayName, 256) && sanitizeString(a.displayName, 256) !== "") ||
          (sanitizeString(a.hyprcursor, 256) === sanitizeString(b.hyprcursor, 256) && sanitizeString(a.hyprcursor, 256) !== "") ||
          (sanitizeString(a.xcursor, 256) === sanitizeString(b.xcursor, 256) && sanitizeString(a.xcursor, 256) !== "")
+}
+
+// Pure startup/recovery state machine. It intentionally has no mutation
+// output: callers may use it only to populate UI and consent state.
+function startupDisposition(state) {
+  var st = state || {}
+  var quarantined = Boolean(st.recoveryPending)
+  return {
+    recoveryPending: quarantined,
+    integrationEnabled: quarantined ? false : Boolean(st.integrationEnabled),
+    integrationPromptSeen: quarantined ? false : Boolean(st.integrationPromptSeen && st.integrationEnabled),
+    cursorModifiedByCtm: quarantined ? false : Boolean(st.cursorModifiedByCtm),
+    preCtmCursor: quarantined ? null : (st.preCtmCursor || st.originalCursor || null),
+    startupMutation: null
+  }
 }
 
 function applyArguments(scriptPath, theme, size, preview) {
@@ -480,6 +501,7 @@ if (typeof module !== "undefined") module.exports = {
   findTheme: findTheme,
   fallbackTheme: fallbackTheme,
   themeEquals: themeEquals,
+  startupDisposition: startupDisposition,
   applyArguments: applyArguments,
   initialPreviewState: initialPreviewState,
   startPreview: startPreview,

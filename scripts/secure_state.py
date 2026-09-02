@@ -11,6 +11,7 @@ import stat
 import json
 import uuid
 import re
+import fcntl
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 
@@ -126,6 +127,14 @@ def open_held_state_dir() -> Tuple[int, str]:
                 # Intermediate directory: must be owned by current user OR root (UID 0)
                 if st.st_uid != os.getuid() and st.st_uid != 0:
                     raise SecurityError(f"Intermediate directory component '{comp}' is owned by untrusted UID {st.st_uid}")
+                mode = st.st_mode & 0o7777
+                if st.st_uid == os.getuid() and mode & 0o022:
+                    raise SecurityError(f"Intermediate directory component '{comp}' is group/world writable")
+                # Sticky root-owned shared directories (normally /tmp) are safe
+                # to traverse while the child descriptor is held. Other writable
+                # root-owned components are not trusted.
+                if st.st_uid == 0 and mode & 0o022 and not mode & stat.S_ISVTX:
+                    raise SecurityError(f"Intermediate root directory component '{comp}' is writable without sticky protection")
 
             # Advance descriptor
             os.close(current_fd)
@@ -351,9 +360,8 @@ def capture_original_cursor() -> Dict[str, Any]:
     env_x_size = None
 
     systemctl_bin = resolve_system_executable("systemctl")
-    if systemctl_bin:
-        res_env = run_bounded([systemctl_bin, "--user", "show-environment"], timeout=2.0)
-    if res_env.ok and res_env.stdout:
+    res_env = run_bounded([systemctl_bin, "--user", "show-environment"], timeout=2.0) if systemctl_bin else None
+    if res_env is not None and res_env.ok and res_env.stdout:
         for line in res_env.stdout.splitlines():
             line = line.strip()
             if line.startswith("HYPRCURSOR_THEME="):
@@ -384,7 +392,15 @@ def capture_original_cursor() -> Dict[str, Any]:
     live_theme = None
     live_size = 24
 
-    if env_hypr_theme_set and env_hypr_theme and has_cursor_data(env_hypr_theme):
+    # Hyprland does not expose the theme most recently supplied to `setcursor`.
+    # GTK is the only independently queryable theme in the controlled baseline
+    # workflow, so prefer it for the immediate live restore target. Environment
+    # values are captured separately below and restored as persistent settings.
+    if gtk_theme_set and gtk_theme and gtk_theme != "default" and has_cursor_data(gtk_theme):
+        live_backend = "gtk"
+        live_theme = gtk_theme
+        live_size = gtk_size or env_x_size or env_hypr_size or 24
+    elif env_hypr_theme_set and env_hypr_theme and has_cursor_data(env_hypr_theme):
         live_backend = "hyprcursor"
         live_theme = env_hypr_theme
         live_size = env_hypr_size or env_x_size or gtk_size or 24
@@ -392,10 +408,6 @@ def capture_original_cursor() -> Dict[str, Any]:
         live_backend = "xcursor"
         live_theme = env_x_theme
         live_size = env_x_size or gtk_size or env_hypr_size or 24
-    elif gtk_theme_set and gtk_theme and gtk_theme != "default" and has_cursor_data(gtk_theme):
-        live_backend = "gtk"
-        live_theme = gtk_theme
-        live_size = gtk_size or env_x_size or env_hypr_size or 24
     else:
         live_backend = "default_fallback"
         live_theme = resolve_default_cursor_theme()
@@ -486,6 +498,14 @@ def validate_state_dict(data: Any) -> Dict[str, Any]:
     # Integration preferences (with backward-compatibility migration)
     prompt_seen = bool(data.get("integrationPromptSeen", data.get("launcherPromptSeen", data.get("integrationConsent", False))))
     enabled = bool(data.get("integrationEnabled", data.get("launcherAdded", data.get("integrationInstalled", False))))
+    instance_id = None
+    raw_inst = data.get("integrationInstanceId")
+    if isinstance(raw_inst, str) and re.match(r'^[a-fA-F0-9]{16,64}$', raw_inst):
+        instance_id = raw_inst
+    plugin_fingerprint = None
+    raw_fingerprint = data.get("integrationPluginFingerprint")
+    if isinstance(raw_fingerprint, str) and re.match(r'^[a-fA-F0-9]{64}$', raw_fingerprint):
+        plugin_fingerprint = raw_fingerprint
 
     orig_cursor = validate_original_cursor(data.get("preCtmCursor") or data.get("originalCursor"))
     cursor_modified = bool(data.get("cursorModifiedByCtm", False))
@@ -495,6 +515,8 @@ def validate_state_dict(data: Any) -> Dict[str, Any]:
         "theme": theme,
         "size": size,
         "importedThemes": imported_themes,
+        "integrationInstanceId": instance_id,
+        "integrationPluginFingerprint": plugin_fingerprint,
         "integrationPromptSeen": prompt_seen,
         "integrationEnabled": enabled,
         "launcherPromptSeen": prompt_seen,
@@ -509,7 +531,7 @@ def validate_state_dict(data: Any) -> Dict[str, Any]:
 # DESCRIPTOR-RELATIVE DURABLE READ & WRITE
 # ==============================================================================
 
-def read_state_from_fd(dir_fd: int) -> Dict[str, Any]:
+def read_state_from_fd(dir_fd: int, allow_legacy_migration: bool = True) -> Dict[str, Any]:
     """Reads state.json relative to held dir_fd with O_NOFOLLOW and bounds checking."""
     flags = os.O_RDONLY
     if hasattr(os, 'O_NOFOLLOW'):
@@ -519,9 +541,10 @@ def read_state_from_fd(dir_fd: int) -> Dict[str, Any]:
         file_fd = os.open("state.json", flags, dir_fd=dir_fd)
     except FileNotFoundError:
         # If state.json missing, attempt secure legacy migration
-        migrated = _try_legacy_migration(dir_fd)
-        if migrated is not None:
-            return migrated
+        if allow_legacy_migration:
+            migrated = _try_legacy_migration(dir_fd)
+            if migrated is not None:
+                return migrated
         return validate_state_dict(None)
     except OSError:
         return validate_state_dict(None)
@@ -548,13 +571,44 @@ def read_state_from_fd(dir_fd: int) -> Dict[str, Any]:
 
 
 def write_state_to_fd(dir_fd: int, state_dict: Dict[str, Any]) -> bool:
+    """Serialize CTM writers against cleanup's ownership-checked deletion."""
+    if os.environ.get("CTM_LIFECYCLE_TRACE") == "1":
+        sys.stderr.write("CTM_STATE_DURABILITY stage=state-directory-lock-requested\n")
+    fcntl.flock(dir_fd, fcntl.LOCK_EX)
+    if os.environ.get("CTM_LIFECYCLE_TRACE") == "1":
+        held = os.fstat(dir_fd)
+        sys.stderr.write(f"CTM_STATE_DURABILITY stage=state-directory-lock-acquired dev={held.st_dev} inode={held.st_ino}\n")
+    try:
+        return _write_state_to_locked_fd(dir_fd, state_dict)
+    finally:
+        fcntl.flock(dir_fd, fcntl.LOCK_UN)
+        if os.environ.get("CTM_LIFECYCLE_TRACE") == "1":
+            sys.stderr.write("CTM_STATE_DURABILITY stage=state-directory-lock-released\n")
+
+
+def _write_state_to_locked_fd(dir_fd: int, state_dict: Dict[str, Any]) -> bool:
     """
     Atomically and durably writes state.json relative to held dir_fd.
     Validates schema before writing, preserves immutable baseline and cursorModifiedByCtm,
     and syncs both file and directory.
     """
-    existing = read_state_from_fd(dir_fd)
+    # Never recursively attempt migration while migration itself is writing.
+    existing = read_state_from_fd(dir_fd, allow_legacy_migration=False)
     clean_dict = validate_state_dict(state_dict)
+
+    # An enabled integration is bound to its installation token. UI state
+    # writes from an already-running instance must not accidentally erase that
+    # token merely because an older/partial document omitted the field.
+    if (clean_dict.get("integrationEnabled") and
+            not clean_dict.get("integrationInstanceId") and
+            existing.get("integrationEnabled") and
+            existing.get("integrationInstanceId")):
+        clean_dict["integrationInstanceId"] = existing["integrationInstanceId"]
+    if (clean_dict.get("integrationEnabled") and
+            not clean_dict.get("integrationPluginFingerprint") and
+            existing.get("integrationEnabled") and
+            existing.get("integrationPluginFingerprint")):
+        clean_dict["integrationPluginFingerprint"] = existing["integrationPluginFingerprint"]
 
     # Invariant: If existing state has a captured preCtmCursor, preserve it!
     existing_baseline = existing.get("preCtmCursor") or existing.get("originalCursor")
@@ -592,6 +646,8 @@ def write_state_to_fd(dir_fd: int, state_dict: Dict[str, Any]) -> bool:
             total_written += written
 
         os.fsync(temp_fd)
+        if os.environ.get("CTM_LIFECYCLE_TRACE") == "1":
+            sys.stderr.write("CTM_STATE_DURABILITY stage=state-file-fsync-complete\n")
     except Exception:
         os.close(temp_fd)
         try:
@@ -605,6 +661,11 @@ def write_state_to_fd(dir_fd: int, state_dict: Dict[str, Any]) -> bool:
     try:
         os.replace(temp_filename, "state.json", src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
         os.fsync(dir_fd)
+        if os.environ.get("CTM_LIFECYCLE_TRACE") == "1":
+            identity = os.stat("state.json", dir_fd=dir_fd, follow_symlinks=False)
+            sys.stderr.write(
+                f"CTM_STATE_DURABILITY stage=state-directory-fsync-complete dev={identity.st_dev} inode={identity.st_ino}\n"
+            )
         return True
     except Exception:
         try:
@@ -620,13 +681,28 @@ def _try_legacy_migration(dir_fd: int) -> Optional[Dict[str, Any]]:
     config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
     legacy_path = os.path.join(config_home, "omarchy", "cursor-switcher.json")
 
-    if not os.path.exists(legacy_path):
-        return None
-
     # Validate legacy file securely BEFORE parsing
+    parent_fd = -1
     try:
-        if os.path.islink(legacy_path):
-            return None
+        parent_path = os.path.dirname(os.path.abspath(legacy_path))
+        flags = os.O_RDONLY | os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        parent_fd = os.open("/", flags)
+        for component in Path(parent_path).parts[1:]:
+            next_fd = os.open(component, flags, dir_fd=parent_fd)
+            st_dir = os.fstat(next_fd)
+            mode = st_dir.st_mode & 0o7777
+            trusted = stat.S_ISDIR(st_dir.st_mode) and st_dir.st_uid in (0, os.getuid())
+            trusted = trusted and not (st_dir.st_uid == os.getuid() and mode & 0o022)
+            trusted = trusted and not (st_dir.st_uid == 0 and mode & 0o022 and not mode & stat.S_ISVTX)
+            if not trusted:
+                os.close(next_fd)
+                return None
+            os.close(parent_fd)
+            parent_fd = next_fd
 
         flags = os.O_RDONLY
         if hasattr(os, 'O_NONBLOCK'):
@@ -634,7 +710,7 @@ def _try_legacy_migration(dir_fd: int) -> Optional[Dict[str, Any]]:
         if hasattr(os, 'O_NOFOLLOW'):
             flags |= os.O_NOFOLLOW
 
-        fd = os.open(legacy_path, flags)
+        fd = os.open(os.path.basename(legacy_path), flags, dir_fd=parent_fd)
         try:
             st = os.fstat(fd)
             # Must be a regular file owned by current user and bounded in size
@@ -650,7 +726,9 @@ def _try_legacy_migration(dir_fd: int) -> Optional[Dict[str, Any]]:
             # Write into new secure location
             write_state_to_fd(dir_fd, validated)
             try:
-                os.unlink(legacy_path)
+                current = os.stat(os.path.basename(legacy_path), dir_fd=parent_fd, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) == (st.st_dev, st.st_ino):
+                    os.unlink(os.path.basename(legacy_path), dir_fd=parent_fd)
             except OSError:
                 pass
             return validated
@@ -658,6 +736,9 @@ def _try_legacy_migration(dir_fd: int) -> Optional[Dict[str, Any]]:
             os.close(fd)
     except Exception:
         return None
+    finally:
+        if parent_fd >= 0:
+            os.close(parent_fd)
 
 
 def read_state() -> Dict[str, Any]:
@@ -665,6 +746,28 @@ def read_state() -> Dict[str, Any]:
     dir_fd, _ = open_held_state_dir()
     try:
         return read_state_from_fd(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
+def get_state_file_identity() -> Optional[Tuple[int, int]]:
+    """Return the verified current state file's device/inode identity."""
+    dir_fd, _ = open_held_state_dir()
+    try:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            file_fd = os.open(STATE_FILE_NAME, flags, dir_fd=dir_fd)
+        except OSError:
+            return None
+        try:
+            st = os.fstat(file_fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+                return None
+            return st.st_dev, st.st_ino
+        finally:
+            os.close(file_fd)
     finally:
         os.close(dir_fd)
 

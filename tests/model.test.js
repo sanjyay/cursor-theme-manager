@@ -20,6 +20,31 @@ assert.strictEqual(Model.validSize(undefined), 16)
 assert.strictEqual(Model.validSize(null), 16)
 assert.strictEqual(Model.validSize(33, 24), 24) // custom fallback
 
+// Startup is presentation-only. Recovery material from A is quarantined by B.
+const oldManaged = {
+  recoveryPending: true,
+  integrationEnabled: true,
+  integrationPromptSeen: true,
+  cursorModifiedByCtm: true,
+  preCtmCursor: { captured: true, liveRestoreTheme: "Adwaita", liveRestoreSize: 24 },
+  theme: { displayName: "Banana" },
+  size: 64
+}
+const quarantined = Model.startupDisposition(oldManaged)
+assert.strictEqual(quarantined.recoveryPending, true)
+assert.strictEqual(quarantined.integrationEnabled, false)
+assert.strictEqual(quarantined.integrationPromptSeen, false)
+assert.strictEqual(quarantined.cursorModifiedByCtm, false)
+assert.strictEqual(quarantined.preCtmCursor, null)
+assert.strictEqual(quarantined.startupMutation, null)
+
+for (const generation of ["B", "C", "D"]) {
+  const fresh = Model.startupDisposition({ recoveryPending: false })
+  assert.strictEqual(fresh.integrationEnabled, false, generation)
+  assert.strictEqual(fresh.integrationPromptSeen, false, generation)
+  assert.strictEqual(fresh.startupMutation, null, generation)
+}
+
 // Stepper navigation tests
 assert.strictEqual(Model.nextSize(16), 20)
 assert.strictEqual(Model.nextSize(20), 24)
@@ -171,4 +196,3 @@ assert.strictEqual(reUpserted.length, 2)
 assert.strictEqual(reUpserted[0].displayName, "Banana Pro")
 
 console.log("model tests: ok")
-

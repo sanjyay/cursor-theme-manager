@@ -9,11 +9,30 @@ SNAP_DIR=$(mktemp -d /tmp/ctm-snap-XXXXXX)
 GLOBAL_SANDBOX=$(mktemp -d /tmp/ctm-sandbox-XXXXXX)
 
 cleanup_runner() {
+  if declare -F restore_live_watcher_state >/dev/null; then
+    restore_live_watcher_state
+  fi
   rm -rf "$SNAP_DIR" "$GLOBAL_SANDBOX"
 }
 trap cleanup_runner EXIT
 
 REAL_HOME="${HOME}"
+CTM_LIVE_UNIT="cursor-theme-manager-cleanup.path"
+CTM_LIVE_ENABLED=$(systemctl --user is-enabled "$CTM_LIVE_UNIT" 2>/dev/null || true)
+CTM_LIVE_ACTIVE=$(systemctl --user is-active "$CTM_LIVE_UNIT" 2>/dev/null || true)
+
+restore_live_watcher_state() {
+  if [ "$CTM_LIVE_ENABLED" = "enabled" ]; then
+    systemctl --user enable "$CTM_LIVE_UNIT" >/dev/null 2>&1 || true
+  else
+    systemctl --user disable "$CTM_LIVE_UNIT" >/dev/null 2>&1 || true
+  fi
+  if [ "$CTM_LIVE_ACTIVE" = "active" ]; then
+    systemctl --user start "$CTM_LIVE_UNIT" >/dev/null 2>&1 || true
+  else
+    systemctl --user stop "$CTM_LIVE_UNIT" >/dev/null 2>&1 || true
+  fi
+}
 
 snapshot_user_dirs() {
   local out_file="$1"
@@ -66,21 +85,35 @@ python3 tests/local_discovery.test.py
 echo "=== 7. Cursorctl Shell Tests ==="
 tests/cursorctl.test.sh
 
-echo "=== 8. Removal Lifecycle Shell Tests ==="
-tests/removal_lifecycle.test.sh
+echo "=== 8. Live Restore Regression Tests ==="
+python3 tests/live_restore.test.py
 
 echo "=== 9. Adversarial Security Tests ==="
 python3 "$ROOT/tests/security_adversarial.test.py"
 
-echo "=== 10. Test Hygiene & Real Directory Isolation Assertions ==="
+echo "=== 10. First-Mutation Barrier / Actual QML Route Tests ==="
+python3 "$ROOT/tests/first_mutation_barrier.test.py"
+
+echo "=== 10b. Startup Lifecycle / Immediate-Reinstall Race Tests ==="
+python3 "$ROOT/tests/startup_lifecycle_race.test.py"
+
+echo "=== 10c. Persistent Lifecycle / Interruption Stress Tests ==="
+python3 "$ROOT/tests/persistent_lifecycle.test.py"
+
+echo "=== 11. Test Hygiene & Real Directory Isolation Assertions ==="
 python3 tests/test_hygiene.test.py
 
-echo "=== 11. Size Coalescing & Fast-Path Tests ==="
+echo "=== 12. Size Coalescing & Fast-Path Tests ==="
 python3 tests/size_coalescing.test.py
 
-echo "=== 12. QML Lint Validation ==="
+echo "=== 13. QML Lint Validation ==="
 qmllint -I /usr/share/omarchy/shell Panel.qml CursorService.qml components/*.qml
 qmllint tests/manual-cursor-roles.qml
+
+# Strict production executable resolution means subprocess lifecycle tests can
+# reach the real user systemd manager even under an isolated HOME. Restore the
+# watcher's exact pre-test state before evaluating filesystem isolation.
+restore_live_watcher_state
 
 # 3. Post-run snapshot and pollution check
 snapshot_user_dirs "$SNAP_DIR/after.txt"

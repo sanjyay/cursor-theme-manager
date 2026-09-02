@@ -119,7 +119,7 @@ Item {
             themeList.ensureVisible(root.themeIndex)
             var t = root.service.themes[root.themeIndex]
             if (t) {
-              root.service.commitTheme(t)
+              root.service.commitTheme(t, "explicit-user-theme-click")
             }
           }
         }
@@ -131,7 +131,7 @@ Item {
             themeList.ensureVisible(root.themeIndex)
             var t = root.service.themes[root.themeIndex]
             if (t) {
-              root.service.commitTheme(t)
+              root.service.commitTheme(t, "explicit-user-theme-click")
             }
           }
         }
@@ -140,7 +140,7 @@ Item {
           if (root.focusSection === "sizes" && root.service) {
             event.accepted = true
             var prev = Model.prevSize(root.service.committedSize)
-            root.service.commitSize(prev)
+            root.service.commitSize(prev, "explicit-user-size-change")
           }
         }
 
@@ -148,21 +148,21 @@ Item {
           if (root.focusSection === "sizes" && root.service) {
             event.accepted = true
             var next = Model.nextSize(root.service.committedSize)
-            root.service.commitSize(next)
+            root.service.commitSize(next, "explicit-user-size-change")
           }
         }
 
         Keys.onReturnPressed: function(event) {
           event.accepted = true
           if (root.service && root.service.themes[root.themeIndex]) {
-            root.service.commitTheme(root.service.themes[root.themeIndex])
+            root.service.commitTheme(root.service.themes[root.themeIndex], "explicit-user-theme-click")
           }
         }
 
         Keys.onSpacePressed: function(event) {
           event.accepted = true
           if (root.service && root.service.themes[root.themeIndex]) {
-            root.service.commitTheme(root.service.themes[root.themeIndex])
+            root.service.commitTheme(root.service.themes[root.themeIndex], "explicit-user-theme-click")
           }
         }
 
@@ -228,7 +228,7 @@ Item {
                   }
 
                   Text {
-                    text: root.service && root.service.integrationEnabled ? "Integration ✓" : "Integration"
+                    text: "Integration"
                     textFormat: Text.PlainText
                     color: Color.popups.text
                     font.family: Style.font.family
@@ -337,7 +337,7 @@ Item {
                   root.hoveredTheme = null
                   root.themeIndex = index
                   root.focusSection = "themes"
-                  root.service.commitTheme(theme)
+                  root.service.commitTheme(theme, "explicit-user-theme-click")
                 }
 
                 onThemeHovered: function(theme, active) {
@@ -395,7 +395,7 @@ Item {
 
               onSizeActivated: function(size) {
                 root.focusSection = "sizes"
-                root.service.commitSize(size)
+                root.service.commitSize(size, "explicit-user-size-change")
               }
 
               onOpenFolderRequested: function(theme) {
@@ -713,7 +713,7 @@ Item {
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: {
-                    if (root.service) root.service.enableIntegration()
+                    if (root.service) root.service.enableIntegration("explicit-user-integration-consent")
                     setupConsentModal.close()
                   }
                 }
@@ -844,9 +844,9 @@ Item {
                   cursorShape: Qt.PointingHandCursor
                   onClicked: {
                     if (root.service) {
-                      root.service.enableIntegration()
+                      root.service.enableIntegration("explicit-user-integration-consent-and-apply")
                       if (pendingApplyTheme) {
-                        root.service.commitTheme(pendingApplyTheme)
+                        root.service.commitTheme(pendingApplyTheme, "explicit-user-theme-click")
                         root.service.fetchRoles(pendingApplyTheme.displayName || pendingApplyTheme.id, pendingApplyTheme.path || "")
                       }
                     }
@@ -1027,7 +1027,7 @@ Item {
                     if (launcherActionBtn.isAdded) {
                       if (root.service) root.service.disableIntegration()
                     } else {
-                      if (root.service) root.service.enableIntegration()
+                      if (root.service) root.service.enableIntegration("explicit-user-integration-consent")
                     }
                   }
                 }

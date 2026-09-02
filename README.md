@@ -24,7 +24,7 @@ Cursor Theme Manager is a local-first cursor theme manager and previewer for Oma
 - **Safe Imported-Theme Management:** Rename, open directory, or safely remove themes imported through the plugin directly from the UI or CLI. Destructive actions are restricted strictly to plugin-owned imported themes.
 - **Compositor-Aware Persistence:** Instantly applies changes via `hyprctl setcursor` and `gsettings`, updating UWSM environment files (`~/.config/uwsm/env.d/90-omarchy-cursor-switcher`) and D-Bus activation environments for new applications.
 - **Consented Application & Removal Integration:** Optional user-level integration installing a desktop launcher (`cursor-theme-manager.desktop`), a minimal removal watcher (`cursor-theme-manager-cleanup.path`), and a cleanup helper (`~/.local/libexec/cursor-theme-manager/cleanup`). Automatic removal cleanly restores the original cursor configuration while preserving imported themes as user content.
-- **Hardened Subprocess Supervisor:** Bounded stream selectors, strict wall-clock deadlines, and process-group isolation ensure child tools cannot exhaust memory or orphan background processes.
+- **Hardened Subprocess Supervisor:** Bounded input/output handling, strict wall-clock deadlines, and process-group isolation limit helper resource use and prevent orphaned background processes.
 - **Descriptor-Held Private State:** Secure state directory (`$XDG_STATE_HOME/cursor-theme-manager/`, mode `0700`) with descriptor-held durable writes and schema validation.
 - **Zero Network Access:** Operates completely offline with zero runtime network requests, downloads, or background telemetry.
 - **Fully Responsive:** Fluid layouts designed for full-screen, split tiled (50/50), or compact floating windows.
@@ -423,7 +423,7 @@ Compositor-Aware Application (hyprctl setcursor, gsettings, UWSM env, D-Bus)
 Cursor Theme Manager adheres strictly to defensive security standards:
 
 - **Zero Runtime Network Access:** No automatic downloads, curl/wget execution, or remote dependencies.
-- **Centralized Bounded Process Supervision:** All external subprocesses (`hyprcursor-util`, `xcur2png`, `gsettings`, `systemctl`, `hyprctl`, `xdg-open`) run in isolated process groups under `runtime_safety.run_bounded` with hard memory and wall-clock limits. Exceeding byte limits immediately terminates the process group.
+- **Centralized Bounded Process Supervision:** All external subprocesses (`hyprcursor-util`, `xcur2png`, `gsettings`, `systemctl`, `hyprctl`, `xdg-open`) are resolved from fixed root-owned system directories, receive a minimal allowlisted environment, and run in isolated process groups under `runtime_safety.run_bounded` with hard stream-size and wall-clock limits. Exceeding byte limits immediately terminates the process group.
 - **Private Descriptor-Held State:** State is stored in a private directory (`$XDG_STATE_HOME/cursor-theme-manager/`, mode `0700`) and written relative to an open directory descriptor (`dir_fd`) with `fsync`, preventing symlink race attacks.
 - **Minimal User-Level Removal Watcher & Helper:**
   When integration is explicitly enabled by the user, installs:

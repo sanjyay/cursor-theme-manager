@@ -35,6 +35,7 @@ import cursor_theming
 import file_browser
 
 NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._+ -]{0,127}$')
+_REQUEST_PLUGIN_FINGERPRINT: Optional[str] = None
 
 
 def valid_name(name: str) -> bool:
@@ -285,9 +286,12 @@ def run_discover():
             if valid_name(inh):
                 current_xcursor = inh
 
+    int_status = integration_manager.get_status()
     emit_bounded_json({
         "themes": discovered_themes,
         "currentXcursor": sanitize_text(current_xcursor, max_len=MAX_LEN_THEME_ID),
+        "integrationEnabled": int_status["enabled"],
+        "integrationPromptSeen": int_status["promptSeen"],
         "trustedTools": {
             "hyprctl": resolve_system_executable("hyprctl") or ""
         }
@@ -299,6 +303,13 @@ def run_discover():
 # ==============================================================================
 
 def run_ensure_hyprcursor(hypr: str, xcursor: str, theme_path: str = "") -> str:
+    if hypr not in ("", "-") and not valid_name(hypr):
+        sys.stderr.write("cursorctl: invalid Hyprcursor theme name\n")
+        sys.exit(1)
+    if xcursor not in ("", "-") and not valid_name(xcursor):
+        sys.stderr.write("cursorctl: invalid XCursor theme name\n")
+        sys.exit(1)
+
     home = Path(os.environ.get("HOME", os.path.expanduser("~")))
     data_home = Path(os.environ.get("XDG_DATA_HOME", str(home / ".local" / "share")))
     user_icons = data_home / "icons"
@@ -326,7 +337,16 @@ def run_ensure_hyprcursor(hypr: str, xcursor: str, theme_path: str = "") -> str:
     # 2. Locate XCursor directory
     xdir = None
     if theme_path and (Path(theme_path) / "cursors").is_dir():
-        xdir = Path(theme_path)
+        requested = Path(theme_path).resolve()
+        allowed_roots = [user_icons.resolve(), (home / ".icons").resolve()]
+        for d in os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":"):
+            if d.strip():
+                allowed_roots.append((Path(d.strip()) / "icons").resolve())
+        if any(requested != root and root in requested.parents for root in allowed_roots):
+            xdir = requested
+        else:
+            sys.stderr.write("cursorctl: theme path is outside trusted icon directories\n")
+            sys.exit(1)
     else:
         roots = [user_icons, home / ".icons"]
         sys_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
@@ -450,7 +470,15 @@ def run_ensure_hyprcursor(hypr: str, xcursor: str, theme_path: str = "") -> str:
             )
             (temp_install / ".omarchy-cursor-switcher-converted").write_text("1.0\n", encoding="utf-8")
             if target_dir.exists():
-                shutil.rmtree(target_dir, ignore_errors=True)
+                marker = target_dir / ".cursor-theme-manager-generated"
+                if target_dir.is_symlink() or not marker.is_file() or marker.is_symlink():
+                    sys.stderr.write(f"cursorctl: refusing to replace unmanaged directory '{target_dir}'\n")
+                    sys.exit(1)
+                marker_text = marker.read_text(encoding="utf-8", errors="strict")[:4096]
+                if "kind=conversion-cache" not in marker_text:
+                    sys.stderr.write(f"cursorctl: refusing to replace invalid conversion cache '{target_dir}'\n")
+                    sys.exit(1)
+                shutil.rmtree(target_dir)
             os.rename(temp_install, target_dir)
         finally:
             if temp_install.exists():
@@ -466,6 +494,13 @@ def run_set_size_live(hypr: str, xcursor: str, theme_path: str, size: int):
         sys.stderr.write(f"cursorctl: unsupported cursor size: {size}\n")
         sys.exit(1)
 
+    if hypr not in ("", "-") and not valid_name(hypr):
+        sys.stderr.write("cursorctl: invalid Hyprcursor theme name\n")
+        sys.exit(1)
+    if xcursor not in ("", "-") and not valid_name(xcursor):
+        sys.stderr.write("cursorctl: invalid XCursor theme name\n")
+        sys.exit(1)
+
     effective_hypr = "-"
     if hypr and hypr != "-" and valid_name(hypr):
         effective_hypr = hypr
@@ -473,26 +508,105 @@ def run_set_size_live(hypr: str, xcursor: str, theme_path: str, size: int):
         effective_hypr = run_ensure_hyprcursor(hypr, xcursor, theme_path)
 
     if effective_hypr != "-":
-        res = run_bounded(["hyprctl", "setcursor", effective_hypr, str(size)], timeout=1.0)
-        sys.exit(0 if res.ok else 1)
-    elif xcursor and xcursor != "-":
-        res = run_bounded(["hyprctl", "setcursor", xcursor, str(size)], timeout=1.0)
-        sys.exit(0 if res.ok else 1)
+        try:
+            perform_live_cursor_mutation(effective_hypr, size)
+            sys.exit(0)
+        except RuntimeError as exc:
+            sys.stderr.write(f"cursorctl: {exc}\n")
+            sys.exit(1)
     else:
         sys.stderr.write("cursorctl: no valid cursor theme for live size change\n")
         sys.exit(1)
 
 
+def trace_mutation_barrier(stage: str, expected_fingerprint: Optional[str], state=None) -> None:
+    if os.environ.get("CTM_LIFECYCLE_TRACE") != "1":
+        return
+    current = state if isinstance(state, dict) else {}
+    identity = secure_state.get_state_file_identity()
+    details = {
+        "stage": stage,
+        "expectedPluginFingerprint": expected_fingerprint,
+        "observedPluginFingerprint": current.get("integrationPluginFingerprint"),
+        "observedIntegrationInstanceId": current.get("integrationInstanceId"),
+        "stateIdentity": list(identity) if identity else None,
+        "baselineCaptured": bool((current.get("preCtmCursor") or current.get("originalCursor") or {}).get("captured")),
+        "cursorModifiedByCtm": bool(current.get("cursorModifiedByCtm")),
+    }
+    sys.stderr.write("CTM_MUTATION_BARRIER " + json.dumps(details, sort_keys=True) + "\n")
+
+
+def ensure_first_mutation_barrier(expected_fingerprint: Optional[str] = None) -> Dict[str, Any]:
+    """Durably record the immutable baseline before any CTM live mutation."""
+    expected_fingerprint = expected_fingerprint or _REQUEST_PLUGIN_FINGERPRINT
+    for attempt in range(2):
+        st = secure_state.read_state()
+        trace_mutation_barrier("state-read", expected_fingerprint, st)
+        observed_fingerprint = st.get("integrationPluginFingerprint")
+        if expected_fingerprint and observed_fingerprint and observed_fingerprint != expected_fingerprint:
+            raise RuntimeError("installation recovery is still in progress; no cursor change was applied; retry shortly")
+
+        baseline = st.get("preCtmCursor") or st.get("originalCursor")
+        if not (baseline and baseline.get("captured")):
+            trace_mutation_barrier("baseline-capture", expected_fingerprint, st)
+            baseline = secure_state.capture_original_cursor()
+            if not (baseline and baseline.get("captured")):
+                raise RuntimeError("could not capture the original cursor safely; no cursor change was applied")
+
+        # Bind recovery material to this plugin generation before setcursor.
+        if expected_fingerprint:
+            st["integrationPluginFingerprint"] = expected_fingerprint
+        st["preCtmCursor"] = baseline
+        st["originalCursor"] = baseline
+        st["cursorModifiedByCtm"] = True
+        trace_mutation_barrier("baseline-write", expected_fingerprint, st)
+        if not secure_state.write_state(st):
+            raise RuntimeError("failed to durably persist the original cursor; no cursor change was applied")
+        # write_state returns only after file fsync, atomic replace, and state
+        # directory fsync have all completed.
+        trace_mutation_barrier("file-and-directory-fsync-complete", expected_fingerprint, st)
+
+        verified = secure_state.read_state()
+        trace_mutation_barrier("durability-reread", expected_fingerprint, verified)
+        verified_baseline = verified.get("preCtmCursor") or verified.get("originalCursor")
+        owner_matches = not expected_fingerprint or verified.get("integrationPluginFingerprint") == expected_fingerprint
+        if (verified.get("cursorModifiedByCtm") and verified_baseline and
+                verified_baseline.get("captured") and owner_matches):
+            trace_mutation_barrier("durability-verified", expected_fingerprint, verified)
+            return verified_baseline
+
+        # One bounded retry handles a state inode replacement that completed
+        # while an older cleanup generation was reconciling. Never mutate live
+        # cursor state until a stable second verification succeeds.
+        if attempt == 0 and (not expected_fingerprint or
+                             integration_manager.get_plugin_installation_fingerprint() == expected_fingerprint):
+            trace_mutation_barrier("bounded-reconciliation-retry", expected_fingerprint, verified)
+            continue
+        raise RuntimeError("installation state changed during durability verification; no cursor change was applied; retry shortly")
+
+    raise RuntimeError("installation state changed during durability verification; no cursor change was applied; retry shortly")
+
+
+def perform_live_cursor_mutation(theme: str, size: int, expected_fingerprint: Optional[str] = None):
+    """The sole cursorctl setcursor gateway: durable barrier, then hyprctl."""
+    if not valid_name(theme):
+        raise RuntimeError("invalid live cursor theme")
+    if size not in secure_state.SUPPORTED_SIZES:
+        raise RuntimeError(f"unsupported cursor size: {size}")
+
+    baseline = ensure_first_mutation_barrier(expected_fingerprint)
+    trace_mutation_barrier("hyprctl-invocation", expected_fingerprint or _REQUEST_PLUGIN_FINGERPRINT, secure_state.read_state())
+    result = run_bounded(["hyprctl", "setcursor", theme, str(size)], timeout=TIMEOUT_APPLY)
+    if not result.ok:
+        detail = sanitize_text(result.stderr or result.error or "hyprctl setcursor failed", 512)
+        raise RuntimeError(detail)
+    return {"ok": True, "preCtmCursor": baseline, "cursorModifiedByCtm": True}
+
+
 def _write_private_file(file_path: str, content: str, mode: int = 0o600) -> None:
     parent_dir = os.path.dirname(file_path)
     os.makedirs(parent_dir, exist_ok=True)
-    tmp_path = file_path + f".tmp.{os.getpid()}"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-    fd = os.open(tmp_path, flags, mode)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(file_path)}.tmp.", dir=parent_dir)
     try:
         os.fchmod(fd, mode)
         with open(fd, "w", encoding="utf-8", closefd=False) as f:
@@ -501,23 +615,33 @@ def _write_private_file(file_path: str, content: str, mode: int = 0o600) -> None
             os.fsync(fd)
     finally:
         os.close(fd)
-    os.replace(tmp_path, file_path)
+    try:
+        os.replace(tmp_path, file_path)
+    except Exception:
+        try: os.unlink(tmp_path)
+        except OSError: pass
+        raise
 
 
 def run_persist_size(hypr: str, xcursor: str, size: int):
     if size not in secure_state.SUPPORTED_SIZES:
         sys.stderr.write(f"cursorctl: unsupported cursor size: {size}\n")
         sys.exit(1)
+    if hypr not in ("", "-") and not valid_name(hypr):
+        sys.stderr.write("cursorctl: invalid Hyprcursor theme name\n")
+        sys.exit(1)
+    if xcursor not in ("", "-") and not valid_name(xcursor):
+        sys.stderr.write("cursorctl: invalid XCursor theme name\n")
+        sys.exit(1)
+
+    ensure_first_mutation_barrier()
 
     # 1. Atomic state update (immutable preCtmCursor baseline)
     st = secure_state.read_state()
     st["size"] = size
     st["cursorModifiedByCtm"] = True
-    if not (st.get("preCtmCursor") and st["preCtmCursor"].get("captured")):
-        baseline = secure_state.capture_original_cursor()
-        st["preCtmCursor"] = baseline
-        st["originalCursor"] = baseline
-    secure_state.write_state(st)
+    if not secure_state.write_state(st):
+        raise RuntimeError("failed to persist cursor size")
 
     # 2. GTK cursor size via gsettings
     run_bounded(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)], timeout=1.5)
@@ -559,18 +683,13 @@ def run_persist_size(hypr: str, xcursor: str, size: int):
 
 
 def run_capture_baseline():
-    st = secure_state.read_state()
-    existing_baseline = st.get("preCtmCursor") or st.get("originalCursor")
-    if not (existing_baseline and existing_baseline.get("captured")):
-        baseline = secure_state.capture_original_cursor()
-        st["preCtmCursor"] = baseline
-        st["originalCursor"] = baseline
-        st["cursorModifiedByCtm"] = True
-        if not secure_state.write_state(st):
-            sys.stderr.write("cursorctl: failed to persist pre-CTM baseline\n")
-            sys.exit(1)
-    emit_bounded_json({"ok": True, "preCtmCursor": st.get("preCtmCursor")})
-    sys.exit(0)
+    try:
+        baseline = ensure_first_mutation_barrier()
+        emit_bounded_json({"ok": True, "preCtmCursor": baseline, "cursorModifiedByCtm": True})
+        sys.exit(0)
+    except RuntimeError as exc:
+        sys.stderr.write(f"cursorctl: {exc}\n")
+        sys.exit(1)
 
 
 def run_persist_theme(theme_json: str, size: int):
@@ -590,6 +709,10 @@ def run_persist_theme(theme_json: str, size: int):
         hypr = "-"
     if xcursor != "-" and not valid_name(xcursor):
         xcursor = "-"
+
+    # Persistent mutation cannot precede the same durable barrier used by
+    # every live setcursor route.
+    ensure_first_mutation_barrier()
 
     # 1. Atomic state update (immutable preCtmCursor baseline)
     st = secure_state.read_state()
@@ -661,23 +784,14 @@ def run_apply(hypr: str, xcursor: str, theme_path: str, size: int, mode: str):
         sys.stderr.write("cursorctl: invalid XCursor theme name\n")
         sys.exit(1)
 
-    # 0. ATOMIC IMMUTABLE BASELINE CAPTURE BEFORE ANY SYSTEM MODIFICATION
-    if mode == "--commit":
-        st = secure_state.read_state()
-        existing_baseline = st.get("preCtmCursor") or st.get("originalCursor")
-        if not (existing_baseline and existing_baseline.get("captured")):
-            baseline = secure_state.capture_original_cursor()
-            st["preCtmCursor"] = baseline
-            st["originalCursor"] = baseline
-        st["cursorModifiedByCtm"] = True
-        if not secure_state.write_state(st):
-            sys.stderr.write("cursorctl: failed to durably persist pre-CTM cursor baseline; aborting apply.\n")
-            sys.exit(1)
-
     effective_hypr = run_ensure_hyprcursor(hypr, xcursor, theme_path)
 
-    # 1. hyprctl setcursor
-    run_bounded(["hyprctl", "setcursor", effective_hypr, str(size)], timeout=TIMEOUT_APPLY)
+    # Preview, restore, cancel, import and commit routes all share the barrier.
+    try:
+        perform_live_cursor_mutation(effective_hypr, size)
+    except RuntimeError as exc:
+        sys.stderr.write(f"cursorctl: {exc}\n")
+        sys.exit(1)
 
     # 2. If commit mode
     if mode == "--commit":
@@ -731,13 +845,85 @@ def run_apply(hypr: str, xcursor: str, theme_path: str, size: int, mode: str):
 # ==============================================================================
 
 def main():
+    global _REQUEST_PLUGIN_FINGERPRINT
     if len(sys.argv) < 2:
-        sys.stderr.write("Usage: cursorctl {discover|apply|ensure-hyprcursor|import|remove-imported|rename-imported|list-dir|choose-file|get-preview-roles|get-all-preview-roles|open-folder|state-read|state-write|launcher-status|launcher-add|launcher-remove|launcher-dismiss-prompt} ...\n")
+        sys.stderr.write("Usage: cursorctl {installation-identity|discover|apply|ensure-hyprcursor|import|remove-imported|rename-imported|list-dir|choose-file|get-preview-roles|get-all-preview-roles|open-folder|state-read|state-write|launcher-status|launcher-add|launcher-remove|launcher-dismiss-prompt} ...\n")
         sys.exit(1)
 
     cmd = sys.argv[1]
 
-    if cmd == "discover":
+    def option_value(name):
+        try:
+            pos = sys.argv.index(name, 2)
+            return sys.argv[pos + 1] if pos + 1 < len(sys.argv) else None
+        except ValueError:
+            return None
+
+    def forwarded_command_args():
+        """Remove cursorctl-only binding options before delegated argparse parsers."""
+        forwarded = []
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--plugin-fingerprint":
+                i += 2
+                continue
+            forwarded.append(sys.argv[i])
+            i += 1
+        return forwarded
+
+    mutating_commands = {
+        "capture-baseline", "ensure-hyprcursor", "setcursor-live", "persist-theme", "persist-size",
+        "set-size-live", "apply", "state-write", "import", "remove-imported",
+        "rename-imported", "launcher-add", "integration-enable", "recovery-reconcile",
+        "integration-install", "register-app", "launcher-remove",
+        "integration-disable", "integration-remove", "unregister-app",
+    }
+    expected_fingerprint = option_value("--plugin-fingerprint")
+    _REQUEST_PLUGIN_FINGERPRINT = expected_fingerprint
+    if cmd in mutating_commands:
+        current_fingerprint = integration_manager.get_plugin_installation_fingerprint()
+        trace_mutation_barrier("current-installation-identity-read", expected_fingerprint, {
+            "integrationPluginFingerprint": current_fingerprint
+        })
+        home = os.environ.get("HOME", os.path.expanduser("~"))
+        config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
+        canonical_install = os.path.join(
+            config_home, "omarchy", "plugins", integration_manager.PLUGIN_ID
+        )
+        running_from_installed_plugin = False
+        try:
+            running_from_installed_plugin = (
+                os.path.lexists(canonical_install) and
+                os.path.samefile(str(SCRIPT_DIR.parent), canonical_install)
+            )
+        except OSError:
+            pass
+        if ((running_from_installed_plugin and not expected_fingerprint) or
+                (expected_fingerprint and expected_fingerprint != current_fingerprint)):
+            emit_bounded_json({
+                "ok": False,
+                "error": "This request belongs to a removed Cursor Theme Manager installation. Reopen CTM and try again."
+            }, exit_code=1)
+        if expected_fingerprint and cmd != "recovery-reconcile":
+            lifecycle_status = integration_manager.get_status()
+            trace_mutation_barrier("recovery-state-classification", expected_fingerprint, secure_state.read_state())
+            if lifecycle_status.get("recoveryPending"):
+                emit_bounded_json({
+                    "ok": False,
+                    "recoveryPending": True,
+                    "error": "The previous Cursor Theme Manager installation is still restoring the cursor."
+                }, exit_code=1)
+
+    if cmd == "installation-identity":
+        res = integration_manager.ensure_installation_identity()
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+
+    elif cmd == "recovery-reconcile":
+        import cleanup_helper
+        res = cleanup_helper.reconcile_orphaned_state(expected_fingerprint or "")
+        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
+
+    elif cmd == "discover":
         run_discover()
 
     elif cmd == "ensure-hyprcursor":
@@ -765,6 +951,26 @@ def main():
 
     elif cmd == "capture-baseline":
         run_capture_baseline()
+
+    elif cmd == "setcursor-live":
+        theme = ""
+        size = 24
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--theme" and i + 1 < len(sys.argv):
+                theme = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--size" and i + 1 < len(sys.argv):
+                try: size = int(sys.argv[i+1])
+                except ValueError: pass
+                i += 2
+            else:
+                i += 1
+        try:
+            emit_bounded_json(perform_live_cursor_mutation(theme, size, expected_fingerprint))
+            sys.exit(0)
+        except RuntimeError as exc:
+            sys.stderr.write(f"cursorctl: {exc}\n")
+            sys.exit(1)
 
     elif cmd == "persist-theme":
         theme_json = "{}"
@@ -863,6 +1069,25 @@ def main():
 
     elif cmd == "state-read":
         st = secure_state.read_state()
+        int_status = integration_manager.get_status()
+        # During remove -> immediate reinstall, the old cleanup deliberately
+        # retains its immutable recovery state until live restoration succeeds.
+        # Never expose that old installation's selected theme to the new QML
+        # instance: initialize() would otherwise replay it after cleanup has
+        # correctly restored the cursor. Imported themes are user data and are
+        # safe to carry across installations.
+        if int_status.get("recoveryPending"):
+            st = secure_state.validate_state_dict({
+                "importedThemes": st.get("importedThemes", [])
+            })
+            st["recoveryPending"] = True
+            st["recoveryOrphaned"] = bool(int_status.get("recoveryOrphaned"))
+        st["integrationEnabled"] = int_status["enabled"]
+        st["integrationPromptSeen"] = int_status["promptSeen"]
+        st["launcherAdded"] = int_status["enabled"]
+        st["launcherPromptSeen"] = int_status["promptSeen"]
+        st["integrationInstanceId"] = int_status.get("instanceId")
+        st["integrationPluginFingerprint"] = int_status.get("pluginFingerprint")
         st["trustedTools"] = {
             "hyprctl": resolve_system_executable("hyprctl") or ""
         }
@@ -890,11 +1115,11 @@ def main():
         emit_bounded_json(res)
 
     elif cmd in ("launcher-add", "integration-enable", "integration-install", "register-app"):
-        res = integration_manager.enable_integration()
+        res = integration_manager.enable_integration(expected_fingerprint)
         emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
 
     elif cmd in ("launcher-remove", "integration-disable", "integration-remove", "unregister-app"):
-        res = integration_manager.disable_integration()
+        res = integration_manager.disable_integration(expected_fingerprint)
         emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
 
     elif cmd in ("launcher-dismiss-prompt", "integration-dismiss-prompt", "dismiss-prompt"):
@@ -905,14 +1130,14 @@ def main():
     elif cmd == "import":
         import importlib
         cursor_import = importlib.import_module("cursor-import")
-        sys.argv = ["cursor-import.py", "import"] + sys.argv[2:]
+        sys.argv = ["cursor-import.py", "import"] + forwarded_command_args()
         cursor_import.main()
 
     elif cmd == "remove-imported":
         import importlib
         cursor_import = importlib.import_module("cursor-import")
         # Support positional ID or --id
-        args = sys.argv[2:]
+        args = forwarded_command_args()
         if len(args) == 1 and not args[0].startswith("--"):
             args = ["--id", args[0]]
         sys.argv = ["cursor-import.py", "remove"] + args
@@ -921,7 +1146,7 @@ def main():
     elif cmd == "rename-imported":
         import importlib
         cursor_import = importlib.import_module("cursor-import")
-        sys.argv = ["cursor-import.py", "rename"] + sys.argv[2:]
+        sys.argv = ["cursor-import.py", "rename"] + forwarded_command_args()
         cursor_import.main()
 
     elif cmd == "list-dir":

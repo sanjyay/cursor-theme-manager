@@ -81,6 +81,10 @@ class TestHarnessHygiene(IsolatedTestCase):
             self.assert_safe_path(paths[k])
             self.assertTrue(os.path.exists(paths[k]))
 
+        # Simulate plugin removal
+        if self.iso.plugin_dir.exists():
+            shutil.rmtree(self.iso.plugin_dir)
+
         res = subprocess.run([paths["cleanup"]], env=self.env, capture_output=True, text=True)
         self.assertEqual(res.returncode, 0)
 
@@ -129,8 +133,11 @@ class TestHarnessHygiene(IsolatedTestCase):
 
     def test_E_integration_tests_never_touch_real_systemd_user(self):
         """E. Integration tests never touch real ~/.config/systemd/user."""
-        res = subprocess.run([str(ROOT / "scripts" / "cursorctl"), "integration-enable"], env=self.env, capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0)
+        # Exercise the in-process integration API so IsolatedTestCase's command
+        # runner intercepts systemd. A subprocess would correctly ignore PATH
+        # mocks and could contact the real user manager.
+        res = integration_manager.enable_integration()
+        self.assertTrue(res["ok"], res.get("error"))
         self.assertTrue((self.iso.systemd_user / "cursor-theme-manager-cleanup.path").is_file())
         self.assertTrue((self.iso.systemd_user / "cursor-theme-manager-cleanup.service").is_file())
 
@@ -228,6 +235,10 @@ class TestHarnessHygiene(IsolatedTestCase):
         # Enable integration and run cleanup
         integration_manager.enable_integration()
         paths = integration_manager.get_paths()
+
+        # Simulate plugin removal
+        if self.iso.plugin_dir.exists():
+            shutil.rmtree(self.iso.plugin_dir)
 
         res_clean = subprocess.run([paths["cleanup"]], env=self.env, capture_output=True, text=True)
         self.assertEqual(res_clean.returncode, 0)

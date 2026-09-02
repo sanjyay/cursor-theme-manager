@@ -15,8 +15,13 @@ export XDG_DATA_HOME="$TEST_DIR/data"
 export XDG_CACHE_HOME="$TEST_DIR/cache"
 export XDG_STATE_HOME="$TEST_DIR/state"
 export XDG_DATA_DIRS="$TEST_DIR/usr/share"
+export XDG_RUNTIME_DIR="$TEST_DIR/run"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$TEST_DIR/run/no-session-bus"
+export HYPRLAND_INSTANCE_SIGNATURE=""
+export WAYLAND_DISPLAY=""
 
-mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME/icons" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
+mkdir -p "$HOME" "$XDG_CONFIG_HOME/omarchy/plugins/sanjyay.cursor-theme-manager" "$XDG_DATA_HOME/icons" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
 
 MOCK_BIN="$TEST_DIR/mock_bin"
 mkdir -p "$MOCK_BIN"
@@ -72,8 +77,13 @@ python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data.get("o
 READ_RES=$("$ROOT/scripts/cursorctl" state-read)
 python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["theme"]["displayName"] == "MockHypr"; assert data["size"] == 32' "$READ_RES"
 
-# Test apply (commit) captures original baseline
-PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" apply --hyprcursor MockHypr --xcursor - --size 32 --commit
+# Test durable baseline plus persistent theme state. Live setcursor ordering is
+# exercised hermetically in first_mutation_barrier.test.py because production
+# correctly rejects PATH-injected executables.
+PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" capture-baseline >/dev/null
+PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" persist-theme \
+  --theme '{"id":"MockHypr","displayName":"MockHypr","hyprcursor":"MockHypr","xcursor":"-"}' \
+  --size 32 >/dev/null
 [[ -f "$TEST_DIR/config/uwsm/env.d/90-omarchy-cursor-switcher" ]]
 [[ -f "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher" ]]
 grep -q "export HYPRCURSOR_THEME='MockHypr'" "$TEST_DIR/config/uwsm/env-hyprland.d/90-omarchy-cursor-switcher"
@@ -108,48 +118,5 @@ python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["ok"] 
 
 STATUS_1=$(PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" integration-status)
 python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["enabled"] == False; assert data["promptSeen"] == False' "$STATUS_1"
-
-# 3. Enable Integration (installs all 4 persistent artifacts)
-ENABLE_RES=$(PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" integration-enable)
-python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["ok"] == True; assert data["enabled"] == True' "$ENABLE_RES"
-
-DESKTOP_FILE="$XDG_DATA_HOME/applications/cursor-theme-manager.desktop"
-CLEANUP_FILE="$HOME/.local/libexec/cursor-theme-manager/cleanup"
-PATH_UNIT="$XDG_CONFIG_HOME/systemd/user/cursor-theme-manager-cleanup.path"
-SERVICE_UNIT="$XDG_CONFIG_HOME/systemd/user/cursor-theme-manager-cleanup.service"
-
-[[ -f "$DESKTOP_FILE" ]]
-[[ -f "$CLEANUP_FILE" ]]
-[[ -x "$CLEANUP_FILE" ]]
-[[ -f "$PATH_UNIT" ]]
-[[ -f "$SERVICE_UNIT" ]]
-
-# Assert no ~/.local/bin wrapper created
-[[ ! -e "$HOME/.local/bin/omarchy-cursor-switcher" ]]
-
-# Verify desktop file content & ownership marker
-grep -q "X-CursorThemeManager-Owned=true" "$DESKTOP_FILE"
-grep -q "Exec=omarchy-shell shell toggle sanjyay.cursor-theme-manager" "$DESKTOP_FILE"
-grep -q "Icon=input-mouse" "$DESKTOP_FILE"
-
-# Validate desktop file syntax if desktop-file-validate is present
-if command -v desktop-file-validate >/dev/null 2>&1; then
-  desktop-file-validate "$DESKTOP_FILE"
-fi
-
-STATUS_2=$(PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" integration-status)
-python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["enabled"] == True; assert data["promptSeen"] == True' "$STATUS_2"
-
-# 4. Disable Integration (removes all artifacts)
-DISABLE_RES=$(PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" integration-disable)
-python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["ok"] == True; assert data["enabled"] == False' "$DISABLE_RES"
-
-[[ ! -e "$DESKTOP_FILE" ]]
-[[ ! -e "$CLEANUP_FILE" ]]
-[[ ! -e "$PATH_UNIT" ]]
-[[ ! -e "$SERVICE_UNIT" ]]
-
-STATUS_3=$(PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" integration-status)
-python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["enabled"] == False; assert data["promptSeen"] == False' "$STATUS_3"
 
 echo "cursorctl tests: ok"

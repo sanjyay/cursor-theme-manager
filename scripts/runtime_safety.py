@@ -15,7 +15,7 @@ import selectors
 import subprocess
 import threading
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Tuple, Any, Sequence
 
 # ==============================================================================
 # OPERATION BUDGET CONSTANTS
@@ -159,53 +159,110 @@ DANGEROUS_ENV_VARS = {
 _RESOLVED_TOOL_CACHE: Dict[str, Optional[str]] = {}
 
 
+def _trusted_directory(path: str, allow_non_root: bool) -> bool:
+    """Return True only for a stable, non-writable executable directory."""
+    try:
+        st = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISDIR(st.st_mode):
+            return False
+        if not allow_non_root and st.st_uid != 0:
+            return False
+        if allow_non_root and st.st_uid not in (0, os.getuid()):
+            return False
+        return not bool(st.st_mode & 0o022)
+    except OSError:
+        return False
+
+
+def _resolve_executable_from_roots(name: str, roots: Sequence[str] = TRUSTED_BIN_DIRS, allow_non_root: bool = False) -> Optional[str]:
+    """
+    Internal root-bounded resolver helper.
+    Tests may dependency-inject custom roots; production callers always use fixed system roots.
+    """
+    if not name or not isinstance(name, str):
+        return None
+
+    canonical_roots = []
+    for root in roots:
+        real_root = os.path.realpath(root)
+        root_is_trusted = _trusted_directory(real_root, allow_non_root)
+        if root_is_trusted and not allow_non_root:
+            root_is_trusted = all(
+                _trusted_directory(str(parent), False)
+                for parent in Path(real_root).parents
+            )
+        if real_root not in canonical_roots and root_is_trusted:
+            canonical_roots.append(real_root)
+
+    if name.startswith("/"):
+        candidates = [name]
+    else:
+        candidates = [os.path.join(d, name) for d in roots]
+
+    for candidate in candidates:
+        try:
+            real_path = os.path.realpath(candidate)
+            containing_root = next((d for d in canonical_roots if real_path.startswith(d + "/")), None)
+            if containing_root is None:
+                continue
+            # Validate any subdirectories below the trusted root too. Returning
+            # the canonical target avoids a later lookup through a mutable link.
+            relative_parent = os.path.relpath(os.path.dirname(real_path), containing_root)
+            current = containing_root
+            if relative_parent != ".":
+                valid_parent = True
+                for component in relative_parent.split(os.sep):
+                    current = os.path.join(current, component)
+                    if not _trusted_directory(current, allow_non_root):
+                        valid_parent = False
+                        break
+                if not valid_parent:
+                    continue
+
+            flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            if hasattr(os, "O_CLOEXEC"):
+                flags |= os.O_CLOEXEC
+            fd = os.open(real_path, flags)
+            try:
+                st = os.fstat(fd)
+            finally:
+                os.close(fd)
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            if not (st.st_mode & 0o111) or not os.access(real_path, os.X_OK):
+                continue
+            if not allow_non_root and st.st_uid != 0:
+                continue
+            if st.st_mode & 0o022:
+                continue
+
+            return real_path
+        except (OSError, PermissionError):
+            continue
+
+    return None
+
+
 def resolve_system_executable(name: str) -> Optional[str]:
     """
-    Resolves an external executable from fixed system directories only.
+    Production API: Resolves an external system executable from fixed system directories only.
+    Zero environment overrides. Never examines PATH or any environment variable.
     Verifies:
       - regular file
       - executable permissions
       - root-owned (UID 0)
       - not group- or world-writable
       - resolved canonical target also resides under trusted system roots and is root-owned
-    Returns canonical absolute path or None if unavailable/invalid.
-    Never relies on or falls back to PATH.
+    Returns canonical path or None if unavailable/invalid.
     """
     if not name or not isinstance(name, str):
         return None
 
-    if name in _RESOLVED_TOOL_CACHE:
-        return _RESOLVED_TOOL_CACHE[name]
-
-    resolved_path: Optional[str] = None
-
-    if name.startswith("/"):
-        candidates = [name]
-    else:
-        candidates = [os.path.join(d, name) for d in TRUSTED_BIN_DIRS]
-
-    for candidate in candidates:
-        try:
-            if not os.path.exists(candidate):
-                continue
-            real_path = os.path.realpath(candidate)
-            if not any(real_path == d or real_path.startswith(d + "/") for d in TRUSTED_BIN_DIRS):
-                continue
-            st = os.stat(real_path)
-            if not stat.S_ISREG(st.st_mode):
-                continue
-            if not (st.st_mode & 0o111) or not os.access(real_path, os.X_OK):
-                continue
-            if st.st_uid != 0:
-                continue
-            if st.st_mode & 0o022:
-                continue
-
-            resolved_path = candidate
-            break
-        except (OSError, PermissionError):
-            continue
-
+    # Revalidate on every launch. A cached pathname is not an executable
+    # identity and must never bypass ownership/mode checks after replacement.
+    resolved_path = _resolve_executable_from_roots(name, TRUSTED_BIN_DIRS, allow_non_root=False)
     _RESOLVED_TOOL_CACHE[name] = resolved_path
     return resolved_path
 
@@ -264,9 +321,9 @@ def get_secure_subprocess_env(extra_env: Optional[Dict[str, str]] = None) -> Dic
 
     if extra_env:
         for k, v in extra_env.items():
-            if k in DANGEROUS_ENV_VARS:
-                continue
-            if k == "PATH":
+            # Callers may override only variables already in the explicit
+            # session allowlist. Unknown loader/runtime knobs stay stripped.
+            if k not in ALLOWLISTED_ENV_VARS or k in DANGEROUS_ENV_VARS:
                 continue
             clean_env[k] = str(v)
 
@@ -356,19 +413,16 @@ def run_bounded(
         with _registry_lock:
             _active_process_groups.add(pgid)
 
-        if input_data is not None and proc.stdin:
-            try:
-                proc.stdin.write(input_data)
-                proc.stdin.close()
-            except Exception:
-                pass
-
         # Use non-blocking I/O selector
         sel = selectors.DefaultSelector()
         os.set_blocking(proc.stdout.fileno(), False)
         os.set_blocking(proc.stderr.fileno(), False)
         sel.register(proc.stdout, selectors.EVENT_READ, data="stdout")
         sel.register(proc.stderr, selectors.EVENT_READ, data="stderr")
+        input_offset = 0
+        if input_data is not None and proc.stdin:
+            os.set_blocking(proc.stdin.fileno(), False)
+            sel.register(proc.stdin, selectors.EVENT_WRITE, data="stdin")
 
         deadline = time.monotonic() + max(0.1, float(timeout))
 
@@ -382,6 +436,18 @@ def run_bounded(
             events = sel.select(timeout=min(0.2, max(0.01, remaining)))
             for key, mask in events:
                 stream_type = key.data
+                if stream_type == "stdin":
+                    try:
+                        written = os.write(key.fileobj.fileno(), input_data[input_offset:input_offset + 65536])
+                        input_offset += written
+                    except (BrokenPipeError, OSError):
+                        input_offset = len(input_data)
+                    if input_offset >= len(input_data):
+                        try: sel.unregister(key.fileobj)
+                        except Exception: pass
+                        try: key.fileobj.close()
+                        except Exception: pass
+                    continue
                 try:
                     chunk = key.fileobj.read(65536)
                 except Exception:
@@ -440,6 +506,9 @@ def run_bounded(
                 except Exception: pass
             if proc.stderr:
                 try: proc.stderr.close()
+                except Exception: pass
+            if proc.stdin:
+                try: proc.stdin.close()
                 except Exception: pass
 
             if pgid is not None:
