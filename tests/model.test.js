@@ -89,12 +89,14 @@ assert.strictEqual(filtered[2].sourceType, "system")
 const mockWithInternal = mockDiscovered.concat([
   { id: "CursorSwitcher-Themed-Banana-08ede60d3562", displayName: "CursorSwitcher-Themed-Banana", hyprcursor: "CursorSwitcher-Themed-Banana-08ede60d3562", xcursor: "CursorSwitcher-Themed-Banana-08ede60d3562", formats: ["hyprcursor", "xcursor"], path: "/home/user/.local/share/icons/CursorSwitcher-Themed-Banana-08ede60d3562" },
   { id: "CursorSwitcher-XCursor-Adwaita-2a4b6c8d", displayName: "CursorSwitcher-XCursor-Adwaita", hyprcursor: "CursorSwitcher-XCursor-Adwaita-2a4b6c8d", xcursor: "Adwaita", formats: ["hyprcursor"], path: "/home/user/.local/share/icons/CursorSwitcher-XCursor-Adwaita-2a4b6c8d" },
-  { id: "CursorSwitcher-Preview-Banana", displayName: "CursorSwitcher-Preview-Banana", hyprcursor: "CursorSwitcher-Preview-Banana", xcursor: "Banana", formats: ["hyprcursor"] }
+  { id: "CursorSwitcher-Preview-Banana", displayName: "CursorSwitcher-Preview-Banana", hyprcursor: "CursorSwitcher-Preview-Banana", xcursor: "Banana", formats: ["hyprcursor"] },
+  { id: "Banana-Hyprcursor", displayName: "Extracted Theme", hyprcursor: "Extracted Theme", xcursor: "", formats: ["hyprcursor"], path: "/home/user/.local/share/icons/Banana-Hyprcursor" }
 ])
 const normalizedClean = Model.normalizeThemes(mockWithInternal)
 assert.strictEqual(normalizedClean.some(t => t.id.startsWith("CursorSwitcher-Themed-")), false)
 assert.strictEqual(normalizedClean.some(t => t.id.startsWith("CursorSwitcher-XCursor-")), false)
 assert.strictEqual(normalizedClean.some(t => t.id.startsWith("CursorSwitcher-Preview-")), false)
+assert.strictEqual(normalizedClean.some(t => t.displayName === "Extracted Theme"), false)
 assert.strictEqual(normalizedClean.length, 3)
 
 // Fallback handling

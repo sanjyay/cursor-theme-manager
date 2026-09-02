@@ -325,7 +325,36 @@ def execute_cleanup():
         except OSError:
             pass
 
-    # Note: Imported cursor themes in ~/.local/share/icons/ are left completely untouched.
+    # 8. Clean up CTM-generated internal conversion caches
+    user_icons = os.path.join(paths["data_home"], "icons")
+    if os.path.isdir(user_icons):
+        try:
+            for entry in os.listdir(user_icons):
+                entry_path = os.path.join(user_icons, entry)
+                if not os.path.isdir(entry_path) or os.path.islink(entry_path):
+                    continue
+                try:
+                    st = os.stat(entry_path, follow_symlinks=False)
+                    if st.st_uid != os.getuid():
+                        continue
+                    gen_marker = os.path.join(entry_path, ".cursor-theme-manager-generated")
+                    legacy_conv = os.path.join(entry_path, ".omarchy-cursor-switcher-converted")
+                    imp_marker1 = os.path.join(entry_path, ".cursor-theme-manager-imported")
+                    imp_marker2 = os.path.join(entry_path, ".omarchy-cursor-switcher-imported")
+
+                    # NEVER delete imported user themes
+                    if os.path.isfile(imp_marker1) or os.path.isfile(imp_marker2):
+                        continue
+
+                    # Delete ONLY if verified as CTM-generated internal conversion cache
+                    if os.path.isfile(gen_marker) or os.path.isfile(legacy_conv):
+                        shutil.rmtree(entry_path, ignore_errors=True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Note: Imported cursor themes in ~/.local/share/icons/ are preserved.
     print("Cursor Theme Manager removed.")
     print("Previous cursor configuration restored.")
     print("Imported cursor themes were preserved.")

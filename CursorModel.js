@@ -56,11 +56,17 @@ function isInternalTheme(name, path) {
          s.indexOf("cursorswitcher-xcursor-") !== -1 ||
          s.indexOf("cursorswitcher-preview-") !== -1 ||
          s.indexOf(".omarchy-cursor-switcher-themed") !== -1 ||
-         s.indexOf(".omarchy-cursor-switcher-converted") !== -1
+         s.indexOf(".omarchy-cursor-switcher-converted") !== -1 ||
+         s.indexOf(".cursor-theme-manager-generated") !== -1 ||
+         s.indexOf("extracted_theme") !== -1 ||
+         s.indexOf("extracted theme") !== -1 ||
+         s.indexOf(".install-stage-") !== -1 ||
+         s.indexOf(".convert-") !== -1
 }
 
 function isThemeVisible(theme) {
   if (!theme) return false
+  if (theme.displayName === "Extracted Theme") return false
   return !isInternalTheme(theme.id, theme.path) &&
          !isInternalTheme(theme.displayName, theme.hyprcursor) &&
          !isInternalTheme(theme.xcursor, "")

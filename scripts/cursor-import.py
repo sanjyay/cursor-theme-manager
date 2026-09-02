@@ -416,8 +416,13 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
                 except Exception as e:
                     sys.stderr.write(f"Conversion note: {e}\n")
 
-        marker_file = os.path.join(install_path, ".omarchy-cursor-switcher-imported")
+        marker_file = os.path.join(install_path, ".cursor-theme-manager-imported")
+        legacy_marker = os.path.join(install_path, ".omarchy-cursor-switcher-imported")
+        theme_record["version"] = 1
+        theme_record["kind"] = "imported-user-theme"
         with open(marker_file, "w", encoding="utf-8") as f:
+            json.dump(theme_record, f, indent=2)
+        with open(legacy_marker, "w", encoding="utf-8") as f:
             json.dump(theme_record, f, indent=2)
 
         return {
@@ -448,17 +453,32 @@ def run_remove(theme_id: str):
     if not os.path.isdir(target):
         return {"ok": False, "error": f"Imported theme directory not found: {target}"}
 
-    marker = os.path.join(target, ".omarchy-cursor-switcher-imported")
-    if not os.path.isfile(marker):
-        return {"ok": False, "error": f"Directory is not managed by Cursor Switcher import: {target}"}
+    marker1 = os.path.join(target, ".cursor-theme-manager-imported")
+    marker2 = os.path.join(target, ".omarchy-cursor-switcher-imported")
+    if not os.path.isfile(marker1) and not os.path.isfile(marker2):
+        return {"ok": False, "error": f"Directory is not managed by Cursor Theme Manager import: {target}"}
 
     shutil.rmtree(target)
 
     for entry in os.listdir(icons_dir):
-        if entry.startswith("CursorSwitcher-XCursor-" + theme_id) or entry.startswith("CursorSwitcher-Themed-" + theme_id):
-            full = os.path.join(icons_dir, entry)
-            if os.path.isdir(full):
+        full = os.path.join(icons_dir, entry)
+        if not os.path.isdir(full) or os.path.islink(full):
+            continue
+        gen_marker = os.path.join(full, ".cursor-theme-manager-generated")
+        conv_marker = os.path.join(full, ".omarchy-cursor-switcher-converted")
+        if os.path.isfile(gen_marker) or os.path.isfile(conv_marker):
+            if (
+                entry.startswith(f"CursorSwitcher-XCursor-{theme_id}") or
+                entry.startswith(f"CursorSwitcher-Themed-{theme_id}")
+            ):
                 shutil.rmtree(full, ignore_errors=True)
+            elif os.path.isfile(gen_marker):
+                try:
+                    txt = Path(gen_marker).read_text(encoding="utf-8")
+                    if f"sourceTheme={theme_id}" in txt:
+                        shutil.rmtree(full, ignore_errors=True)
+                except Exception:
+                    pass
 
     cache_home = os.environ.get("XDG_CACHE_HOME", os.path.join(home, ".cache"))
     theme_cache = os.path.join(cache_home, "omarchy", "cursor-previews", theme_id)
@@ -487,15 +507,19 @@ def run_rename(theme_id: str, new_name: str):
     if not os.path.isdir(target):
         return {"ok": False, "error": f"Imported theme directory not found: {target}"}
 
-    marker = os.path.join(target, ".omarchy-cursor-switcher-imported")
-    if not os.path.isfile(marker):
-        return {"ok": False, "error": f"Directory is not managed by Cursor Switcher import: {target}"}
+    marker1 = os.path.join(target, ".cursor-theme-manager-imported")
+    marker2 = os.path.join(target, ".omarchy-cursor-switcher-imported")
+    if not os.path.isfile(marker1) and not os.path.isfile(marker2):
+        return {"ok": False, "error": f"Directory is not managed by Cursor Theme Manager import: {target}"}
 
+    active_marker = marker1 if os.path.isfile(marker1) else marker2
     try:
-        with open(marker, "r", encoding="utf-8") as f:
+        with open(active_marker, "r", encoding="utf-8") as f:
             meta = json.load(f)
         meta["displayName"] = clean_name
-        with open(marker, "w", encoding="utf-8") as f:
+        with open(marker1, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        with open(marker2, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
     except Exception as e:
         return {"ok": False, "error": f"Failed to update metadata marker: {e}"}

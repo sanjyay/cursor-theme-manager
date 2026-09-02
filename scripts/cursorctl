@@ -161,8 +161,20 @@ def run_discover():
             if not valid_name(base):
                 continue
 
-            # Skip internal generated converted themes
-            if base.startswith("CursorSwitcher-XCursor-") or base.startswith("CursorSwitcher-Themed-") or base.startswith("CursorSwitcher-Preview-"):
+            # Skip internal generated conversion themes and staging artifacts
+            gen_marker = theme_dir / ".cursor-theme-manager-generated"
+            conv_marker = theme_dir / ".omarchy-cursor-switcher-converted"
+            if (
+                base.startswith("CursorSwitcher-XCursor-") or
+                base.startswith("CursorSwitcher-Themed-") or
+                base.startswith("CursorSwitcher-Preview-") or
+                base.startswith("extracted_") or
+                base.startswith(".convert-") or
+                base.startswith(".cs-") or
+                base.startswith(".install-stage-") or
+                gen_marker.is_file() or
+                conv_marker.is_file()
+            ):
                 continue
 
             hypr = ""
@@ -175,7 +187,7 @@ def run_discover():
 
             if has_hyprcursor(theme_dir):
                 mname = read_ini_key(theme_dir / "manifest.hl", "name") or read_ini_key(theme_dir / "manifest.toml", "name") or base
-                if not valid_name(mname):
+                if mname == "Extracted Theme" or not valid_name(mname):
                     mname = base
                 hypr = mname
                 display = hypr
@@ -402,6 +414,9 @@ def run_ensure_hyprcursor(hypr: str, xcursor: str, theme_path: str = "") -> str:
         temp_install = Path(tempfile.mkdtemp(prefix=".convert-", dir=str(user_icons)))
         try:
             shutil.copytree(created_theme, temp_install, dirs_exist_ok=True, symlinks=True)
+            (temp_install / ".cursor-theme-manager-generated").write_text(
+                f"version=1\nkind=conversion-cache\nsourceTheme={xcursor}\n", encoding="utf-8"
+            )
             (temp_install / ".omarchy-cursor-switcher-converted").write_text("1.0\n", encoding="utf-8")
             if target_dir.exists():
                 shutil.rmtree(target_dir, ignore_errors=True)
