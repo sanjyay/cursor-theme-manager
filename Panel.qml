@@ -352,17 +352,7 @@ Item {
                   }
                 }
 
-                onOpenFolderRequested: function(theme) {
-                  if (root.service) root.service.openThemeFolder(theme)
-                }
 
-                onRenameThemeRequested: function(theme) {
-                  renameDialog.open(theme)
-                }
-
-                onRemoveThemeRequested: function(theme) {
-                  if (root.service) root.service.removeImportedTheme(theme)
-                }
               }
             }
 

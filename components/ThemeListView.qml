@@ -12,9 +12,6 @@ Item {
 
   signal themeActivated(var theme, int index)
   signal themeHovered(var theme, bool active)
-  signal openFolderRequested(var theme)
-  signal renameThemeRequested(var theme)
-  signal removeThemeRequested(var theme)
 
   property int modelVersion: 0
 
@@ -159,57 +156,11 @@ Item {
               anchors.leftMargin: Style.space(12)
               anchors.rightMargin: Style.space(8)
 
-              // Context Menu Button [⋯] (Only for imported themes)
-              Rectangle {
-                id: rowMenuBtn
-                visible: (userRow.modelData.theme.imported === true || userRow.modelData.theme.sourceType === "imported") && (uRowMouse.containsMouse || userRow.isCommitted)
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.right: parent.right
-                width: Style.space(20)
-                height: Style.space(20)
-                radius: Style.space(3)
-                color: rowMenuMouse.containsMouse ? Util.alpha(Color.accent, 0.25) : Util.alpha(Color.popups.text, 0.08)
-
-                Text {
-                  anchors.centerIn: parent
-                  text: "⋯"
-                  textFormat: Text.PlainText
-                  color: Color.popups.text
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                }
-
-                MouseArea {
-                  id: rowMenuMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: rowContextMenu.open()
-                }
-
-                Menu {
-                  id: rowContextMenu
-                  y: rowMenuBtn.height + 2
-                  MenuItem {
-                    text: "Open folder"
-                    onTriggered: root.openFolderRequested(userRow.modelData.theme)
-                  }
-                  MenuItem {
-                    text: "Rename"
-                    onTriggered: root.renameThemeRequested(userRow.modelData.theme)
-                  }
-                  MenuItem {
-                    text: "Remove"
-                    onTriggered: root.removeThemeRequested(userRow.modelData.theme)
-                  }
-                }
-              }
-
               // Theme display name
               Text {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
-                anchors.right: rowMenuBtn.visible ? rowMenuBtn.left : parent.right
+                anchors.right: parent.right
                 anchors.rightMargin: Style.space(6)
                 text: userRow.modelData.theme.displayName || userRow.modelData.theme.id || ""
                 textFormat: Text.PlainText
