@@ -53,24 +53,31 @@ Item {
   property string _discoverOutput: ""
   property string _discoverError: ""
 
-  // Size Request Generation & Coalescing State
+  // Minimum throttle interval between consecutive hyprctl setcursor calls (~80 ms)
+  readonly property int minLiveSetcursorInterval: 80
+  property double _lastLiveSetcursorTime: 0
+
+  // Request Generation Tracking
   property int _sizeRequestGeneration: 0
   property int _activeLiveGeneration: 0
   property int _pendingLiveGeneration: 0
   property int _pendingLiveSize: 0
+  property int _persistedSize: 16
 
+  // Throttle timer for trailing-edge live apply
   Timer {
-    id: liveSizeDebounceTimer
-    interval: 35
+    id: liveThrottleTimer
+    interval: 80
     repeat: false
-    onTriggered: root.dispatchPendingLiveSize()
+    onTriggered: root.dispatchPendingLiveSetcursor()
   }
 
+  // Persistence debounce timer (runs silently only after user stops resizing for 300 ms)
   Timer {
     id: commitSizeDebounceTimer
-    interval: 250
+    interval: 300
     repeat: false
-    onTriggered: root.flushFinalSizeCommit()
+    onTriggered: root.flushFinalSizePersistence()
   }
 
   signal themesChangedByScan()
@@ -262,53 +269,80 @@ Item {
     previewTimer.stop()
     _debouncedPreview = null
     var target = Model.validSize(size)
-    if (target === committedSize && !liveSizeProcess.running && !commitSizeDebounceTimer.running) return
+    if (target === committedSize && !liveSetcursorProcess.running && !commitSizeDebounceTimer.running && target === _persistedSize) return
 
-    // 1. Immediately update UI state synchronously (0ms latency)
+    // 1. Synchronous Instant UI Update (0 ms latency)
     _sizeRequestGeneration++
     committedSize = target
     if (root._loadedState) root._loadedState.cursorModifiedByCtm = true
     statusText = (committedTheme ? (committedTheme.displayName || committedTheme.id) : "Cursor") + " · " + committedSize + " px"
 
-    // 2. Queue live fast path
-    _pendingLiveSize = target
-    _pendingLiveGeneration = _sizeRequestGeneration
-    if (!liveSizeProcess.running) {
-      liveSizeDebounceTimer.restart()
+    // 2. Leading-Edge or Throttled Trailing-Edge Dispatch
+    var now = Date.now()
+    var elapsed = now - _lastLiveSetcursorTime
+
+    if (!liveSetcursorProcess.running && elapsed >= minLiveSetcursorInterval) {
+      // LEADING EDGE: Apply immediately
+      liveThrottleTimer.stop()
+      _pendingLiveGeneration = 0
+      _pendingLiveSize = 0
+      startLiveSetcursor(target, _sizeRequestGeneration)
+    } else {
+      // TRAILING EDGE: Coalesce latest value and schedule throttle timer
+      _pendingLiveSize = target
+      _pendingLiveGeneration = _sizeRequestGeneration
+      if (!liveThrottleTimer.running) {
+        var waitMs = Math.max(15, minLiveSetcursorInterval - elapsed)
+        liveThrottleTimer.interval = waitMs
+        liveThrottleTimer.restart()
+      }
     }
 
-    // 3. Queue final persistent commit after user stops resizing
+    // 3. Queue Final Persistence after user stops resizing (300 ms idle)
     commitSizeDebounceTimer.restart()
   }
 
-  function dispatchPendingLiveSize() {
-    if (liveSizeProcess.running || _pendingLiveGeneration === 0) return
-    if (!committedTheme) return
-
+  function dispatchPendingLiveSetcursor() {
+    if (liveSetcursorProcess.running || _pendingLiveGeneration === 0) return
+    var target = _pendingLiveSize
     var gen = _pendingLiveGeneration
-    var sz = _pendingLiveSize
     _pendingLiveGeneration = 0
-    _activeLiveGeneration = gen
+    _pendingLiveSize = 0
+    startLiveSetcursor(target, gen)
+  }
+
+  function startLiveSetcursor(size, generation) {
+    if (!committedTheme) return
+    _activeLiveGeneration = generation
+    _lastLiveSetcursorTime = Date.now()
+
+    var resolvedTheme = committedTheme.hyprcursor || committedTheme.xcursor || committedTheme.id || "Adwaita"
+    if (resolvedTheme === "-") {
+      resolvedTheme = committedTheme.xcursor || committedTheme.id || "Adwaita"
+    }
+
+    liveSetcursorProcess.command = ["hyprctl", "setcursor", resolvedTheme, String(size)]
+    liveSetcursorProcess.running = true
+    liveSetcursorWatchdog.restart()
+  }
+
+  function flushFinalSizePersistence() {
+    if (!committedTheme) return
+    var finalGen = _sizeRequestGeneration
+    var finalSize = committedSize
+    _persistedSize = finalSize
 
     var hypr = committedTheme.hyprcursor || "-"
     var xcur = committedTheme.xcursor || "-"
-    var tpath = committedTheme.path || ""
 
-    liveSizeProcess.command = [
-      helperPath, "set-size-live",
+    persistSizeProcess.command = [
+      helperPath, "persist-size",
       "--hyprcursor", hypr,
       "--xcursor", xcur,
-      "--theme-path", tpath,
-      "--size", String(sz)
+      "--size", String(finalSize)
     ]
-    liveSizeProcess.running = true
-    liveSizeWatchdog.restart()
-  }
-
-  function flushFinalSizeCommit() {
-    if (!committedTheme) return
-    var finalGen = _sizeRequestGeneration
-    enqueueApply(committedTheme, committedSize, "commit", finalGen)
+    persistSizeProcess.running = true
+    persistSizeWatchdog.restart()
   }
 
   function enqueueApply(theme, size, kind, generation) {
@@ -932,33 +966,58 @@ Item {
     }
   }
 
-  // 10. Fast-Path Live Size Process
+  // 10. Fast-Path Direct Live Setcursor Process
   Timer {
-    id: liveSizeWatchdog
-    interval: 3000
+    id: liveSetcursorWatchdog
+    interval: 1500
     repeat: false
     onTriggered: {
-      if (liveSizeProcess.running) {
-        liveSizeProcess.running = false
+      if (liveSetcursorProcess.running) {
+        liveSetcursorProcess.running = false
         root._activeLiveGeneration = 0
         if (root._pendingLiveGeneration > 0) {
-          root.dispatchPendingLiveSize()
+          root.dispatchPendingLiveSetcursor()
         }
       }
     }
   }
 
   Process {
-    id: liveSizeProcess
+    id: liveSetcursorProcess
     running: false
     command: []
     onExited: function(exitCode) {
-      liveSizeWatchdog.stop()
+      liveSetcursorWatchdog.stop()
       var completedGen = root._activeLiveGeneration
       root._activeLiveGeneration = 0
+
       if (root._pendingLiveGeneration > completedGen) {
-        root.dispatchPendingLiveSize()
+        var now = Date.now()
+        var elapsed = now - root._lastLiveSetcursorTime
+        if (elapsed >= root.minLiveSetcursorInterval) {
+          root.dispatchPendingLiveSetcursor()
+        } else {
+          liveThrottleTimer.interval = Math.max(15, root.minLiveSetcursorInterval - elapsed)
+          liveThrottleTimer.restart()
+        }
       }
+    }
+  }
+
+  // 10b. Dedicated Silent Size Persistence Process (Zero setcursor calls)
+  Timer {
+    id: persistSizeWatchdog
+    interval: 5000
+    repeat: false
+    onTriggered: if (persistSizeProcess.running) persistSizeProcess.running = false
+  }
+
+  Process {
+    id: persistSizeProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      persistSizeWatchdog.stop()
     }
   }
 

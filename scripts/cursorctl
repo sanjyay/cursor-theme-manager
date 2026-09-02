@@ -458,6 +458,72 @@ def run_set_size_live(hypr: str, xcursor: str, theme_path: str, size: int):
         sys.exit(1)
 
 
+def run_persist_size(hypr: str, xcursor: str, size: int):
+    if size not in secure_state.SUPPORTED_SIZES:
+        sys.stderr.write(f"cursorctl: unsupported cursor size: {size}\n")
+        sys.exit(1)
+
+    # 1. Atomic state update (immutable preCtmCursor baseline)
+    st = secure_state.read_state()
+    st["size"] = size
+    st["cursorModifiedByCtm"] = True
+    if not (st.get("preCtmCursor") and st["preCtmCursor"].get("captured")):
+        baseline = secure_state.capture_original_cursor()
+        st["preCtmCursor"] = baseline
+        st["originalCursor"] = baseline
+    secure_state.write_state(st)
+
+    # 2. GTK cursor size via gsettings
+    run_bounded(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)], timeout=1.5)
+
+    # 3. Environment updates (systemd & dbus)
+    assignments = [f"XCURSOR_SIZE={size}", f"HYPRCURSOR_SIZE={size}"]
+    if hypr and hypr != "-":
+        assignments.append(f"HYPRCURSOR_THEME={hypr}")
+    if xcursor and xcursor != "-":
+        assignments.append(f"XCURSOR_THEME={xcursor}")
+
+    run_bounded(["systemctl", "--user", "set-environment"] + assignments, timeout=1.5)
+    run_bounded(["dbus-update-activation-environment", "--systemd"] + assignments, timeout=1.5)
+
+    # 4. Composite Hyprland environment eval in single socket command
+    eval_code = f'hl.env("HYPRCURSOR_SIZE", "{size}"); hl.env("XCURSOR_SIZE", "{size}")'
+    run_bounded(["hyprctl", "eval", eval_code], timeout=1.5)
+
+    # 5. UWSM environment drop-in files (atomic write)
+    home = os.environ.get("HOME", os.path.expanduser("~"))
+    config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
+    common_dir = os.path.join(config_home, "uwsm", "env.d")
+    hypr_dir = os.path.join(config_home, "uwsm", "env-hyprland.d")
+    os.makedirs(common_dir, exist_ok=True)
+    os.makedirs(hypr_dir, exist_ok=True)
+
+    common_file = os.path.join(common_dir, "90-omarchy-cursor-switcher")
+    hypr_file = os.path.join(hypr_dir, "90-omarchy-cursor-switcher")
+
+    common_tmp = common_file + f".tmp.{os.getpid()}"
+    hypr_tmp = hypr_file + f".tmp.{os.getpid()}"
+
+    with open(common_tmp, "w", encoding="utf-8") as f:
+        f.write("# Managed by sanjyay.cursor-theme-manager.\n")
+        if xcursor and xcursor != "-":
+            f.write(f"export XCURSOR_THEME='{xcursor}'\n")
+        f.write(f"export XCURSOR_SIZE='{size}'\n")
+
+    with open(hypr_tmp, "w", encoding="utf-8") as f:
+        f.write("# Managed by sanjyay.cursor-theme-manager.\n")
+        if not hypr or hypr == "-":
+            f.write("unset HYPRCURSOR_THEME\n")
+        else:
+            f.write(f"export HYPRCURSOR_THEME='{hypr}'\n")
+        f.write(f"export HYPRCURSOR_SIZE='{size}'\n")
+
+    os.chmod(common_tmp, 0o600)
+    os.chmod(hypr_tmp, 0o600)
+    os.replace(common_tmp, common_file)
+    os.replace(hypr_tmp, hypr_file)
+
+
 # ==============================================================================
 # APPLY THEME
 # ==============================================================================
@@ -586,6 +652,24 @@ def main():
                 i += 1
         res = run_ensure_hyprcursor(hypr, xcursor, theme_path)
         sys.stdout.write(res + "\n")
+        sys.exit(0)
+
+    elif cmd == "persist-size":
+        hypr = "-"; xcursor = "-"; size = 24
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--hyprcursor" and i + 1 < len(sys.argv):
+                hypr = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--xcursor" and i + 1 < len(sys.argv):
+                xcursor = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--size" and i + 1 < len(sys.argv):
+                try: size = int(sys.argv[i+1])
+                except ValueError: pass
+                i += 2
+            else:
+                i += 1
+        run_persist_size(hypr, xcursor, size)
+        emit_bounded_json({"ok": True, "persistedSize": size})
         sys.exit(0)
 
     elif cmd == "set-size-live":
