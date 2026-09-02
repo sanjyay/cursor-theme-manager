@@ -392,12 +392,12 @@ Item {
 
   function startLiveThemeSetcursor(runtimeThemeName, size, generation, themeObj) {
     _activeThemeGeneration = generation
-    var hyprBin = root.trustedHyprctlPath || "/usr/bin/hyprctl"
-    if (!hyprBin) {
+    if (!root.trustedHyprctlPath) {
+      root.statusText = "Required system tool hyprctl is unavailable or failed validation."
       root.lastError = "Required system tool \"hyprctl\" is unavailable or failed validation."
       return
     }
-    liveThemeProcess.command = [hyprBin, "setcursor", runtimeThemeName, String(size)]
+    liveThemeProcess.command = [root.trustedHyprctlPath, "setcursor", runtimeThemeName, String(size)]
     liveThemeProcess.running = true
     liveThemeWatchdog.restart()
   }
@@ -449,17 +449,18 @@ Item {
     if (!committedTheme) return
     _activeLiveGeneration = generation
 
+    if (!root.trustedHyprctlPath) {
+      root.statusText = "Required system tool hyprctl is unavailable or failed validation."
+      root.lastError = "Required system tool \"hyprctl\" is unavailable or failed validation."
+      return
+    }
+
     var resolvedTheme = committedTheme.hyprcursor || committedTheme.xcursor || committedTheme.id || "Adwaita"
     if (resolvedTheme === "-") {
       resolvedTheme = committedTheme.xcursor || committedTheme.id || "Adwaita"
     }
 
-    var hyprBin = root.trustedHyprctlPath || "/usr/bin/hyprctl"
-    if (!hyprBin) {
-      root.lastError = "Required system tool \"hyprctl\" is unavailable or failed validation."
-      return
-    }
-    liveSetcursorProcess.command = [hyprBin, "setcursor", resolvedTheme, String(size)]
+    liveSetcursorProcess.command = [root.trustedHyprctlPath, "setcursor", resolvedTheme, String(size)]
     liveSetcursorProcess.running = true
     liveSetcursorWatchdog.restart()
   }

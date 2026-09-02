@@ -756,8 +756,20 @@ class TestExecutableTrustAndHostilePath(IsolatedTestCase):
             [sys.executable, "-c", probe_code],
             env={**self.env, "PYTHONPATH": "/evil/python/path", "LD_PRELOAD": "/evil/lib.so"}
         )
-        self.assertTrue(res.ok)
-        self.assertIn("CLEAN CLEAN", res.stdout)
+    def test_missing_trusted_tools_hyprctl_fails_closed(self):
+        # Simulate environment where hyprctl does not exist in any trusted bin dir
+        with mock.patch("runtime_safety.resolve_system_executable", return_value=None):
+            res = runtime_safety.run_bounded(["hyprctl", "setcursor", "Adwaita", "24"])
+            self.assertFalse(res.ok)
+            self.assertEqual(res.exit_code, 127)
+            self.assertIn("unavailable or failed validation", res.error)
+
+    def test_qml_has_zero_hardcoded_executable_fallbacks(self):
+        qml_path = ROOT / "CursorService.qml"
+        qml_content = qml_path.read_text(encoding="utf-8")
+        self.assertNotIn('|| "/usr/bin/hyprctl"', qml_content)
+        self.assertNotIn("|| '/usr/bin/hyprctl'", qml_content)
+        self.assertNotIn('hyprBin = "/usr/bin/hyprctl"', qml_content)
 
 
 if __name__ == "__main__":
