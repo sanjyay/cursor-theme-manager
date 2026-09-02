@@ -25,33 +25,23 @@ CURSOR_IMPORT = ROOT / "scripts" / "cursor-import.py"
 CURSOR_THEMING = ROOT / "scripts" / "cursor_theming.py"
 
 
-class TestLocalDiscoveryAndOwnership(unittest.TestCase):
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_isolation import IsolatedTestCase
+
+class TestLocalDiscoveryAndOwnership(IsolatedTestCase):
 
     def setUp(self):
-        self.temp_dir = tempfile.mkdtemp(prefix="cs-disc-test-")
-        self.home = Path(self.temp_dir) / "home"
-        self.xdg_data = self.home / ".local" / "share"
-        self.xdg_config = self.home / ".config"
-        self.xdg_cache = self.home / ".cache"
-        self.sys_icons = Path(self.temp_dir) / "usr" / "share" / "icons"
-        self.user_icons = self.xdg_data / "icons"
-
-        self.sys_icons.mkdir(parents=True)
-        self.user_icons.mkdir(parents=True)
-        self.xdg_config.mkdir(parents=True)
-        self.xdg_cache.mkdir(parents=True)
-
-        self.env = dict(
-            os.environ,
-            HOME=str(self.home),
-            XDG_DATA_HOME=str(self.xdg_data),
-            XDG_CONFIG_HOME=str(self.xdg_config),
-            XDG_CACHE_HOME=str(self.xdg_cache),
-            XDG_DATA_DIRS=str(Path(self.temp_dir) / "usr" / "share"),
-        )
+        super().setUp()
+        self.home = self.iso.home
+        self.xdg_data = self.iso.xdg_data
+        self.xdg_config = self.iso.xdg_config
+        self.xdg_cache = self.iso.xdg_cache
+        self.sys_icons = self.iso.sys_data / "icons"
+        self.user_icons = self.iso.user_icons
+        self.env["XDG_DATA_DIRS"] = str(self.iso.sys_data)
 
     def tearDown(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        super().tearDown()
 
     def test_01_empty_discovery_state(self):
         """When no cursor themes exist, discover returns an empty list without crashing."""
@@ -99,7 +89,7 @@ class TestLocalDiscoveryAndOwnership(unittest.TestCase):
     def test_04_plugin_imported_theme_classification(self):
         """Themes imported via Cursor Theme Manager are classified as sourceType: 'imported', imported: true."""
         # Create a mock source directory to import
-        src_dir = Path(self.temp_dir) / "source_theme"
+        src_dir = Path(self.test_dir) / "source_theme"
         (src_dir / "cursors").mkdir(parents=True)
         (src_dir / "cursors" / "left_ptr").write_bytes(b"Xcur\x00\x00\x00\x01\x00\x00\x00\x00")
         (src_dir / "index.theme").write_text("[Icon Theme]\nName=ImportedClassic\n", encoding="utf-8")
@@ -152,7 +142,7 @@ class TestLocalDiscoveryAndOwnership(unittest.TestCase):
 
     def test_06_imported_theme_management_lifecycle(self):
         """Imported themes can be renamed and removed safely."""
-        src_dir = Path(self.temp_dir) / "source_theme_2"
+        src_dir = Path(self.test_dir) / "source_theme_2"
         (src_dir / "cursors").mkdir(parents=True)
         (src_dir / "cursors" / "left_ptr").write_bytes(b"Xcur\x00\x00\x00\x01\x00\x00\x00\x00")
         (src_dir / "index.theme").write_text("[Icon Theme]\nName=MyTheme\n", encoding="utf-8")

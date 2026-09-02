@@ -23,7 +23,7 @@ Cursor Theme Manager is a local-first cursor theme manager and previewer for Oma
 - **Automatic Hyprcursor Compilation:** Legacy XCursor themes are automatically converted to native Hyprcursor packages on-the-fly using `hyprcursor-util`.
 - **Safe Imported-Theme Management:** Rename, open directory, or safely remove themes imported through the plugin directly from the UI or CLI. Destructive actions are restricted strictly to plugin-owned imported themes.
 - **Compositor-Aware Persistence:** Instantly applies changes via `hyprctl setcursor` and `gsettings`, updating UWSM environment files (`~/.config/uwsm/env.d/90-omarchy-cursor-switcher`) and D-Bus activation environments for new applications.
-- **Optional Desktop Integration:** Optional user-consented desktop integration installs desktop entries (`omarchy-cursor-switcher.desktop`) and terminal launcher commands (`omarchy-cursor-switcher`) with transactional installation and clean rollback.
+- **Consented Application & Removal Integration:** Optional user-level integration installing a desktop launcher (`cursor-theme-manager.desktop`), a minimal removal watcher (`cursor-theme-manager-cleanup.path`), and a cleanup helper (`~/.local/libexec/cursor-theme-manager/cleanup`). Automatic removal cleanly restores the original cursor configuration while preserving imported themes as user content.
 - **Hardened Subprocess Supervisor:** Bounded stream selectors, strict wall-clock deadlines, and process-group isolation ensure child tools cannot exhaust memory or orphan background processes.
 - **Descriptor-Held Private State:** Secure state directory (`$XDG_STATE_HOME/cursor-theme-manager/`, mode `0700`) with descriptor-held durable writes and schema validation.
 - **Zero Network Access:** Operates completely offline with zero runtime network requests, downloads, or background telemetry.
@@ -86,7 +86,10 @@ Cursor Theme Manager integrates with standard Omarchy shell controls:
   omarchy-shell shell toggle sanjyay.cursor-theme-manager '{}'
   omarchy-shell shell hide sanjyay.cursor-theme-manager
   ```
-- **Optional Desktop Entry & CLI:** Enable **Desktop Integration** from within the in-app settings modal to install `omarchy-cursor-switcher.desktop` and the `omarchy-cursor-switcher` CLI command.
+- **Application Launcher:** When enabled via **Add to Applications**, launch Cursor Theme Manager directly from your application launcher (Super + Space) or by running:
+  ```bash
+  omarchy-shell shell toggle sanjyay.cursor-theme-manager '{}'
+  ```
 
 ---
 
@@ -422,7 +425,14 @@ Cursor Theme Manager adheres strictly to defensive security standards:
 - **Zero Runtime Network Access:** No automatic downloads, curl/wget execution, or remote dependencies.
 - **Centralized Bounded Process Supervision:** All external subprocesses (`hyprcursor-util`, `xcur2png`, `gsettings`, `systemctl`, `hyprctl`, `xdg-open`) run in isolated process groups under `runtime_safety.run_bounded` with hard memory and wall-clock limits. Exceeding byte limits immediately terminates the process group.
 - **Private Descriptor-Held State:** State is stored in a private directory (`$XDG_STATE_HOME/cursor-theme-manager/`, mode `0700`) and written relative to an open directory descriptor (`dir_fd`) with `fsync`, preventing symlink race attacks.
-- **Transactional Integration with Rollback:** Optional desktop integration uses staged transactional file operations with automatic rollback if any stage fails.
+- **Minimal User-Level Removal Watcher & Helper:**
+  When integration is explicitly enabled by the user, installs:
+  • `~/.local/share/applications/cursor-theme-manager.desktop`
+  • `~/.local/libexec/cursor-theme-manager/cleanup`
+  • `~/.config/systemd/user/cursor-theme-manager-cleanup.path`
+  • `~/.config/systemd/user/cursor-theme-manager-cleanup.service`
+  • `~/.local/state/cursor-theme-manager/`
+  All operations are purely user-level (no sudo, no system-wide files, no background polling daemons).
 - **Non-Destructive Restoration:** Restoration strictly limits scope to allowlisted cursor variables and never executes arbitrary resets if snapshot data is missing or invalid.
 - **Strict Plain-Text UI:** Every dynamic user-interface text sink explicitly enforces `textFormat: Text.PlainText`.
 - **Decompression Bomb Protection:**
@@ -434,16 +444,34 @@ Cursor Theme Manager adheres strictly to defensive security standards:
 
 ## Removal & Cleanup
 
-To completely remove the plugin:
+When integration is enabled, Cursor Theme Manager is removed automatically simply by running:
 
 ```bash
 omarchy plugin remove sanjyay.cursor-theme-manager
 ```
 
-Removal automatically:
-1. Restores the pre-existing cursor theme and size captured prior to plugin installation.
-2. Cleans up generated application desktop shortcuts, launchers, and icons.
-3. Removes UWSM configuration fragments and temporary preview caches.
+### What Happens During Automatic Removal:
+1. Omarchy deletes the plugin directory.
+2. The user-level systemd path unit (`cursor-theme-manager-cleanup.path`) detects the change.
+3. The cleanup helper (`~/.local/libexec/cursor-theme-manager/cleanup`):
+   - Restores the original cursor configuration captured before changes were applied.
+   - Deletes the marker-owned application launcher (`cursor-theme-manager.desktop`).
+   - Deletes the state directory (`~/.local/state/cursor-theme-manager/`).
+   - Removes and disables the systemd path/service units and deletes itself.
+   - **Preserves all imported cursor themes** in `~/.local/share/icons/` as user content.
+
+### Manual Cleanup Recovery
+If systemd user services were disabled or unavailable, you can manually remove all integration artifacts with:
+
+```bash
+rm -f ~/.local/share/applications/cursor-theme-manager.desktop
+rm -rf ~/.local/libexec/cursor-theme-manager
+systemctl --user stop cursor-theme-manager-cleanup.path 2>/dev/null || true
+systemctl --user disable cursor-theme-manager-cleanup.path 2>/dev/null || true
+rm -f ~/.config/systemd/user/cursor-theme-manager-cleanup.path ~/.config/systemd/user/cursor-theme-manager-cleanup.service
+systemctl --user daemon-reload 2>/dev/null || true
+rm -rf ~/.local/state/cursor-theme-manager
+```
 
 ---
 

@@ -12,17 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-RUNTIME_PATHS = [
-    ROOT / "scripts" / "cursorctl",
-    ROOT / "scripts" / "cursor-import.py",
-    ROOT / "scripts" / "cursor_theming.py",
-    ROOT / "scripts" / "choose-file.py",
-    ROOT / "scripts" / "file_browser.py",
-    ROOT / "scripts" / "omarchy-cursor-switcher-cleanup",
-    ROOT / "CursorService.qml",
-    ROOT / "CursorModel.js",
-    ROOT / "Panel.qml",
-] + list((ROOT / "components").glob("*.qml"))
+RUNTIME_PATHS = (
+    [p for p in (ROOT / "scripts").glob("*") if p.is_file() and not p.name.startswith(".") and not p.name.endswith(".pyc")] +
+    [ROOT / "CursorService.qml", ROOT / "CursorModel.js", ROOT / "Panel.qml"] +
+    list((ROOT / "components").glob("*.qml"))
+)
 
 
 class TestNetworkSecurity(unittest.TestCase):

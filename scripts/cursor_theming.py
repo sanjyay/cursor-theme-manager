@@ -24,10 +24,19 @@ from runtime_safety import (
     LIMIT_STDOUT_SMALL, LIMIT_STDOUT_MEDIUM, LIMIT_STDOUT_LARGE, LIMIT_STDERR_DEFAULT
 )
 
-HOME = Path(os.path.expanduser("~"))
-CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", str(HOME / ".cache"))) / "omarchy-cursor-switcher"
-ROLES_DIR = CACHE_DIR / "roles"
-LOCAL_ICONS = Path(os.environ.get("XDG_DATA_HOME", str(HOME / ".local" / "share"))) / "icons"
+def get_home() -> Path:
+    return Path(os.environ.get("HOME", os.path.expanduser("~")))
+
+def get_cache_dir() -> Path:
+    home = get_home()
+    return Path(os.environ.get("XDG_CACHE_HOME", str(home / ".cache"))) / "omarchy-cursor-switcher"
+
+def get_roles_dir() -> Path:
+    return getattr(sys.modules.get(__name__), "_ROLES_DIR_OVERRIDE", None) or (get_cache_dir() / "roles")
+
+def get_local_icons_dir() -> Path:
+    home = get_home()
+    return Path(os.environ.get("XDG_DATA_HOME", str(home / ".local" / "share"))) / "icons"
 
 # Canonical Semantic Preview Roles with prioritized alias candidate lists
 SEMANTIC_ROLE_ALIASES = {
@@ -72,7 +81,7 @@ def find_theme_directory(theme_input, theme_path_hint=None):
     if os.path.isabs(s) and os.path.isdir(s):
         return Path(s)
 
-    search_roots = [LOCAL_ICONS, HOME / ".icons"]
+    search_roots = [get_local_icons_dir(), get_home() / ".icons"]
     xdg_data_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
     for d in xdg_data_dirs:
         if d.strip():
@@ -210,13 +219,14 @@ def extract_role_from_xcursor(cursor_file, out_file_base):
 
 
 def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
-    ROLES_DIR.mkdir(parents=True, exist_ok=True)
+    roles_dir = get_roles_dir()
+    roles_dir.mkdir(parents=True, exist_ok=True)
     theme_dir = find_theme_directory(theme_name_or_path, theme_path_hint)
     if not theme_dir or not theme_dir.is_dir():
         return {}
 
     theme_id = sanitize_text(theme_dir.name, max_len=128)
-    cache_target_dir = ROLES_DIR / theme_id
+    cache_target_dir = get_roles_dir() / theme_id
     cache_target_dir.mkdir(parents=True, exist_ok=True)
 
     meta_file = cache_target_dir / "meta.json"
@@ -291,7 +301,7 @@ def get_theme_role_previews(theme_name_or_path, theme_path_hint=None):
 def get_all_theme_role_previews():
     results = {}
     candidates = []
-    search_roots = [LOCAL_ICONS, HOME / ".icons"]
+    search_roots = [get_local_icons_dir(), get_home() / ".icons"]
     xdg_data_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
     for d in xdg_data_dirs:
         if d.strip():

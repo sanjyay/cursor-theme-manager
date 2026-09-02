@@ -89,7 +89,7 @@ def is_cursor_theme_dir(dir_path_str: str) -> tuple[bool, str]:
 
 
 def list_directory(target_path_str: str) -> dict:
-    home = Path.home()
+    home = Path(os.environ.get("HOME", os.path.expanduser("~")))
     if not target_path_str:
         target_path_str = str(home / "Downloads")
 

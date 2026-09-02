@@ -30,7 +30,7 @@ from runtime_safety import (
     MAX_LEN_LICENSE
 )
 import secure_state
-import cleanup_engine
+import integration_manager
 import cursor_theming
 import file_browser
 
@@ -86,7 +86,8 @@ def has_hyprcursor(theme_dir: Path) -> bool:
 
 def get_preview_path(theme_dir: Path) -> str:
     base = theme_dir.name
-    cache_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "omarchy-cursor-switcher" / "previews"
+    home = Path(os.environ.get("HOME", os.path.expanduser("~")))
+    cache_dir = Path(os.environ.get("XDG_CACHE_HOME", str(home / ".cache"))) / "omarchy-cursor-switcher" / "previews"
     preview_png = cache_dir / f"{base}.png"
     if preview_png.is_file():
         return str(preview_png)
@@ -430,6 +431,19 @@ def run_apply(hypr: str, xcursor: str, theme_path: str, size: int, mode: str):
         sys.stderr.write("cursorctl: invalid XCursor theme name\n")
         sys.exit(1)
 
+    # 0. ATOMIC IMMUTABLE BASELINE CAPTURE BEFORE ANY SYSTEM MODIFICATION
+    if mode == "--commit":
+        st = secure_state.read_state()
+        existing_baseline = st.get("preCtmCursor") or st.get("originalCursor")
+        if not (existing_baseline and existing_baseline.get("captured")):
+            baseline = secure_state.capture_original_cursor()
+            st["preCtmCursor"] = baseline
+            st["originalCursor"] = baseline
+        st["cursorModifiedByCtm"] = True
+        if not secure_state.write_state(st):
+            sys.stderr.write("cursorctl: failed to durably persist pre-CTM cursor baseline; aborting apply.\n")
+            sys.exit(1)
+
     effective_hypr = run_ensure_hyprcursor(hypr, xcursor, theme_path)
 
     # 1. hyprctl setcursor
@@ -500,7 +514,7 @@ def run_apply(hypr: str, xcursor: str, theme_path: str, size: int, mode: str):
 
 def main():
     if len(sys.argv) < 2:
-        sys.stderr.write("Usage: cursorctl {discover|apply|ensure-hyprcursor|import|remove-imported|rename-imported|list-dir|choose-file|get-preview-roles|get-all-preview-roles|open-folder|state-read|state-write|integration-status|integration-install|integration-remove|snapshot-original-state|restore-original-state|deactivate|purge|audit-installation} ...\n")
+        sys.stderr.write("Usage: cursorctl {discover|apply|ensure-hyprcursor|import|remove-imported|rename-imported|list-dir|choose-file|get-preview-roles|get-all-preview-roles|open-folder|state-read|state-write|launcher-status|launcher-add|launcher-remove|launcher-dismiss-prompt} ...\n")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -593,108 +607,21 @@ def main():
         except Exception as exc:
             emit_bounded_json({"ok": False, "error": str(exc)}, exit_code=1)
 
-    elif cmd == "integration-status":
-        home, _, data_home, _ = cleanup_engine._get_home_dirs()
-        desktop_path = os.path.join(data_home, "applications", "omarchy-cursor-switcher.desktop")
-        launcher_path = os.path.join(home, ".local", "bin", "omarchy-cursor-switcher")
-        cleanup_path = os.path.join(data_home, "omarchy-cursor-switcher", "omarchy-cursor-switcher-cleanup")
-        installed = os.path.isfile(desktop_path) and os.path.isfile(launcher_path)
-        st = secure_state.read_state()
-        emit_bounded_json({
-            "ok": True,
-            "installed": installed,
-            "consent": bool(st.get("integrationConsent", False)),
-            "paths": [
-                desktop_path,
-                launcher_path,
-                cleanup_path,
-                os.path.join(data_home, "icons", "hicolor", "scalable", "apps", "omarchy-cursor-switcher.svg")
-            ]
-        })
+    elif cmd in ("launcher-status", "integration-status"):
+        res = integration_manager.get_status()
+        emit_bounded_json(res)
 
-    elif cmd in ("integration-install", "register-app"):
-        source = ""
-        i = 2
-        while i < len(sys.argv):
-            if sys.argv[i] == "--source" and i + 1 < len(sys.argv):
-                source = sys.argv[i+1]; i += 2
-            elif not sys.argv[i].startswith("--"):
-                source = sys.argv[i]; i += 1
-            else:
-                i += 1
-        res = cleanup_engine.install_integration(source)
+    elif cmd in ("launcher-add", "integration-enable", "integration-install", "register-app"):
+        res = integration_manager.enable_integration()
         emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
 
-    elif cmd in ("integration-remove", "unregister-app"):
-        res = cleanup_engine.remove_integration()
+    elif cmd in ("launcher-remove", "integration-disable", "integration-remove", "unregister-app"):
+        res = integration_manager.disable_integration()
         emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
 
-    elif cmd == "install-cleanup-helper":
-        # Legacy compat: installs integration helper
-        source = ""
-        i = 2
-        while i < len(sys.argv):
-            if sys.argv[i] == "--source" and i + 1 < len(sys.argv):
-                source = sys.argv[i+1]; i += 2
-            elif not sys.argv[i].startswith("--"):
-                source = sys.argv[i]; i += 1
-            else:
-                i += 1
-        home, _, data_home, _ = cleanup_engine._get_home_dirs()
-        target_dir = os.path.join(data_home, "omarchy-cursor-switcher")
-        src_file = os.path.join(source, "scripts", "omarchy-cursor-switcher-cleanup")
-        if os.path.isfile(src_file):
-            os.makedirs(target_dir, exist_ok=True)
-            for mod_name, mod_mode in [
-                ("omarchy-cursor-switcher-cleanup", 0o755),
-                ("cleanup_engine.py", 0o644),
-                ("runtime_safety.py", 0o644),
-                ("secure_state.py", 0o644)
-            ]:
-                s_path = os.path.join(source, "scripts", mod_name)
-                if os.path.isfile(s_path):
-                    t_path = os.path.join(target_dir, mod_name)
-                    tmp = t_path + f".tmp.{os.getpid()}"
-                    shutil.copy2(s_path, tmp)
-                    os.chmod(tmp, mod_mode)
-                    os.replace(tmp, t_path)
-            target_file = os.path.join(target_dir, "omarchy-cursor-switcher-cleanup")
-            emit_bounded_json({"ok": True, "installed": target_file})
-        else:
-            emit_bounded_json({"ok": False, "error": "Cleanup helper source not found"}, exit_code=1)
-
-    elif cmd == "snapshot-original-state":
-        res = cleanup_engine.snapshot_original_state()
-        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
-
-    elif cmd == "restore-original-state":
-        res = cleanup_engine.restore_original_state()
-        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
-
-    elif cmd == "deactivate":
-        res = cleanup_engine.deactivate()
-        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
-
-    elif cmd == "purge":
-        res = cleanup_engine.purge()
-        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
-
-    elif cmd == "on-destroy":
-        pdir = ""
-        i = 2
-        while i < len(sys.argv):
-            if sys.argv[i] == "--plugin-dir" and i + 1 < len(sys.argv):
-                pdir = sys.argv[i+1]; i += 2
-            elif not sys.argv[i].startswith("--"):
-                pdir = sys.argv[i]; i += 1
-            else:
-                i += 1
-        res = cleanup_engine.on_destroy(pdir)
-        emit_bounded_json(res, exit_code=0 if res.get("ok") else 1)
-
-    elif cmd == "audit-installation":
-        res = cleanup_engine.audit_installation()
-        emit_bounded_json(res, exit_code=0)
+    elif cmd in ("launcher-dismiss-prompt", "integration-dismiss-prompt", "dismiss-prompt"):
+        res = integration_manager.dismiss_prompt()
+        emit_bounded_json(res)
 
     # Forwarding to other sub-scripts with sys.argv preservation
     elif cmd == "import":

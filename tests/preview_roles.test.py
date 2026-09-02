@@ -18,18 +18,20 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 
 import sys
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(TEST_DIR))
 import cursor_theming
+from test_isolation import IsolatedTestCase
 
 
-class TestPreviewRoles(unittest.TestCase):
+class TestPreviewRoles(IsolatedTestCase):
     def setUp(self):
-        self.temp_cache = tempfile.mkdtemp(prefix="test_roles_cache_")
-        self.orig_roles_dir = cursor_theming.ROLES_DIR
-        cursor_theming.ROLES_DIR = Path(self.temp_cache)
+        super().setUp()
+        self.temp_cache = str(self.iso.xdg_cache / "roles")
+        cursor_theming._ROLES_DIR_OVERRIDE = Path(self.temp_cache)
 
     def tearDown(self):
-        cursor_theming.ROLES_DIR = self.orig_roles_dir
-        shutil.rmtree(self.temp_cache, ignore_errors=True)
+        cursor_theming._ROLES_DIR_OVERRIDE = None
+        super().tearDown()
 
     def test_01_adwaita_xcursor_resolves_distinct_roles(self):
         roles = cursor_theming.get_theme_role_previews("Adwaita")
@@ -43,6 +45,7 @@ class TestPreviewRoles(unittest.TestCase):
         hashes = {}
         for r in ["default", "pointer", "text", "move", "resize", "wait"]:
             p = roles[r]
+            self.assert_safe_path(p)
             self.assertTrue(os.path.isfile(p), f"Preview file missing: {p}")
             data = Path(p).read_bytes()
             hashes[r] = hashlib.md5(data).hexdigest()
@@ -73,6 +76,7 @@ class TestPreviewRoles(unittest.TestCase):
 
         roles = cursor_theming.get_theme_role_previews("WatchTheme", theme_path_hint=str(fixture_dir))
         self.assertIn("wait", roles, "Semantic wait must resolve from 'watch' alias")
+        self.assert_safe_path(roles["wait"])
         self.assertTrue(os.path.isfile(roles["wait"]))
 
     def test_04_unsupported_role_does_not_silently_fallback_to_default(self):

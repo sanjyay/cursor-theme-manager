@@ -6,10 +6,19 @@ Demonstrates:
 2. Process tree cancellation: Fake helpers ignoring SIGTERM, sleeping forever, forking children/grandchildren.
 3. Legacy state migration: Symlinks, FIFOs, oversize files (>64KB), malformed JSON, deep recursion rejection.
 4. Secure descriptor-held state directory: 0700 permissions, current-user ownership, symlink rejection.
-5. Integration transaction failure injection: Cases A, B, C, D (atomic rollback & accurate failure reporting).
-6. Restore safety: Invalid snapshot preservation (no destructive overwrites), strictly allowlisted variables.
-7. Plain-text UI & model sanitization: Control characters, hostile HTML/markup injection, length caps.
-8. Conversion & import cleanup: Cleanup of staging directories and process groups on failure.
+5. Consented Integration & Automatic Removal Lifecycle:
+   - Zero artifacts before consent.
+   - Declining creates zero persistent files.
+   - Transactional rollback on staging/systemctl failure.
+   - Foreign desktop entry collision refusal.
+   - Symlink substitution rejection.
+   - Watcher no-op when plugin directory exists.
+   - Watcher cleanup execution when plugin directory is missing.
+   - Idempotent cleanup execution.
+   - Baseline capture preservation across multiple applies.
+   - Imported cursor themes preservation.
+   - Clean reinstall after removal.
+6. Plain-text UI & model sanitization: Control characters, hostile HTML/markup injection, length caps.
 """
 
 import sys
@@ -31,8 +40,9 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import runtime_safety
 import secure_state
-import cleanup_engine
-import cursor_theming
+import integration_manager
+import cleanup_helper
+from test_isolation import IsolatedTestCase
 
 
 def is_pid_alive(pid: int) -> bool:
@@ -43,11 +53,10 @@ def is_pid_alive(pid: int) -> bool:
         return False
 
 
-class TestOutputLimitsAndProcessTree(unittest.TestCase):
-    """Verifies that exceeding byte limits or timeouts immediately kills the entire process group."""
+class TestProcessSupervisorSafety(IsolatedTestCase):
+    """Verifies that run_bounded enforces strict byte caps, timeouts, and process-group isolation."""
 
     def test_stdout_limit_plus_one_byte_kills_entire_process_tree(self):
-        # Helper script that creates child and grandchild processes, writes limit + 1 bytes, and loops
         pid_file = tempfile.mktemp(prefix="tree_pids_")
         helper_code = f"""
 import os, sys, time, multiprocessing
@@ -83,17 +92,17 @@ if __name__ == "__main__":
             stdout_limit=1024,
             timeout=5.0
         )
-        self.assertTrue(res.limit_exceeded, "Output limit was not flagged as exceeded")
+        self.assertTrue(res.limit_exceeded)
         self.assertFalse(res.ok)
         self.assertIn("exceeded limit", res.error.lower())
 
-        # Read spawned PIDs (parent, child, grandchild)
         time.sleep(0.2)
         if os.path.exists(pid_file):
-            with open(pid_file) as pf: pids = [int(p.strip()) for p in pf.read().splitlines() if p.strip().isdigit()]
+            with open(pid_file) as pf:
+                pids = [int(p.strip()) for p in pf.read().splitlines() if p.strip().isdigit()]
             os.unlink(pid_file)
             for pid in pids:
-                self.assertFalse(is_pid_alive(pid), f"PID {pid} in process tree was not terminated after stdout flood")
+                self.assertFalse(is_pid_alive(pid), f"PID {pid} was not terminated after stdout flood")
 
     def test_stderr_limit_plus_one_byte_kills_entire_process_tree(self):
         pid_file = tempfile.mktemp(prefix="tree_stderr_pids_")
@@ -136,7 +145,8 @@ if __name__ == "__main__":
 
         time.sleep(0.2)
         if os.path.exists(pid_file):
-            with open(pid_file) as pf: pids = [int(p.strip()) for p in pf.read().splitlines() if p.strip().isdigit()]
+            with open(pid_file) as pf:
+                pids = [int(p.strip()) for p in pf.read().splitlines() if p.strip().isdigit()]
             os.unlink(pid_file)
             for pid in pids:
                 self.assertFalse(is_pid_alive(pid), f"PID {pid} was not terminated after stderr flood")
@@ -168,27 +178,21 @@ while True:
 
         time.sleep(0.2)
         if os.path.exists(pid_file):
-            with open(pid_file) as pf: pid = int(pf.read().strip())
+            with open(pid_file) as pf:
+                pid = int(pf.read().strip())
             os.unlink(pid_file)
             self.assertFalse(is_pid_alive(pid), f"Process {pid} that ignored SIGTERM was not killed by SIGKILL")
 
 
-class TestLegacyStateMigrationAdversarial(unittest.TestCase):
+class TestLegacyStateMigrationAdversarial(IsolatedTestCase):
     """Verifies that legacy state migration strictly validates file type, ownership, size, and schema BEFORE parsing."""
 
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp(prefix="test_legacy_mig_")
-        self.orig_env = os.environ.copy()
-        os.environ["HOME"] = os.path.join(self.test_dir, "home")
-        os.environ["XDG_STATE_HOME"] = os.path.join(self.test_dir, "home", ".local", "state")
-        os.environ["XDG_CONFIG_HOME"] = os.path.join(self.test_dir, "config")
-        os.makedirs(os.environ["XDG_STATE_HOME"], exist_ok=True)
+        super().setUp()
         os.makedirs(os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy"), exist_ok=True)
 
     def tearDown(self):
-        os.environ.clear()
-        os.environ.update(self.orig_env)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
+        super().tearDown()
 
     def test_symlink_legacy_file_rejected(self):
         legacy_path = os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy", "cursor-switcher.json")
@@ -215,7 +219,7 @@ class TestLegacyStateMigrationAdversarial(unittest.TestCase):
             finally:
                 os.close(dir_fd)
         except AttributeError:
-            pass  # OS does not support mkfifo
+            pass
 
     def test_oversized_legacy_state_rejected(self):
         legacy_path = os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy", "cursor-switcher.json")
@@ -243,7 +247,6 @@ class TestLegacyStateMigrationAdversarial(unittest.TestCase):
 
     def test_deep_json_recursion_rejected(self):
         legacy_path = os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy", "cursor-switcher.json")
-        # Build 100 levels of nested JSON
         nested = '{"a": ' * 50 + '1' + '}' * 50
         with open(legacy_path, "w") as f:
             f.write(nested)
@@ -256,20 +259,14 @@ class TestLegacyStateMigrationAdversarial(unittest.TestCase):
             os.close(dir_fd)
 
 
-class TestStateDirectorySecurity(unittest.TestCase):
+class TestStateDirectorySecurity(IsolatedTestCase):
     """Verifies that the dedicated state directory is created with 0700, owned by user, verified with fstat, and held via FD."""
 
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp(prefix="test_state_sec_")
-        self.orig_env = os.environ.copy()
-        os.environ["HOME"] = os.path.join(self.test_dir, "home")
-        os.environ["XDG_STATE_HOME"] = os.path.join(self.test_dir, "home", ".local", "state")
-        os.makedirs(os.environ["XDG_STATE_HOME"], exist_ok=True)
+        super().setUp()
 
     def tearDown(self):
-        os.environ.clear()
-        os.environ.update(self.orig_env)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
+        super().tearDown()
 
     def test_state_dir_descriptor_held_and_0700(self):
         dir_fd, path = secure_state.open_held_state_dir()
@@ -286,8 +283,17 @@ class TestStateDirectorySecurity(unittest.TestCase):
             "version": 2,
             "theme": {"displayName": "TestTheme", "hyprcursor": "TestHypr", "xcursor": "TestX"},
             "size": 28,
-            "integrationConsent": True,
-            "integrationInstalled": True
+            "integrationPromptSeen": True,
+            "integrationEnabled": True,
+            "originalCursor": {
+                "captured": True,
+                "hyprcursorTheme": "OrigHypr",
+                "hyprcursorSize": 24,
+                "xcursorTheme": "OrigX",
+                "xcursorSize": 24,
+                "gtkTheme": "OrigX",
+                "gtkSize": 24
+            }
         }
         ok = secure_state.write_state(state)
         self.assertTrue(ok)
@@ -295,113 +301,296 @@ class TestStateDirectorySecurity(unittest.TestCase):
         read_back = secure_state.read_state()
         self.assertEqual(read_back["theme"]["displayName"], "TestTheme")
         self.assertEqual(read_back["size"], 28)
-        self.assertTrue(read_back["integrationConsent"])
+        self.assertTrue(read_back["integrationPromptSeen"])
+        self.assertTrue(read_back["integrationEnabled"])
+        self.assertTrue(read_back["originalCursor"]["captured"])
+        self.assertEqual(read_back["originalCursor"]["xcursorTheme"], "OrigX")
 
 
-class TestIntegrationTransactionsFailureInjection(unittest.TestCase):
-    """Verifies all failure injection cases for integration transactions."""
+class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
+    """Verifies security, rollback, and lifecycle properties of the consented integration."""
 
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp(prefix="test_tx_inj_")
-        self.orig_env = os.environ.copy()
-        os.environ["HOME"] = os.path.join(self.test_dir, "home")
-        os.environ["XDG_DATA_HOME"] = os.path.join(self.test_dir, "home", ".local", "share")
-        os.environ["XDG_STATE_HOME"] = os.path.join(self.test_dir, "home", ".local", "state")
-        os.environ["XDG_CONFIG_HOME"] = os.path.join(self.test_dir, "config")
-        os.makedirs(os.environ["XDG_DATA_HOME"], exist_ok=True)
-        os.makedirs(os.environ["XDG_STATE_HOME"], exist_ok=True)
-        os.makedirs(os.environ["XDG_CONFIG_HOME"], exist_ok=True)
+        super().setUp()
 
     def tearDown(self):
-        os.environ.clear()
-        os.environ.update(self.orig_env)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
+        super().tearDown()
 
-    def test_case_a_snapshot_fails_no_helper_no_desktop(self):
-        # Case A: Snapshot capture fails -> helper NOT installed, desktop entry NOT installed
-        fake_plugin = os.path.join(self.test_dir, "mock_plugin_a")
-        os.makedirs(fake_plugin, exist_ok=True)
-        # Missing scripts/omarchy-cursor-switcher
-        res = cleanup_engine.install_integration(fake_plugin)
-        self.assertFalse(res["ok"])
-        self.assertFalse(os.path.exists(os.path.join(os.environ["HOME"], ".local", "bin", "omarchy-cursor-switcher")))
-        self.assertFalse(os.path.exists(os.path.join(os.environ["XDG_DATA_HOME"], "applications", "omarchy-cursor-switcher.desktop")))
+    def test_zero_artifacts_before_consent(self):
+        paths = integration_manager.get_paths()
+        for key in ["desktop", "cleanup", "path_unit", "service_unit"]:
+            self.assertFalse(os.path.exists(paths[key]), f"Artifact '{paths[key]}' exists before user consent!")
 
-    def test_case_b_helper_install_fails_rollback_snapshot_and_no_desktop(self):
-        # Case B: Helper install fails -> new snapshot rolled back, desktop registration not attempted
-        fake_plugin = os.path.join(self.test_dir, "mock_plugin_b")
-        os.makedirs(os.path.join(fake_plugin, "scripts"), exist_ok=True)
-        os.makedirs(os.path.join(fake_plugin, "desktop"), exist_ok=True)
-        os.makedirs(os.path.join(fake_plugin, "icons"), exist_ok=True)
-
-        # Create read-only ~/.local/bin to trigger write failure
-        bin_dir = os.path.join(os.environ["HOME"], ".local", "bin")
-        os.makedirs(bin_dir, exist_ok=True)
-        os.chmod(bin_dir, 0o400)
-
-        # Create assets in fake_plugin
-        for f in ["omarchy-cursor-switcher", "omarchy-cursor-switcher-cleanup"]:
-            with open(os.path.join(fake_plugin, "scripts", f), "w") as fp:
-                fp.write("#!/bin/sh\n")
-        with open(os.path.join(fake_plugin, "desktop", "omarchy-cursor-switcher.desktop"), "w") as fp:
-            fp.write("[Desktop Entry]\n")
-        with open(os.path.join(fake_plugin, "icons", "omarchy-cursor-switcher.svg"), "w") as fp:
-            fp.write("<svg></svg>\n")
-
-        try:
-            res = cleanup_engine.install_integration(fake_plugin)
-            self.assertFalse(res["ok"])
-            self.assertTrue(res["rolled_back"])
-            self.assertEqual(res["stage"], "install_files")
-            self.assertFalse(os.path.exists(os.path.join(os.environ["XDG_DATA_HOME"], "applications", "omarchy-cursor-switcher.desktop")))
-        finally:
-            os.chmod(bin_dir, 0o755)
-
-    def test_case_c_install_succeeds_state_marked_correctly(self):
-        # Successful installation transaction
-        res = cleanup_engine.install_integration(str(ROOT))
+    def test_decline_creates_no_persistent_files(self):
+        res = integration_manager.dismiss_prompt()
         self.assertTrue(res["ok"])
+        paths = integration_manager.get_paths()
+        for key in ["desktop", "cleanup", "path_unit", "service_unit"]:
+            self.assertFalse(os.path.exists(paths[key]))
+        st = integration_manager.get_status()
+        self.assertFalse(st["enabled"])
+        self.assertTrue(st["promptSeen"])
+
+    def test_transactional_installation_success(self):
+        res = integration_manager.enable_integration()
+        self.assertTrue(res["ok"])
+        paths = integration_manager.get_paths()
+
+        self.assertTrue(os.path.isfile(paths["desktop"]))
+        self.assertTrue(os.path.isfile(paths["cleanup"]))
+        self.assertTrue(os.path.isfile(paths["path_unit"]))
+        self.assertTrue(os.path.isfile(paths["service_unit"]))
+
+        with open(paths["desktop"]) as f:
+            desktop_content = f.read()
+        self.assertIn("X-CursorThemeManager-Owned=true", desktop_content)
+        self.assertIn("Exec=omarchy-shell shell toggle sanjyay.cursor-theme-manager", desktop_content)
+
+    def test_transactional_rollback_on_failure_injection(self):
+        # Inject systemctl failure to force rollback
+        fail_bin = os.path.join(self.test_dir, "fail_bin")
+        os.makedirs(fail_bin, exist_ok=True)
+        with open(os.path.join(fail_bin, "systemctl"), "w") as f:
+            f.write("#!/bin/sh\nexit 1\n")
+        os.chmod(os.path.join(fail_bin, "systemctl"), 0o755)
+        os.environ["PATH"] = f"{fail_bin}:{os.environ.get('PATH', '')}"
+
+        res = integration_manager.enable_integration()
+        self.assertFalse(res["ok"])
+        self.assertIn("Integration installation failed and was rolled back", res["error"])
+
+        # Verify no artifacts survived the failed attempt
+        paths = integration_manager.get_paths()
+        for key in ["desktop", "cleanup", "path_unit", "service_unit"]:
+            self.assertFalse(os.path.exists(paths[key]), f"Artifact '{paths[key]}' survived failed installation!")
+
+    def test_foreign_desktop_file_collision_refusal(self):
+        paths = integration_manager.get_paths()
+        os.makedirs(os.path.dirname(paths["desktop"]), exist_ok=True)
+        with open(paths["desktop"], "w") as f:
+            f.write("[Desktop Entry]\nName=ForeignApp\nExec=firefox\n")
+
+        res = integration_manager.enable_integration()
+        self.assertFalse(res["ok"])
+        self.assertIn("not created by Cursor Theme Manager", res["error"])
+
+        with open(paths["desktop"]) as f:
+            self.assertIn("ForeignApp", f.read())
+
+    def test_foreign_desktop_file_removal_refusal(self):
+        paths = integration_manager.get_paths()
+        os.makedirs(os.path.dirname(paths["desktop"]), exist_ok=True)
+        with open(paths["desktop"], "w") as f:
+            f.write("[Desktop Entry]\nName=ForeignApp\nExec=firefox\n")
+
+        res = integration_manager.disable_integration()
+        self.assertFalse(res["ok"])
+        self.assertIn("not owned by Cursor Theme Manager", res["error"])
+        self.assertTrue(os.path.exists(paths["desktop"]))
+
+    def test_watcher_noop_when_plugin_directory_still_exists(self):
+        # Enable integration
+        integration_manager.enable_integration()
+        paths = integration_manager.get_paths()
+
+        # Create plugin directory to simulate active plugin
+        plugin_dir = os.path.join(os.environ["XDG_CONFIG_HOME"], "omarchy", "plugins", "sanjyay.cursor-theme-manager")
+        os.makedirs(plugin_dir, exist_ok=True)
+
+        # Run cleanup helper
+        res = runtime_safety.run_bounded([sys.executable, paths["cleanup"]], timeout=3.0)
+        self.assertTrue(res.ok)
+
+        # Verify nothing was deleted
+        self.assertTrue(os.path.exists(paths["desktop"]))
+        self.assertTrue(os.path.exists(paths["cleanup"]))
+        self.assertTrue(os.path.exists(paths["path_unit"]))
+
+    def test_idempotent_cleanup(self):
+        # Enable integration
+        integration_manager.enable_integration()
+        paths = integration_manager.get_paths()
+
+        # Plugin directory absent -> run cleanup once
+        res1 = runtime_safety.run_bounded([sys.executable, paths["cleanup"]], timeout=3.0)
+        self.assertTrue(res1.ok)
+
+        # Run cleanup helper script a second time (idempotence check)
+        cleanup_source = str(SCRIPTS_DIR / "cleanup_helper.py")
+        res2 = runtime_safety.run_bounded([sys.executable, cleanup_source], timeout=3.0)
+        self.assertTrue(res2.ok)
+
+
+
+    def test_explicit_theme_distinguished_from_unset_in_baseline(self):
+        # Case A: Variables unset
+        orig_unset = secure_state.validate_original_cursor({
+            "captured": True,
+            "hyprcursorThemeSet": False,
+            "hyprcursorTheme": None,
+            "xcursorThemeSet": False,
+            "xcursorTheme": None,
+            "gtkThemeSet": True,
+            "gtkTheme": "default",
+            "gtkSizeSet": True,
+            "gtkSize": 24
+        })
+        self.assertFalse(orig_unset["hyprcursorThemeSet"])
+        self.assertIsNone(orig_unset["hyprcursorTheme"])
+        self.assertFalse(orig_unset["xcursorThemeSet"])
+
+        # Case B: Variables explicitly set to Adwaita
+        orig_adwaita = secure_state.validate_original_cursor({
+            "captured": True,
+            "hyprcursorThemeSet": True,
+            "hyprcursorTheme": "Adwaita",
+            "xcursorThemeSet": True,
+            "xcursorTheme": "Adwaita",
+            "gtkThemeSet": True,
+            "gtkTheme": "Adwaita",
+            "gtkSizeSet": True,
+            "gtkSize": 24
+        })
+        self.assertTrue(orig_adwaita["hyprcursorThemeSet"])
+        self.assertEqual(orig_adwaita["hyprcursorTheme"], "Adwaita")
+
+    def test_invalid_theme_name_rejected_in_baseline(self):
+        hostile_cursor = secure_state.validate_original_cursor({
+            "captured": True,
+            "hyprcursorThemeSet": True,
+            "hyprcursorTheme": "Theme; rm -rf /",
+            "gtkSizeSet": True,
+            "gtkSize": 99999
+        })
+        self.assertIsNone(hostile_cursor["hyprcursorTheme"])
+        self.assertIsNone(hostile_cursor["gtkSize"])
+
+
+
+    def test_default_cursor_resolution_loop_detection_and_security(self):
+        # Create a loop in mock themes
+        loop_dir = os.path.join(self.test_dir, "icons")
+        os.makedirs(os.path.join(loop_dir, "ThemeA"), exist_ok=True)
+        os.makedirs(os.path.join(loop_dir, "ThemeB"), exist_ok=True)
+        with open(os.path.join(loop_dir, "ThemeA", "index.theme"), "w") as f:
+            f.write("[Icon Theme]\nInherits=ThemeB\n")
+        with open(os.path.join(loop_dir, "ThemeB", "index.theme"), "w") as f:
+            f.write("[Icon Theme]\nInherits=ThemeA\n")
+
+        resolved = secure_state.resolve_default_cursor_theme(roots=[loop_dir])
+        self.assertIsNone(resolved)
+
+    def test_live_restore_failure_preserves_baseline_and_state(self):
+        paths = integration_manager.get_paths()
+        res = integration_manager.enable_integration()
+        self.assertTrue(res["ok"])
+
+        # Set captured baseline and cursorModifiedByCtm=True
         st = secure_state.read_state()
-        self.assertTrue(st["integrationInstalled"])
-        self.assertTrue(st["integrationConsent"])
+        st["preCtmCursor"] = {
+            "captured": True,
+            "hyprcursorThemeSet": False,
+            "hyprcursorTheme": None,
+            "xcursorThemeSet": True,
+            "xcursorTheme": "Adwaita",
+            "xcursorSizeSet": True,
+            "xcursorSize": 24,
+            "gtkThemeSet": True,
+            "gtkTheme": "Adwaita",
+            "gtkSizeSet": True,
+            "gtkSize": 24,
+            "liveTheme": "Adwaita",
+            "liveSize": 24,
+            "liveBackend": "xcursor"
+        }
+        st["cursorModifiedByCtm"] = True
+        secure_state.write_state(st)
 
-    def test_case_d_partial_remove_reports_accurately(self):
-        # Install first
-        cleanup_engine.install_integration(str(ROOT))
-        # Remove
-        rem_res = cleanup_engine.remove_integration()
-        self.assertTrue(rem_res["ok"])
+        # Inject hyprctl failure
+        fail_bin = os.path.join(self.test_dir, "fail_bin")
+        os.makedirs(fail_bin, exist_ok=True)
+        with open(os.path.join(fail_bin, "hyprctl"), "w") as f:
+            f.write("#!/bin/sh\nexit 1\n")
+        os.chmod(os.path.join(fail_bin, "hyprctl"), 0o755)
+
+        # Run cleanup helper with failing hyprctl
+        res_fail = runtime_safety.run_bounded([sys.executable, paths["cleanup"]], env={**os.environ, "PATH": f"{fail_bin}:{os.environ.get('PATH', '')}"}, timeout=3.0)
+        self.assertFalse(res_fail.ok)
+        self.assertIn("critical failure", res_fail.stderr)
+
+        # Ensure state file and units are preserved for retry
+        self.assertTrue(os.path.exists(paths["cleanup"]))
+        self.assertTrue(os.path.exists(paths["path_unit"]))
+        state_file = os.path.join(os.environ["XDG_STATE_HOME"], "cursor-theme-manager", "state.json")
+        self.assertTrue(os.path.exists(state_file))
+
+
+
+    def test_baseline_preserved_across_qml_state_writes(self):
+        # Step 1: Initial state with baseline
         st = secure_state.read_state()
-        self.assertFalse(st["integrationInstalled"])
+        st["preCtmCursor"] = {
+            "captured": True,
+            "hyprcursorThemeSet": False,
+            "hyprcursorTheme": None,
+            "xcursorThemeSet": True,
+            "xcursorTheme": "Nordzy",
+            "xcursorSizeSet": True,
+            "xcursorSize": 28,
+            "gtkThemeSet": True,
+            "gtkTheme": "Nordzy",
+            "gtkSizeSet": True,
+            "gtkSize": 28,
+            "liveTheme": "Nordzy",
+            "liveSize": 28,
+            "liveBackend": "xcursor"
+        }
+        st["cursorModifiedByCtm"] = True
+        secure_state.write_state(st)
 
+        # Step 2: Simulate QML state write without preCtmCursor
+        qml_state = {
+            "version": 2,
+            "theme": {"displayName": "Banana", "xcursor": "Banana"},
+            "size": 80,
+            "importedThemes": [],
+            "integrationPromptSeen": True,
+            "integrationEnabled": True
+        }
+        secure_state.write_state(qml_state)
 
-class TestRestoreSafety(unittest.TestCase):
-    """Verifies that invalid snapshot data NEVER causes broad configuration overwrites."""
+        # Step 3: Read back state and verify preCtmCursor was NOT clobbered
+        read_back = secure_state.read_state()
+        self.assertIsNotNone(read_back.get("preCtmCursor"))
+        self.assertTrue(read_back["preCtmCursor"]["captured"])
+        self.assertEqual(read_back["preCtmCursor"]["liveTheme"], "Nordzy")
+        self.assertEqual(read_back["preCtmCursor"]["liveSize"], 28)
+        self.assertTrue(read_back["cursorModifiedByCtm"])
 
-    def setUp(self):
-        self.test_dir = tempfile.mkdtemp(prefix="test_restore_safety_")
-        self.orig_env = os.environ.copy()
-        os.environ["HOME"] = os.path.join(self.test_dir, "home")
-        os.environ["XDG_STATE_HOME"] = os.path.join(self.test_dir, "home", ".local", "state")
-        os.environ["XDG_CONFIG_HOME"] = os.path.join(self.test_dir, "config")
-        os.makedirs(os.environ["XDG_STATE_HOME"], exist_ok=True)
-        os.makedirs(os.environ["XDG_CONFIG_HOME"], exist_ok=True)
+    def test_cleanup_fails_if_cursor_modified_but_baseline_missing(self):
+        paths = integration_manager.get_paths()
+        res = integration_manager.enable_integration()
+        self.assertTrue(res["ok"])
 
-    def tearDown(self):
-        os.environ.clear()
-        os.environ.update(self.orig_env)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
+        # Manually write state with cursorModifiedByCtm=True but no preCtmCursor
+        state_file = os.path.join(os.environ["XDG_STATE_HOME"], "cursor-theme-manager", "state.json")
+        with open(state_file, "w") as f:
+            f.write(json.dumps({
+                "version": 2,
+                "cursorModifiedByCtm": True,
+                "preCtmCursor": None
+            }))
 
-    def test_invalid_snapshot_preserves_current_state_without_overwrites(self):
-        # Corrupt/empty snapshot file
-        snap_path = os.path.join(os.environ["XDG_STATE_HOME"], "cursor-theme-manager", "snapshot.json")
-        os.makedirs(os.path.dirname(snap_path), exist_ok=True)
-        with open(snap_path, "w") as f:
-            f.write('{"invalid": true}')
+        # Run cleanup helper
+        res_clean = runtime_safety.run_bounded([sys.executable, paths["cleanup"]], timeout=3.0)
+        self.assertFalse(res_clean.ok)
+        self.assertIn("critical error", res_clean.stderr)
+        self.assertIn("preCtmCursor baseline is missing", res_clean.stderr)
 
-        res = cleanup_engine.restore_original_state()
-        self.assertFalse(res["ok"], "Restore with invalid snapshot must return ok: False")
-        self.assertIn("preserved current environment", res["error"])
+        # Ensure state file and units are preserved for recovery
+        self.assertTrue(os.path.exists(state_file))
+        self.assertTrue(os.path.exists(paths["cleanup"]))
+        self.assertTrue(os.path.exists(paths["path_unit"]))
 
 
 class TestPlainTextAndModelSanitization(unittest.TestCase):

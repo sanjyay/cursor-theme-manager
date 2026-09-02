@@ -19,22 +19,16 @@ IMPORT_SCRIPT = os.path.join(ROOT_DIR, "scripts", "cursor-import.py")
 CURSORCTL = os.path.join(ROOT_DIR, "scripts", "cursorctl")
 
 
-class TestCursorImportSecurity(unittest.TestCase):
-    def setUp(self):
-        self.test_dir = tempfile.mkdtemp(prefix="cs-test-import-")
-        self.orig_env = os.environ.copy()
-        os.environ["HOME"] = self.test_dir
-        os.environ["XDG_DATA_HOME"] = os.path.join(self.test_dir, ".local", "share")
-        os.environ["XDG_CONFIG_HOME"] = os.path.join(self.test_dir, ".config")
-        os.environ["XDG_CACHE_HOME"] = os.path.join(self.test_dir, ".cache")
+from test_isolation import IsolatedTestCase
 
-        os.makedirs(os.path.join(self.test_dir, ".local", "share", "icons"), exist_ok=True)
+class TestCursorImportSecurity(IsolatedTestCase):
+    def setUp(self):
+        super().setUp()
+        os.makedirs(str(self.iso.user_icons), exist_ok=True)
         os.makedirs(os.path.join(self.test_dir, ".config", "omarchy"), exist_ok=True)
 
     def tearDown(self):
-        os.environ.clear()
-        os.environ.update(self.orig_env)
-        shutil.rmtree(self.test_dir, ignore_errors=True)
+        super().tearDown()
 
     def create_mock_xcursor(self, name="TestXCursor", with_license=True, license_text=None):
         theme_dir = os.path.join(self.test_dir, "mock_src", name)
@@ -78,7 +72,7 @@ class TestCursorImportSecurity(unittest.TestCase):
 
     def test_01_valid_xcursor_directory_import(self):
         src = self.create_mock_xcursor("ValidXCursor")
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0, f"Import failed: {res.stderr}")
         data = json.loads(res.stdout)
         self.assertTrue(data.get("ok"))
@@ -93,7 +87,7 @@ class TestCursorImportSecurity(unittest.TestCase):
 
     def test_02_valid_hyprcursor_directory_import(self):
         src = self.create_mock_hyprcursor("ValidHypr")
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0, f"Import failed: {res.stderr}")
         data = json.loads(res.stdout)
         self.assertTrue(data.get("ok"))
@@ -114,7 +108,7 @@ class TestCursorImportSecurity(unittest.TestCase):
         with open(os.path.join(src, "index.theme"), "w") as f:
             f.write("[Icon Theme]\nName=MixedTheme\n")
 
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0, f"Import failed: {res.stderr}")
         data = json.loads(res.stdout)
         self.assertTrue(data.get("ok"))
@@ -129,7 +123,7 @@ class TestCursorImportSecurity(unittest.TestCase):
         with open(os.path.join(icon_dir, "index.theme"), "w") as f:
             f.write("[Icon Theme]\nName=JustIcons\nDirectories=apps/scalable\n")
 
-        res = subprocess.run([CURSORCTL, "import", "--source", icon_dir], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", icon_dir], capture_output=True, text=True, env=self.env)
         self.assertNotEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertFalse(data.get("ok"))
@@ -139,7 +133,7 @@ class TestCursorImportSecurity(unittest.TestCase):
         # Theme with empty cursors directory
         empty_dir = os.path.join(self.test_dir, "empty_cursor_theme")
         os.makedirs(os.path.join(empty_dir, "cursors"), exist_ok=True)
-        res = subprocess.run([CURSORCTL, "import", "--source", empty_dir], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", empty_dir], capture_output=True, text=True, env=self.env)
         self.assertNotEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertFalse(data.get("ok"))
@@ -147,7 +141,7 @@ class TestCursorImportSecurity(unittest.TestCase):
 
     def test_06_unsafe_name_normalized(self):
         src = self.create_mock_xcursor("Evil Name /../ with $$ special @ chars!")
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertTrue(data.get("ok"))
@@ -160,13 +154,13 @@ class TestCursorImportSecurity(unittest.TestCase):
 
     def test_07_collision_does_not_overwrite_existing_theme(self):
         # Create an existing system/user theme in ~/.local/share/icons/Adwaita
-        adwaita_path = os.path.join(self.test_dir, ".local", "share", "icons", "Adwaita")
+        adwaita_path = str(self.iso.user_icons / "Adwaita")
         os.makedirs(os.path.join(adwaita_path, "cursors"), exist_ok=True)
         with open(os.path.join(adwaita_path, "cursors", "default"), "w") as f:
             f.write("Original Adwaita")
 
         src = self.create_mock_xcursor("Adwaita")
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertTrue(data.get("ok"))
@@ -174,14 +168,14 @@ class TestCursorImportSecurity(unittest.TestCase):
         with open(os.path.join(adwaita_path, "cursors", "default"), "r") as f:
             self.assertEqual(f.read(), "Original Adwaita")
         # Installed as namespaced directory
-        self.assertTrue(data["theme"]["path"].startswith(os.path.join(self.test_dir, ".local", "share", "icons", "CursorSwitcher-Imported-Adwaita-")))
+        self.assertTrue(data["theme"]["path"].startswith(str(self.iso.user_icons / "CursorSwitcher-Imported-Adwaita-")))
 
     def test_08_internal_symlink_allowed(self):
         src = self.create_mock_xcursor("InternalSymlinkTheme")
         # Internal symlink within theme (pointer -> default)
         os.symlink("default", os.path.join(src, "cursors", "pointer"))
 
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertTrue(data.get("ok"))
@@ -191,7 +185,7 @@ class TestCursorImportSecurity(unittest.TestCase):
         # Add escaping symlink
         os.symlink("/etc/passwd", os.path.join(src, "cursors", "evil_link"))
 
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertNotEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertFalse(data.get("ok"))
@@ -199,13 +193,13 @@ class TestCursorImportSecurity(unittest.TestCase):
 
     def test_10_same_hash_not_duplicated(self):
         src = self.create_mock_xcursor("DedupeCursor")
-        res1 = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res1 = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res1.returncode, 0)
         data1 = json.loads(res1.stdout)
         self.assertFalse(data1.get("alreadyImported"))
 
         # Second import of identical content
-        res2 = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res2 = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res2.returncode, 0)
         data2 = json.loads(res2.stdout)
         self.assertTrue(data2.get("alreadyImported"))
@@ -213,7 +207,7 @@ class TestCursorImportSecurity(unittest.TestCase):
 
     def test_11_safe_removal_of_imported_theme(self):
         src = self.create_mock_xcursor("RemovableCursor")
-        res_import = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res_import = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res_import.returncode, 0)
         data = json.loads(res_import.stdout)
         theme_id = data["theme"]["id"]
@@ -221,7 +215,7 @@ class TestCursorImportSecurity(unittest.TestCase):
         self.assertTrue(os.path.isdir(installed_path))
 
         # Remove imported theme
-        res_remove = subprocess.run([CURSORCTL, "remove-imported", "--id", theme_id], capture_output=True, text=True)
+        res_remove = subprocess.run([CURSORCTL, "remove-imported", "--id", theme_id], capture_output=True, text=True, env=self.env)
         self.assertEqual(res_remove.returncode, 0)
         remove_data = json.loads(res_remove.stdout)
         self.assertTrue(remove_data.get("ok"))
@@ -229,7 +223,7 @@ class TestCursorImportSecurity(unittest.TestCase):
 
     def test_12_refusal_to_remove_system_theme(self):
         # Attempt to remove non-imported theme
-        res = subprocess.run([CURSORCTL, "remove-imported", "--id", "Adwaita"], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "remove-imported", "--id", "Adwaita"], capture_output=True, text=True, env=self.env)
         self.assertNotEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertFalse(data.get("ok"))
@@ -237,7 +231,7 @@ class TestCursorImportSecurity(unittest.TestCase):
 
     def test_13_unknown_license_remains_unknown(self):
         src = self.create_mock_xcursor("UnknownLicenseCursor", with_license=True, license_text="Custom proprietary license text with no standard tags")
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertEqual(data["theme"]["license"], "Unknown")
@@ -248,7 +242,7 @@ class TestCursorImportSecurity(unittest.TestCase):
         with tarfile.open(tar_path, "w:gz") as tf:
             tf.add(src, arcname="TarCursor")
 
-        res = subprocess.run([CURSORCTL, "import", "--source", tar_path], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", tar_path], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0, f"Tar import failed: {res.stderr}")
         data = json.loads(res.stdout)
         self.assertTrue(data.get("ok"))
@@ -264,7 +258,7 @@ class TestCursorImportSecurity(unittest.TestCase):
                     rel = os.path.relpath(full, src)
                     zf.write(full, arcname=os.path.join("ZipHypr", rel))
 
-        res = subprocess.run([CURSORCTL, "import", "--source", zip_path], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", zip_path], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0, f"Zip import failed: {res.stderr}")
         data = json.loads(res.stdout)
         self.assertTrue(data.get("ok"))
@@ -278,7 +272,7 @@ class TestCursorImportSecurity(unittest.TestCase):
             ti.size = len(payload)
             tf.addfile(ti, fileobj=io.BytesIO(payload))
 
-        res = subprocess.run([CURSORCTL, "import", "--source", tar_path], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", tar_path], capture_output=True, text=True, env=self.env)
         self.assertNotEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertFalse(data.get("ok"))
@@ -293,7 +287,7 @@ class TestCursorImportSecurity(unittest.TestCase):
             ti.size = len(payload)
             tf.addfile(ti, fileobj=io.BytesIO(payload))
 
-        res = subprocess.run([CURSORCTL, "import", "--source", tar_path], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", tar_path], capture_output=True, text=True, env=self.env)
         self.assertNotEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertFalse(data.get("ok"))
@@ -306,7 +300,7 @@ class TestCursorImportSecurity(unittest.TestCase):
             ti.linkname = "../../etc/shadow"
             tf.addfile(ti)
 
-        res = subprocess.run([CURSORCTL, "import", "--source", tar_path], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", tar_path], capture_output=True, text=True, env=self.env)
         self.assertNotEqual(res.returncode, 0)
         data = json.loads(res.stdout)
         self.assertFalse(data.get("ok"))
@@ -316,16 +310,16 @@ class TestCursorImportSecurity(unittest.TestCase):
         for i in range(100):
             with open(os.path.join(src, "cursors", f"extra_{i}"), "w") as f:
                 f.write("dummy")
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0)
 
     def test_20_discovery_detects_imported_theme(self):
         src = self.create_mock_xcursor("DiscoveredImport")
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0)
 
         # Run discovery
-        res_disc = subprocess.run([CURSORCTL, "discover"], capture_output=True, text=True)
+        res_disc = subprocess.run([CURSORCTL, "discover"], capture_output=True, text=True, env=self.env)
         self.assertEqual(res_disc.returncode, 0)
         disc_data = json.loads(res_disc.stdout)
         imported_entries = [t for t in disc_data["themes"] if t.get("imported") is True]
@@ -334,19 +328,19 @@ class TestCursorImportSecurity(unittest.TestCase):
 
     def test_21_rename_imported_theme(self):
         src = self.create_mock_xcursor("InitialName")
-        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True)
+        res = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0)
         imported_id = json.loads(res.stdout)["theme"]["id"]
 
         # Rename
-        res_rename = subprocess.run([CURSORCTL, "rename-imported", "--id", imported_id, "--name", "BrandNewName"], capture_output=True, text=True)
+        res_rename = subprocess.run([CURSORCTL, "rename-imported", "--id", imported_id, "--name", "BrandNewName"], capture_output=True, text=True, env=self.env)
         self.assertEqual(res_rename.returncode, 0)
         rename_data = json.loads(res_rename.stdout)
         self.assertTrue(rename_data.get("ok"))
         self.assertEqual(rename_data.get("displayName"), "BrandNewName")
 
         # Discover should immediately reflect BrandNewName
-        res_disc = subprocess.run([CURSORCTL, "discover"], capture_output=True, text=True)
+        res_disc = subprocess.run([CURSORCTL, "discover"], capture_output=True, text=True, env=self.env)
         disc_data = json.loads(res_disc.stdout)
         renamed_theme = next((t for t in disc_data["themes"] if t["id"] == imported_id), None)
         self.assertIsNotNone(renamed_theme)

@@ -14,17 +14,17 @@ TEST_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = TEST_DIR.parent
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(TEST_DIR))
 
 import file_browser
+from test_isolation import IsolatedTestCase
 
 
-class TestFileBrowser(unittest.TestCase):
+class TestFileBrowser(IsolatedTestCase):
     def setUp(self):
-        self.temp_dir = tempfile.mkdtemp(prefix="test_file_browser_")
-        self.root = Path(self.temp_dir)
-
-    def tearDown(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        super().setUp()
+        self.root = self.iso.home / "Downloads"
+        self.root.mkdir(parents=True, exist_ok=True)
 
     def test_01_detects_cursor_archives(self):
         # Create test archives with supported extensions

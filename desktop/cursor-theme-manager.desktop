@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Cursor Theme Manager
+GenericName=Cursor Theme
+Comment=Preview and manage cursor themes
+Exec=omarchy-shell shell toggle sanjyay.cursor-theme-manager
+Icon=input-mouse
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=cursor;theme;mouse;pointer;hyprcursor;xcursor;
+X-CursorThemeManager-Owned=true

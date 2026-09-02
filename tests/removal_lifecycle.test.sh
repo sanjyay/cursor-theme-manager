@@ -11,122 +11,168 @@ export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_CONFIG_HOME="$TEST_DIR/config"
 export XDG_STATE_HOME="$HOME/.local/state"
 export XDG_CACHE_HOME="$TEST_DIR/cache"
-export XDG_DATA_DIRS="$TEST_DIR/system/share"
+export XDG_DATA_DIRS="$TEST_DIR/usr/share"
 
-MOCK_BIN="$TEST_DIR/mock-bin"
-mkdir -p "$XDG_DATA_HOME/icons/CustomTheme/cursors" \
-  "$XDG_DATA_DIRS/icons/SystemTheme/hyprcursors" \
-  "$MOCK_BIN" \
-  "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
+mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
-cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_HOME/icons/CustomTheme/cursors/left_ptr"
-printf "[Icon Theme]\nName=CustomTheme\n" > "$XDG_DATA_HOME/icons/CustomTheme/index.theme"
+MOCK_BIN="$TEST_DIR/mock_bin"
+mkdir -p "$MOCK_BIN"
+export MOCK_LOG="$TEST_DIR/mock_calls.log"
+touch "$MOCK_LOG"
 
-MOCK_LOG="$TEST_DIR/mock_calls.log"
-
-cat <<EOF > "$MOCK_BIN/gsettings"
+cat <<'EOF_GS' > "$MOCK_BIN/gsettings"
 #!/bin/sh
-echo "gsettings \$*" >> "$MOCK_LOG"
-if [ "\$1" = "get" ] && [ "\$3" = "cursor-theme" ]; then echo "'CustomTheme'"; exit 0; fi
-if [ "\$1" = "get" ] && [ "\$3" = "cursor-size" ]; then echo "48"; exit 0; fi
+echo "gsettings $*" >> "$MOCK_LOG"
+if [ "$1" = "get" ] && [ "$3" = "cursor-theme" ]; then echo "'Bibata-Modern-Ice'"; exit 0; fi
+if [ "$1" = "get" ] && [ "$3" = "cursor-size" ]; then echo "32"; exit 0; fi
 exit 0
-EOF
+EOF_GS
 chmod +x "$MOCK_BIN/gsettings"
 
-cat <<EOF > "$MOCK_BIN/systemctl"
+cat <<'EOF_SYS' > "$MOCK_BIN/systemctl"
 #!/bin/sh
-echo "systemctl \$*" >> "$MOCK_LOG"
-if [ "\$1" = "--user" ] && [ "\$2" = "show-environment" ]; then
-  echo "XCURSOR_THEME=CustomTheme"
-  echo "XCURSOR_SIZE=48"
+echo "systemctl $*" >> "$MOCK_LOG"
+if [ "$1" = "--user" ] && [ "$2" = "show-environment" ]; then
+  echo "XCURSOR_THEME=Bibata-Modern-Ice"
+  echo "XCURSOR_SIZE=32"
   exit 0
 fi
 exit 0
-EOF
+EOF_SYS
 chmod +x "$MOCK_BIN/systemctl"
 
-cat <<EOF > "$MOCK_BIN/hyprctl"
+cat <<'EOF_DBUS' > "$MOCK_BIN/dbus-update-activation-environment"
 #!/bin/sh
-echo "hyprctl \$*" >> "$MOCK_LOG"
+echo "dbus-update-activation-environment $*" >> "$MOCK_LOG"
 exit 0
-EOF
-chmod +x "$MOCK_BIN/hyprctl"
-
-cat <<EOF > "$MOCK_BIN/dbus-update-activation-environment"
-#!/bin/sh
-echo "dbus-update-activation-environment \$*" >> "$MOCK_LOG"
-exit 0
-EOF
+EOF_DBUS
 chmod +x "$MOCK_BIN/dbus-update-activation-environment"
+
+cat <<'EOF_HYPR' > "$MOCK_BIN/hyprctl"
+#!/bin/sh
+echo "hyprctl $*" >> "$MOCK_LOG"
+exit 0
+EOF_HYPR
+chmod +x "$MOCK_BIN/hyprctl"
 
 PATH="$MOCK_BIN:/usr/bin:/bin"
 
-# 1. Step 1: Initialize plugin environment
-PLUGIN_DIR="$TEST_DIR/mock_plugins/sanjyay.cursor-theme-manager"
+# Create mock themes
+mkdir -p "$XDG_DATA_HOME/icons/Bibata-Modern-Ice/cursors"
+cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_HOME/icons/Bibata-Modern-Ice/cursors/default"
+printf "[Icon Theme]\nName=Bibata-Modern-Ice\n" > "$XDG_DATA_HOME/icons/Bibata-Modern-Ice/index.theme"
+
+mkdir -p "$XDG_DATA_HOME/icons/Banana/cursors" "$XDG_DATA_HOME/icons/Nordzy/cursors"
+cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_HOME/icons/Banana/cursors/default"
+cp /usr/share/icons/Adwaita/cursors/left_ptr "$XDG_DATA_HOME/icons/Nordzy/cursors/default"
+printf "[Icon Theme]\nName=Banana\n" > "$XDG_DATA_HOME/icons/Banana/index.theme"
+printf "[Icon Theme]\nName=Nordzy\n" > "$XDG_DATA_HOME/icons/Nordzy/index.theme"
+
+# 1. Fresh state: verify ZERO external artifacts exist before consent
+STATUS_INIT=$(PATH="$PATH" "$ROOT/scripts/cursorctl" integration-status)
+python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["enabled"] == False; assert data["promptSeen"] == False' "$STATUS_INIT"
+[[ ! -e "$XDG_DATA_HOME/applications/cursor-theme-manager.desktop" ]]
+[[ ! -e "$HOME/.local/libexec/cursor-theme-manager/cleanup" ]]
+[[ ! -e "$XDG_CONFIG_HOME/systemd/user/cursor-theme-manager-cleanup.path" ]]
+[[ ! -e "$XDG_CONFIG_HOME/systemd/user/cursor-theme-manager-cleanup.service" ]]
+
+# 2. Enable Integration (User explicitly consents)
+ENABLE_RES=$(PATH="$PATH" "$ROOT/scripts/cursorctl" integration-enable)
+python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["ok"] == True; assert data["enabled"] == True' "$ENABLE_RES"
+
+DESKTOP_ENTRY="$XDG_DATA_HOME/applications/cursor-theme-manager.desktop"
+CLEANUP_EXE="$HOME/.local/libexec/cursor-theme-manager/cleanup"
+PATH_UNIT="$XDG_CONFIG_HOME/systemd/user/cursor-theme-manager-cleanup.path"
+SERVICE_UNIT="$XDG_CONFIG_HOME/systemd/user/cursor-theme-manager-cleanup.service"
+
+[[ -f "$DESKTOP_ENTRY" ]]
+[[ -x "$CLEANUP_EXE" ]]
+[[ -f "$PATH_UNIT" ]]
+[[ -f "$SERVICE_UNIT" ]]
+
+# Verify integration enabled, cursorModifiedByCtm is False before apply
+STATE_FILE="$XDG_STATE_HOME/cursor-theme-manager/state.json"
+[[ -f "$STATE_FILE" ]]
+
+python3 -c "
+import json
+with open('$STATE_FILE') as f: data = json.load(f)
+assert data.get('cursorModifiedByCtm', False) == False
+"
+
+# 3. Simulate multiple theme applies: Banana / 80, Nordzy / 48, Banana / 24
+PATH="$PATH" "$ROOT/scripts/cursorctl" apply --hyprcursor - --xcursor Banana --size 80 --commit
+
+# Verify baseline was captured atomically with first apply: Bibata-Modern-Ice / 32
+python3 -c "
+import json
+with open('$STATE_FILE') as f: data = json.load(f)
+assert data.get('cursorModifiedByCtm') == True
+c = data.get('preCtmCursor') or data.get('originalCursor')
+assert c['captured'] == True
+assert c['xcursorTheme'] == 'Bibata-Modern-Ice'
+assert c['xcursorSize'] == 32
+assert c['liveTheme'] == 'Bibata-Modern-Ice'
+assert c['liveSize'] == 32
+" 
+PATH="$PATH" "$ROOT/scripts/cursorctl" apply --hyprcursor - --xcursor Nordzy --size 48 --commit
+PATH="$PATH" "$ROOT/scripts/cursorctl" apply --hyprcursor - --xcursor Banana --size 24 --commit
+
+# Assert baseline is IMMUTABLE and has NOT changed from Bibata-Modern-Ice / 32!
+python3 -c "
+import json
+with open('$STATE_FILE') as f: data = json.load(f)
+c = data.get('preCtmCursor') or data.get('originalCursor')
+assert c['xcursorTheme'] == 'Bibata-Modern-Ice'
+assert c['xcursorSize'] == 32
+assert c['liveTheme'] == 'Bibata-Modern-Ice'
+assert c['liveSize'] == 32
+"
+
+# 4. Create an imported cursor theme
+IMPORTED_THEME_DIR="$XDG_DATA_HOME/icons/CursorSwitcher-Imported-MyUserTheme"
+mkdir -p "$IMPORTED_THEME_DIR/cursors"
+touch "$IMPORTED_THEME_DIR/cursors/default"
+echo "1.0" > "$IMPORTED_THEME_DIR/.omarchy-cursor-switcher-imported"
+
+# 5. Test Watcher No-Op while plugin directory still exists
+PLUGIN_DIR="$XDG_CONFIG_HOME/omarchy/plugins/sanjyay.cursor-theme-manager"
 mkdir -p "$PLUGIN_DIR"
-cp -a "$ROOT"/. "$PLUGIN_DIR"/
 
-"$PLUGIN_DIR/scripts/cursorctl" snapshot-original-state
-"$PLUGIN_DIR/scripts/cursorctl" install-cleanup-helper --source "$PLUGIN_DIR"
-"$PLUGIN_DIR/scripts/cursorctl" register-app --source "$PLUGIN_DIR"
-"$PLUGIN_DIR/scripts/cursorctl" apply --hyprcursor CustomTheme --xcursor CustomTheme --size 96 --commit
+PATH="$PATH" "$CLEANUP_EXE"
+# Verify nothing was deleted
+[[ -f "$DESKTOP_ENTRY" ]]
+[[ -f "$CLEANUP_EXE" ]]
+[[ -f "$STATE_FILE" ]]
 
-# Verify snapshot recorded CustomTheme and 48px, with absent HYPRCURSOR
-SNAPSHOT_FILE="$XDG_STATE_HOME/cursor-theme-manager/snapshot.json"
-[[ -f "$SNAPSHOT_FILE" ]]
+# 6. Test Automatic Removal (simulating omarchy plugin remove)
+rm -rf "$PLUGIN_DIR"
 
-python3 - "$SNAPSHOT_FILE" <<'PY_INNER'
-import json, sys
-snap = json.load(open(sys.argv[1]))
-assert snap["version"] == 2
-assert snap["gtkTheme"]["present"] == True and snap["gtkTheme"]["value"] == "CustomTheme"
-assert snap["gtkSize"]["present"] == True and snap["gtkSize"]["value"] == 48
-env = snap["systemdEnvironment"]
-assert env["XCURSOR_THEME"] == {"present": True, "value": "CustomTheme"}
-assert env["XCURSOR_SIZE"] == {"present": True, "value": "48"}
-assert env["HYPRCURSOR_THEME"]["present"] == False
-assert env["HYPRCURSOR_SIZE"]["present"] == False
-PY_INNER
+# Execute cleanup helper (as triggered by systemd user service)
+PATH="$PATH" "$CLEANUP_EXE"
 
-# Verify active artifacts
-AUDIT_ACTIVE=$("$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup" audit-installation)
-python3 -c "import sys, json; rep = json.loads(sys.argv[1]); assert rep['is_clean'] == False; assert rep['desktop_entry'] == True" "$AUDIT_ACTIVE"
-
-# 2. Test DISABLE lifecycle (plugin dir still exists)
-# on-destroy should deactivate cursor, unregister app, but keep snapshot & state
-"$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup" on-destroy --plugin-dir "$PLUGIN_DIR"
-
-[[ ! -e "$HOME/.local/bin/omarchy-cursor-switcher" ]]
-[[ ! -e "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
-[[ ! -e "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg" ]]
+# 7. Verify all CTM integration artifacts and state are removed
+[[ ! -e "$DESKTOP_ENTRY" ]]
+[[ ! -e "$CLEANUP_EXE" ]]
+[[ ! -e "$HOME/.local/libexec/cursor-theme-manager" ]]
+[[ ! -e "$PATH_UNIT" ]]
+[[ ! -e "$SERVICE_UNIT" ]]
+[[ ! -e "$STATE_FILE" ]]
+[[ ! -e "$XDG_STATE_HOME/cursor-theme-manager" ]]
 [[ ! -e "$XDG_CONFIG_HOME/uwsm/env.d/90-omarchy-cursor-switcher" ]]
 [[ ! -e "$XDG_CONFIG_HOME/uwsm/env-hyprland.d/90-omarchy-cursor-switcher" ]]
 
-# State & snapshot must remain intact during simple disable
-[[ -f "$SNAPSHOT_FILE" ]]
+# 8. Assert Original Cursor was restored to Bibata-Modern-Ice / 32 via hyprctl & gsettings & systemctl
+grep -q "hyprctl setcursor Bibata-Modern-Ice 32" "$MOCK_LOG"
+grep -q "gsettings set org.gnome.desktop.interface cursor-theme Bibata-Modern-Ice" "$MOCK_LOG"
+grep -q "gsettings set org.gnome.desktop.interface cursor-size 32" "$MOCK_LOG"
 
-# Verify gsettings was restored to CustomTheme and 48px
-grep -q "gsettings set org.gnome.desktop.interface cursor-theme CustomTheme" "$MOCK_LOG"
-grep -q "gsettings set org.gnome.desktop.interface cursor-size 48" "$MOCK_LOG"
+# 9. Assert user's imported theme was PRESERVED
+[[ -d "$IMPORTED_THEME_DIR" ]]
+[[ -f "$IMPORTED_THEME_DIR/.omarchy-cursor-switcher-imported" ]]
 
-# Verify systemctl unset HYPRCURSOR_THEME (since it did not exist prior)
-grep -q "systemctl --user unset-environment HYPRCURSOR_THEME" "$MOCK_LOG"
-
-# 3. Test UNINSTALL / DESTROY lifecycle (plugin checkout deleted)
-# Re-activate integration to simulate active plugin being uninstalled
-"$PLUGIN_DIR/scripts/cursorctl" register-app --source "$PLUGIN_DIR"
-rm -rf "$PLUGIN_DIR"
-
-# Now run on-destroy when plugin directory is GONE -> triggers full purge
-"$XDG_DATA_HOME/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup" on-destroy --plugin-dir "$PLUGIN_DIR"
-
-# Verify all traces purged
-[[ ! -e "$HOME/.local/bin/omarchy-cursor-switcher" ]]
-[[ ! -e "$XDG_DATA_HOME/applications/omarchy-cursor-switcher.desktop" ]]
-[[ ! -e "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg" ]]
-[[ ! -e "$XDG_DATA_HOME/omarchy-cursor-switcher" ]]
-[[ ! -e "$SNAPSHOT_FILE" ]]
-[[ ! -e "$XDG_STATE_HOME/cursor-theme-manager/state.json" ]]
-[[ ! -e "$XDG_CACHE_HOME/omarchy-cursor-switcher" ]]
+# 10. Reinstall Test: fresh install starts cleanly with zero state
+STATUS_REINSTALL=$(PATH="$PATH" "$ROOT/scripts/cursorctl" integration-status)
+python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["enabled"] == False; assert data["promptSeen"] == False' "$STATUS_REINSTALL"
 
 echo "removal lifecycle tests: ok"

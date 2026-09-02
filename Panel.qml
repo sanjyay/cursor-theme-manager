@@ -16,6 +16,8 @@ Item {
   property string focusSection: "themes"
   property int themeIndex: 0
   property var hoveredTheme: null
+  property var pendingApplyTheme: null
+  property int pendingApplySize: 24
   readonly property bool opened: window.visible
 
   function open(payloadJson) {
@@ -196,37 +198,37 @@ Item {
               font.bold: true
             }
 
-            // Right actions row (Integration Settings + Import)
+            // Right actions row (App Launcher setting + Import)
             Row {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(10)
 
-              // Desktop Integration Button
+              // Application Launcher Button
               Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 height: Style.space(32)
                 radius: Style.cornerRadius
-                color: integrationMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, Color.accent) : Style.normalFillFor(Color.popups.text, Color.accent)
-                border.color: integrationMouse.containsMouse ? Style.hoverBorderFor(Color.popups.text, Color.accent) : Style.normalBorderFor(Color.popups.text, Color.accent)
+                color: launcherBtnMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, Color.accent) : Style.normalFillFor(Color.popups.text, Color.accent)
+                border.color: launcherBtnMouse.containsMouse ? Style.hoverBorderFor(Color.popups.text, Color.accent) : Style.normalBorderFor(Color.popups.text, Color.accent)
                 border.width: 1
-                implicitWidth: integrationLabel.implicitWidth + Style.space(18)
+                implicitWidth: launcherBtnLabel.implicitWidth + Style.space(18)
 
                 Row {
-                  id: integrationLabel
+                  id: launcherBtnLabel
                   anchors.centerIn: parent
                   spacing: Style.space(5)
 
                   Text {
-                    text: root.service && root.service.integrationInstalled ? "✓" : "⚙"
+                    text: root.service && root.service.launcherAdded ? "✓" : "＋"
                     textFormat: Text.PlainText
-                    color: root.service && root.service.integrationInstalled ? Color.accent : Color.muted
+                    color: root.service && root.service.launcherAdded ? Color.accent : Color.muted
                     font.family: Style.font.family
-                    font.pixelSize: Style.font.body
+                    font.pixelSize: Style.font.bodySmall
                   }
 
                   Text {
-                    text: "Integration"
+                    text: root.service && root.service.integrationEnabled ? "Integration ✓" : "Integration"
                     textFormat: Text.PlainText
                     color: Color.popups.text
                     font.family: Style.font.family
@@ -236,11 +238,11 @@ Item {
                 }
 
                 MouseArea {
-                  id: integrationMouse
+                  id: launcherBtnMouse
                   anchors.fill: parent
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: integrationModal.open()
+                  onClicked: launcherModal.open()
                 }
               }
 
@@ -503,8 +505,283 @@ Item {
       }
 
       // Optional Desktop Integration Modal Dialog
+      // 5. First-Run Setup Modal
       Item {
-        id: integrationModal
+        id: setupConsentModal
+        anchors.fill: parent
+        z: 70
+        property bool dismissedLocally: false
+        readonly property bool shouldShow: Boolean(root.service && root.service.ready && !root.service.integrationPromptSeen && !dismissedLocally)
+        visible: opacity > 0
+        opacity: shouldShow ? 1.0 : 0.0
+        Behavior on opacity { NumberAnimation { duration: 140 } }
+
+        function close() {
+          dismissedLocally = true
+          if (panelScope) panelScope.forceActiveFocus()
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          color: Util.alpha("#000000", 0.65)
+          MouseArea {
+            anchors.fill: parent
+            onClicked: {
+              if (root.service) root.service.dismissIntegrationPrompt()
+              setupConsentModal.close()
+            }
+          }
+        }
+
+        Rectangle {
+          anchors.centerIn: parent
+          width: Math.min(parent.width - Style.space(32), Style.space(520))
+          implicitHeight: setupCol.implicitHeight + Style.space(36)
+          radius: Style.cornerRadius
+          color: Color.popups.background
+          border.color: Color.popups.border
+          border.width: 1
+          clip: true
+
+          MouseArea { anchors.fill: parent }
+
+          Column {
+            id: setupCol
+            anchors.fill: parent
+            anchors.margins: Style.space(18)
+            spacing: Style.space(12)
+
+            Text {
+              width: parent.width
+              text: "Set up Cursor Theme Manager"
+              textFormat: Text.PlainText
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.title
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              text: "To appear in Applications and clean up safely when removed, Cursor Theme Manager will install:\n\n• an application launcher entry\n• a small user-level cleanup helper\n• a user-level removal watcher\n\nNo sudo. No network access. No system-wide files.\n\nWhen Cursor Theme Manager is removed, it will:\n• restore the previous cursor configuration\n• remove its application launcher\n• remove its settings\n• preserve imported cursor themes"
+              textFormat: Text.PlainText
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            Row {
+              anchors.right: parent.right
+              spacing: Style.space(10)
+
+              // Not now Button
+              Rectangle {
+                width: notNowLabel.implicitWidth + Style.space(20)
+                height: Style.space(32)
+                radius: Style.cornerRadius - 2
+                color: notNowMouse.containsMouse ? Util.alpha(Color.popups.text, 0.12) : Util.alpha(Color.popups.text, 0.06)
+                border.color: Util.alpha(Color.popups.text, 0.14)
+                border.width: 1
+
+                Text {
+                  id: notNowLabel
+                  anchors.centerIn: parent
+                  text: "Not now"
+                  textFormat: Text.PlainText
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                MouseArea {
+                  id: notNowMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    if (root.service) root.service.dismissIntegrationPrompt()
+                    setupConsentModal.close()
+                  }
+                }
+              }
+
+              // Enable integration Button
+              Rectangle {
+                width: enableIntLabel.implicitWidth + Style.space(20)
+                height: Style.space(32)
+                radius: Style.cornerRadius - 2
+                color: enableIntMouse.containsMouse ? Color.accent : Util.alpha(Color.accent, 0.88)
+                border.color: Color.accent
+                border.width: 1
+
+                Text {
+                  id: enableIntLabel
+                  anchors.centerIn: parent
+                  text: "Enable integration"
+                  textFormat: Text.PlainText
+                  color: Color.popups.background
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                MouseArea {
+                  id: enableIntMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    if (root.service) root.service.enableIntegration()
+                    setupConsentModal.close()
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 6. Safe Apply Prompt Modal
+      Item {
+        id: safeApplyModal
+        anchors.fill: parent
+        z: 75
+        visible: opacity > 0
+        opacity: active ? 1.0 : 0.0
+        property bool active: false
+        Behavior on opacity { NumberAnimation { duration: 140 } }
+
+        function open() { active = true }
+        function close() {
+          active = false
+          if (panelScope) panelScope.forceActiveFocus()
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          color: Util.alpha("#000000", 0.65)
+          MouseArea {
+            anchors.fill: parent
+            onClicked: safeApplyModal.close()
+          }
+        }
+
+        Rectangle {
+          anchors.centerIn: parent
+          width: Math.min(parent.width - Style.space(32), Style.space(480))
+          implicitHeight: safeApplyCol.implicitHeight + Style.space(36)
+          radius: Style.cornerRadius
+          color: Color.popups.background
+          border.color: Color.popups.border
+          border.width: 1
+          clip: true
+
+          MouseArea { anchors.fill: parent }
+
+          Column {
+            id: safeApplyCol
+            anchors.fill: parent
+            anchors.margins: Style.space(18)
+            spacing: Style.space(12)
+
+            Text {
+              width: parent.width
+              text: "Enable safe cursor management?"
+              textFormat: Text.PlainText
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.title
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              text: "Cursor Theme Manager needs to remember your previous cursor and install its user-level cleanup integration so that normal Omarchy plugin removal can restore your cursor automatically."
+              textFormat: Text.PlainText
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            Row {
+              anchors.right: parent.right
+              spacing: Style.space(10)
+
+              Rectangle {
+                width: cancelSafeLabel.implicitWidth + Style.space(20)
+                height: Style.space(32)
+                radius: Style.cornerRadius - 2
+                color: cancelSafeMouse.containsMouse ? Util.alpha(Color.popups.text, 0.12) : Util.alpha(Color.popups.text, 0.06)
+                border.color: Util.alpha(Color.popups.text, 0.14)
+                border.width: 1
+
+                Text {
+                  id: cancelSafeLabel
+                  anchors.centerIn: parent
+                  text: "Cancel"
+                  textFormat: Text.PlainText
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                MouseArea {
+                  id: cancelSafeMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: safeApplyModal.close()
+                }
+              }
+
+              Rectangle {
+                width: enableApplyLabel.implicitWidth + Style.space(20)
+                height: Style.space(32)
+                radius: Style.cornerRadius - 2
+                color: enableApplyMouse.containsMouse ? Color.accent : Util.alpha(Color.accent, 0.88)
+                border.color: Color.accent
+                border.width: 1
+
+                Text {
+                  id: enableApplyLabel
+                  anchors.centerIn: parent
+                  text: "Enable & Apply"
+                  textFormat: Text.PlainText
+                  color: Color.popups.background
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                MouseArea {
+                  id: enableApplyMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    if (root.service) {
+                      root.service.enableIntegration()
+                      if (pendingApplyTheme) {
+                        root.service.commitTheme(pendingApplyTheme)
+                        root.service.fetchRoles(pendingApplyTheme.displayName || pendingApplyTheme.id, pendingApplyTheme.path || "")
+                      }
+                    }
+                    safeApplyModal.close()
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 7. Integration Settings Modal
+      Item {
+        id: launcherModal
         anchors.fill: parent
         z: 60
         visible: opacity > 0
@@ -527,15 +804,15 @@ Item {
           color: Util.alpha("#000000", 0.65)
           MouseArea {
             anchors.fill: parent
-            onClicked: integrationModal.close()
+            onClicked: launcherModal.close()
           }
         }
 
         Rectangle {
-          id: integrationCard
+          id: launcherCard
           anchors.centerIn: parent
-          width: Math.min(parent.width - Style.space(32), Style.space(560))
-          implicitHeight: intCol.implicitHeight + Style.space(36)
+          width: Math.min(parent.width - Style.space(32), Style.space(520))
+          implicitHeight: launcherCol.implicitHeight + Style.space(36)
           radius: Style.cornerRadius
           color: Color.popups.background
           border.color: Color.popups.border
@@ -545,95 +822,29 @@ Item {
           MouseArea { anchors.fill: parent }
 
           Column {
-            id: intCol
+            id: launcherCol
             anchors.fill: parent
             anchors.margins: Style.space(18)
             spacing: Style.space(12)
 
-            Row {
+            Text {
               width: parent.width
-              spacing: Style.space(8)
-
-              Text {
-                text: "⚙"
-                textFormat: Text.PlainText
-                color: Color.accent
-                font.family: Style.font.family
-                font.pixelSize: Style.font.title
-              }
-
-              Text {
-                text: "Optional Desktop Integration"
-                textFormat: Text.PlainText
-                color: Color.popups.text
-                font.family: Style.font.family
-                font.pixelSize: Style.font.title
-                font.bold: true
-              }
+              text: "Application & Removal Integration"
+              textFormat: Text.PlainText
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.title
+              font.bold: true
             }
 
             Text {
               width: parent.width
-              text: "This optional feature registers Cursor Theme Manager with your desktop environment so it can be launched from the application launcher and preserves restoration cleanup support."
+              text: "Registers Cursor Theme Manager in your application launcher and arms automatic cleanup when the plugin is removed via Omarchy.\n\nInstalled artifacts upon consent:\n• ~/.local/share/applications/cursor-theme-manager.desktop\n• ~/.local/libexec/cursor-theme-manager/cleanup\n• ~/.config/systemd/user/cursor-theme-manager-cleanup.path\n• ~/.config/systemd/user/cursor-theme-manager-cleanup.service"
               textFormat: Text.PlainText
               color: Color.popups.text
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
-            }
-
-            Rectangle {
-              width: parent.width
-              implicitHeight: pathCol.implicitHeight + Style.space(16)
-              radius: Style.cornerRadius - 2
-              color: Util.alpha(Color.popups.text, 0.03)
-              border.color: Util.alpha(Color.popups.text, 0.1)
-              border.width: 1
-
-              Column {
-                id: pathCol
-                anchors.fill: parent
-                anchors.margins: Style.space(8)
-                spacing: Style.space(4)
-
-                Text {
-                  text: "Installs the following files upon consent:"
-                  textFormat: Text.PlainText
-                  color: Color.muted
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption - 1
-                  font.bold: true
-                }
-
-                Text {
-                  text: "• ~/.local/share/applications/omarchy-cursor-switcher.desktop"
-                  textFormat: Text.PlainText
-                  color: Color.popups.text
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption - 1
-                }
-                Text {
-                  text: "• ~/.local/bin/omarchy-cursor-switcher"
-                  textFormat: Text.PlainText
-                  color: Color.popups.text
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption - 1
-                }
-                Text {
-                  text: "• ~/.local/share/omarchy-cursor-switcher/omarchy-cursor-switcher-cleanup"
-                  textFormat: Text.PlainText
-                  color: Color.popups.text
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption - 1
-                }
-                Text {
-                  text: "• ~/.local/share/icons/hicolor/scalable/apps/omarchy-cursor-switcher.svg"
-                  textFormat: Text.PlainText
-                  color: Color.popups.text
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption - 1
-                }
-              }
             }
 
             // Status Row
@@ -650,9 +861,9 @@ Item {
               }
 
               Text {
-                text: root.service && root.service.integrationInstalled ? "Installed & Active" : "Not Installed (Plugin runs locally)"
+                text: root.service && root.service.integrationEnabled ? "Active (automatic cleanup armed)" : "Not enabled"
                 textFormat: Text.PlainText
-                color: root.service && root.service.integrationInstalled ? Color.accent : Color.popups.text
+                color: root.service && root.service.integrationEnabled ? Color.accent : Color.popups.text
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
                 font.bold: true
@@ -677,15 +888,15 @@ Item {
               spacing: Style.space(8)
 
               Rectangle {
-                width: closeIntLabel.implicitWidth + Style.space(20)
+                width: closeLauncherLabel.implicitWidth + Style.space(20)
                 height: Style.space(32)
                 radius: Style.cornerRadius - 2
-                color: closeIntMouse.containsMouse ? Util.alpha(Color.popups.text, 0.12) : Util.alpha(Color.popups.text, 0.06)
+                color: closeLauncherMouse.containsMouse ? Util.alpha(Color.popups.text, 0.12) : Util.alpha(Color.popups.text, 0.06)
                 border.color: Util.alpha(Color.popups.text, 0.14)
                 border.width: 1
 
                 Text {
-                  id: closeIntLabel
+                  id: closeLauncherLabel
                   anchors.centerIn: parent
                   text: "Close"
                   textFormat: Text.PlainText
@@ -696,47 +907,47 @@ Item {
                 }
 
                 MouseArea {
-                  id: closeIntMouse
+                  id: closeLauncherMouse
                   anchors.fill: parent
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: integrationModal.close()
+                  onClicked: launcherModal.close()
                 }
               }
 
               Rectangle {
-                id: intActionBtn
-                readonly property bool isInstalled: Boolean(root.service && root.service.integrationInstalled)
-                width: intActionLabel.implicitWidth + Style.space(20)
+                id: launcherActionBtn
+                readonly property bool isAdded: Boolean(root.service && root.service.integrationEnabled)
+                width: launcherActionLabel.implicitWidth + Style.space(20)
                 height: Style.space(32)
                 radius: Style.cornerRadius - 2
-                color: isInstalled
-                  ? (intActionMouse.containsMouse ? Util.alpha(Color.urgent, 0.25) : Util.alpha(Color.urgent, 0.15))
-                  : (intActionMouse.containsMouse ? Color.accent : Util.alpha(Color.accent, 0.85))
-                border.color: isInstalled ? Color.urgent : Color.accent
+                color: isAdded
+                  ? (launcherActionMouse.containsMouse ? Util.alpha(Color.urgent, 0.25) : Util.alpha(Color.urgent, 0.15))
+                  : (launcherActionMouse.containsMouse ? Color.accent : Util.alpha(Color.accent, 0.88))
+                border.color: isAdded ? Color.urgent : Color.accent
                 border.width: 1
 
                 Text {
-                  id: intActionLabel
+                  id: launcherActionLabel
                   anchors.centerIn: parent
-                  text: intActionBtn.isInstalled ? "Remove Integration" : "Install Integration"
+                  text: launcherActionBtn.isAdded ? "Disable" : "Enable"
                   textFormat: Text.PlainText
-                  color: intActionBtn.isInstalled ? Color.urgent : Color.popups.background
+                  color: launcherActionBtn.isAdded ? Color.urgent : Color.popups.background
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
                   font.bold: true
                 }
 
                 MouseArea {
-                  id: intActionMouse
+                  id: launcherActionMouse
                   anchors.fill: parent
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: {
-                    if (intActionBtn.isInstalled) {
-                      if (root.service) root.service.removeIntegration()
+                    if (launcherActionBtn.isAdded) {
+                      if (root.service) root.service.disableIntegration()
                     } else {
-                      if (root.service) root.service.installIntegration()
+                      if (root.service) root.service.enableIntegration()
                     }
                   }
                 }

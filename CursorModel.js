@@ -171,21 +171,23 @@ function parseState(text) {
     theme: null,
     size: DefaultSize,
     importedThemes: [],
-    integrationConsent: false,
-    integrationInstalled: false
+    launcherPromptSeen: false,
+    launcherAdded: false
   }
   if (!text || typeof text !== "string" || !text.trim()) return fallback
-  if (text.length > 65536) return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], integrationConsent: false, integrationInstalled: false }
+  if (text.length > 65536) return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], launcherPromptSeen: false, launcherAdded: false }
 
   try {
     var raw = JSON.parse(text)
-    if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid", theme: null, size: DefaultSize, importedThemes: [], integrationConsent: false, integrationInstalled: false }
+    if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid", theme: null, size: DefaultSize, importedThemes: [], launcherPromptSeen: false, launcherAdded: false }
 
     var theme = raw.theme ? normalizedTheme(raw.theme) : (raw.manualTheme ? normalizedTheme(raw.manualTheme) : null)
     var size = validSize(raw.size !== undefined ? raw.size : raw.manualSize, DefaultSize)
     var importedThemes = Array.isArray(raw.importedThemes) ? raw.importedThemes.slice(0, 1024) : []
-    var integrationConsent = Boolean(raw.integrationConsent)
-    var integrationInstalled = Boolean(raw.integrationInstalled)
+    var integrationPromptSeen = Boolean(raw.integrationPromptSeen !== undefined ? raw.integrationPromptSeen : (raw.launcherPromptSeen !== undefined ? raw.launcherPromptSeen : raw.integrationConsent))
+    var integrationEnabled = Boolean(raw.integrationEnabled !== undefined ? raw.integrationEnabled : (raw.launcherAdded !== undefined ? raw.launcherAdded : raw.integrationInstalled))
+    var originalCursor = (raw.preCtmCursor && typeof raw.preCtmCursor === "object") ? raw.preCtmCursor : ((raw.originalCursor && typeof raw.originalCursor === "object") ? raw.originalCursor : null)
+    var cursorModifiedByCtm = Boolean(raw.cursorModifiedByCtm)
 
     return {
       ok: true,
@@ -193,15 +195,20 @@ function parseState(text) {
       theme: theme,
       size: size,
       importedThemes: importedThemes,
-      integrationConsent: integrationConsent,
-      integrationInstalled: integrationInstalled
+      integrationPromptSeen: integrationPromptSeen,
+      integrationEnabled: integrationEnabled,
+      launcherPromptSeen: integrationPromptSeen,
+      launcherAdded: integrationEnabled,
+      cursorModifiedByCtm: cursorModifiedByCtm,
+      preCtmCursor: originalCursor,
+      originalCursor: originalCursor
     }
   } catch (error) {
-    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], integrationConsent: false, integrationInstalled: false }
+    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], launcherPromptSeen: false, launcherAdded: false }
   }
 }
 
-function stateDocument(arg1, arg2, arg3, arg4, arg5) {
+function stateDocument(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
   var doc = { version: 2 }
   if (typeof arg1 === "object" && arg1 !== null && !arg1.displayName && !arg1.hyprcursor && !arg1.xcursor) {
     var s = arg1
@@ -212,8 +219,12 @@ function stateDocument(arg1, arg2, arg3, arg4, arg5) {
     } : null
     doc.size = validSize(s.size !== undefined ? s.size : s.manualSize, DefaultSize)
     doc.importedThemes = Array.isArray(s.importedThemes) ? s.importedThemes.slice(0, 1024) : []
-    doc.integrationConsent = Boolean(s.integrationConsent)
-    doc.integrationInstalled = Boolean(s.integrationInstalled)
+    doc.integrationPromptSeen = Boolean(s.integrationPromptSeen !== undefined ? s.integrationPromptSeen : (s.launcherPromptSeen !== undefined ? s.launcherPromptSeen : s.integrationConsent))
+    doc.integrationEnabled = Boolean(s.integrationEnabled !== undefined ? s.integrationEnabled : (s.launcherAdded !== undefined ? s.launcherAdded : s.integrationInstalled))
+    doc.launcherPromptSeen = doc.integrationPromptSeen
+    doc.launcherAdded = doc.integrationEnabled
+    if (s.cursorModifiedByCtm) doc.cursorModifiedByCtm = true
+    if (s.preCtmCursor || s.originalCursor) { doc.preCtmCursor = s.preCtmCursor || s.originalCursor; doc.originalCursor = doc.preCtmCursor; }
   } else {
     var theme = arg1
     var size = validSize(arg2, DefaultSize)
@@ -225,8 +236,15 @@ function stateDocument(arg1, arg2, arg3, arg4, arg5) {
     } : null
     doc.size = size
     doc.importedThemes = importedThemes
-    doc.integrationConsent = Boolean(arg4)
-    doc.integrationInstalled = Boolean(arg5)
+    doc.integrationPromptSeen = Boolean(arg4)
+    doc.integrationEnabled = Boolean(arg5)
+    doc.launcherPromptSeen = Boolean(arg4)
+    doc.launcherAdded = Boolean(arg5)
+    if (arg6) doc.cursorModifiedByCtm = true
+    if (arg7 && typeof arg7 === "object") {
+      doc.preCtmCursor = arg7
+      doc.originalCursor = arg7
+    }
   }
   return JSON.stringify(doc, null, 2) + "\n"
 }

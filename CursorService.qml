@@ -28,12 +28,17 @@ Item {
   property string statusText: "Starting…"
   property double lastScanMs: 0
 
-  // Optional Desktop Integration State
-  property bool integrationInstalled: false
-  property bool integrationConsent: false
+  // Integration & Removal Lifecycle State
+  property bool integrationEnabled: false
+  property bool integrationPromptSeen: false
   property bool integrationLoading: false
   property string integrationError: ""
-  property var integrationPaths: []
+  property var integrationArtifacts: ({})
+  readonly property bool launcherAdded: integrationEnabled
+  readonly property bool launcherPromptSeen: integrationPromptSeen
+  readonly property bool launcherLoading: integrationLoading
+  readonly property string launcherError: integrationError
+  property string launcherPath: "" 
 
   property bool _started: false
   property bool _stateLoaded: false
@@ -51,6 +56,7 @@ Item {
   signal themesChangedByScan()
   signal importCompleted(var theme, string message)
   signal importFailed(string error)
+  signal launcherChanged()
   signal integrationChanged()
 
   // In-App File Browser State
@@ -78,7 +84,7 @@ Item {
     stateReadWatchdog.restart()
 
     // Query integration status
-    checkIntegrationStatus()
+    checkLauncherStatus()
 
     // Start theme discovery
     refresh(true)
@@ -88,6 +94,21 @@ Item {
   Component.onCompleted: startupTimer.restart()
 
   Timer { id: startupTimer; interval: 25; repeat: false; onTriggered: root.start() }
+
+  // Automatic first-run presentation timer (only triggers if launcherPromptSeen is false)
+  Timer {
+    id: firstRunTimer
+    interval: 200
+    repeat: false
+    onTriggered: {
+      if (!root.launcherPromptSeen) {
+        var pluginId = manifest && manifest.id ? String(manifest.id) : "sanjyay.cursor-theme-manager"
+        if (root.shell && typeof root.shell.summon === "function") {
+          root.shell.summon(pluginId, "{}")
+        }
+      }
+    }
+  }
 
   function refresh(force) {
     if (!_started || scanning || discoverProcess.running) return
@@ -165,8 +186,8 @@ Item {
 
     committedSize = Model.validSize(_loadedState.size)
     importedThemes = _loadedState.importedThemes || []
-    integrationConsent = Boolean(_loadedState.integrationConsent)
-    integrationInstalled = Boolean(_loadedState.integrationInstalled)
+    integrationPromptSeen = Boolean(_loadedState.integrationPromptSeen || _loadedState.launcherPromptSeen)
+    integrationEnabled = Boolean(_loadedState.integrationEnabled || _loadedState.launcherAdded)
 
     var found = _loadedState.ok ? Model.findTheme(themes, _loadedState.theme) : null
     if (!found) found = Model.fallbackTheme(themes, currentXcursor)
@@ -181,9 +202,15 @@ Item {
       lastError = "The saved cursor settings were invalid; using a safe fallback"
     }
 
-    if (committedTheme) {
+    if (_loadedState.cursorModifiedByCtm && committedTheme) {
       enqueueApply(committedTheme, committedSize, "restore")
       fetchRoles(committedTheme.displayName || committedTheme.id, committedTheme.path || "")
+    } else if (committedTheme) {
+      fetchRoles(committedTheme.displayName || committedTheme.id, committedTheme.path || "")
+    }
+
+    if (!launcherPromptSeen) {
+      firstRunTimer.restart()
     }
   }
 
@@ -205,6 +232,7 @@ Item {
     previewTimer.stop()
     _debouncedPreview = null
     committedTheme = theme
+    if (root._loadedState) root._loadedState.cursorModifiedByCtm = true
     enqueueApply(theme, committedSize, "commit")
     fetchRoles(theme.displayName || theme.id, theme.path || "")
     persistState()
@@ -214,6 +242,7 @@ Item {
     previewTimer.stop()
     _debouncedPreview = null
     committedSize = Model.validSize(size)
+    if (root._loadedState) root._loadedState.cursorModifiedByCtm = true
     if (committedTheme) enqueueApply(committedTheme, committedSize, "commit")
     persistState()
   }
@@ -242,8 +271,10 @@ Item {
       committedTheme,
       committedSize,
       importedThemes,
-      integrationConsent,
-      integrationInstalled
+      integrationPromptSeen,
+      integrationEnabled,
+      _loadedState.cursorModifiedByCtm,
+      _loadedState.preCtmCursor || _loadedState.originalCursor
     )
     stateWriteProcess.command = [helperPath, "state-write", "--state", doc]
     stateWriteProcess.running = true
@@ -263,7 +294,7 @@ Item {
   }
 
   // ===========================================================================
-  // Desktop Integration API
+  // Integration & Removal Watcher API
   // ===========================================================================
 
   function checkIntegrationStatus() {
@@ -272,24 +303,36 @@ Item {
     integrationStatusProcess.running = true
     integrationStatusWatchdog.restart()
   }
+  function checkLauncherStatus() { checkIntegrationStatus() }
 
-  function installIntegration() {
-    if (integrationInstallProcess.running || integrationRemoveProcess.running) return
+  function enableIntegration() {
+    if (integrationEnableProcess.running || integrationDisableProcess.running) return
     integrationLoading = true
     integrationError = ""
-    integrationInstallProcess.command = [helperPath, "integration-install", "--source", pluginRoot]
-    integrationInstallProcess.running = true
-    integrationInstallWatchdog.restart()
+    integrationEnableProcess.command = [helperPath, "integration-enable"]
+    integrationEnableProcess.running = true
+    integrationEnableWatchdog.restart()
   }
+  function addLauncher() { enableIntegration() }
 
-  function removeIntegration() {
-    if (integrationInstallProcess.running || integrationRemoveProcess.running) return
+  function disableIntegration() {
+    if (integrationEnableProcess.running || integrationDisableProcess.running) return
     integrationLoading = true
     integrationError = ""
-    integrationRemoveProcess.command = [helperPath, "integration-remove"]
-    integrationRemoveProcess.running = true
-    integrationRemoveWatchdog.restart()
+    integrationDisableProcess.command = [helperPath, "integration-disable"]
+    integrationDisableProcess.running = true
+    integrationDisableWatchdog.restart()
   }
+  function removeLauncher() { disableIntegration() }
+
+  function dismissIntegrationPrompt() {
+    integrationPromptSeen = true
+    integrationDismissProcess.command = [helperPath, "integration-dismiss-prompt"]
+    integrationDismissProcess.running = true
+    integrationChanged()
+    launcherChanged()
+  }
+  function dismissLauncherPrompt() { dismissIntegrationPrompt() }
 
   // ===========================================================================
   // File Chooser, Browser, Import API
@@ -407,7 +450,7 @@ Item {
   // 3. Integration Status Process
   Timer {
     id: integrationStatusWatchdog
-    interval: 10000
+    interval: 8000
     repeat: false
     onTriggered: if (integrationStatusProcess.running) integrationStatusProcess.running = false
   }
@@ -423,93 +466,101 @@ Item {
         try {
           var res = JSON.parse(integrationStatusStdout.text || "{}")
           if (res.ok) {
-            root.integrationInstalled = Boolean(res.installed)
-            root.integrationConsent = Boolean(res.consent)
-            root.integrationPaths = res.paths || []
+            root.integrationEnabled = Boolean(res.enabled)
+            root.integrationPromptSeen = Boolean(res.promptSeen)
+            root.integrationArtifacts = res.artifacts || ({})
+            if (res.paths && res.paths.desktop) root.launcherPath = res.paths.desktop
             root.integrationChanged()
+            root.launcherChanged()
           }
         } catch (e) {}
       }
     }
   }
 
-  // 4. Integration Install Process
+  // 4. Integration Enable Process
   Timer {
-    id: integrationInstallWatchdog
-    interval: 15000
+    id: integrationEnableWatchdog
+    interval: 12000
     repeat: false
     onTriggered: {
-      if (integrationInstallProcess.running) {
-        integrationInstallProcess.running = false
+      if (integrationEnableProcess.running) {
+        integrationEnableProcess.running = false
         root.integrationLoading = false
-        root.integrationError = "Integration installation timed out"
+        root.integrationError = "Enabling integration timed out"
       }
     }
   }
 
   Process {
-    id: integrationInstallProcess
+    id: integrationEnableProcess
     running: false
     command: []
-    stdout: StdioCollector { id: integrationInstallStdout; waitForEnd: true }
-    stderr: StdioCollector { id: integrationInstallStderr; waitForEnd: true }
+    stdout: StdioCollector { id: integrationEnableStdout; waitForEnd: true }
+    stderr: StdioCollector { id: integrationEnableStderr; waitForEnd: true }
     onExited: function(exitCode) {
-      integrationInstallWatchdog.stop()
+      integrationEnableWatchdog.stop()
       root.integrationLoading = false
       if (exitCode === 0) {
-        root.integrationInstalled = true
-        root.integrationConsent = true
+        root.integrationEnabled = true
+        root.integrationPromptSeen = true
         root.integrationError = ""
-        root.persistState()
         root.checkIntegrationStatus()
       } else {
-        var err = "Integration installation failed"
+        var err = "Failed to enable integration"
         try {
-          var p = JSON.parse(integrationInstallStdout.text || "{}")
+          var p = JSON.parse(integrationEnableStdout.text || "{}")
           if (p.error) err = p.error
         } catch (e) {
-          if (integrationInstallStderr.text) err = root.elide(integrationInstallStderr.text)
+          if (integrationEnableStderr.text) err = root.elide(integrationEnableStderr.text)
         }
         root.integrationError = err
       }
       root.integrationChanged()
+      root.launcherChanged()
     }
   }
 
-  // 5. Integration Remove Process
+  // 5. Integration Disable Process
   Timer {
-    id: integrationRemoveWatchdog
-    interval: 15000
+    id: integrationDisableWatchdog
+    interval: 12000
     repeat: false
     onTriggered: {
-      if (integrationRemoveProcess.running) {
-        integrationRemoveProcess.running = false
+      if (integrationDisableProcess.running) {
+        integrationDisableProcess.running = false
         root.integrationLoading = false
-        root.integrationError = "Integration removal timed out"
+        root.integrationError = "Disabling integration timed out"
       }
     }
   }
 
   Process {
-    id: integrationRemoveProcess
+    id: integrationDisableProcess
     running: false
     command: []
-    stdout: StdioCollector { id: integrationRemoveStdout; waitForEnd: true }
-    stderr: StdioCollector { id: integrationRemoveStderr; waitForEnd: true }
+    stdout: StdioCollector { id: integrationDisableStdout; waitForEnd: true }
+    stderr: StdioCollector { id: integrationDisableStderr; waitForEnd: true }
     onExited: function(exitCode) {
-      integrationRemoveWatchdog.stop()
+      integrationDisableWatchdog.stop()
       root.integrationLoading = false
       if (exitCode === 0) {
-        root.integrationInstalled = false
-        root.integrationConsent = false
+        root.integrationEnabled = false
         root.integrationError = ""
-        root.persistState()
         root.checkIntegrationStatus()
       } else {
-        root.integrationError = root.elide(integrationRemoveStderr.text || "Failed to remove desktop integration")
+        root.integrationError = root.elide(integrationDisableStderr.text || "Failed to disable integration")
       }
       root.integrationChanged()
+      root.launcherChanged()
     }
+  }
+
+  // 5b. Integration Dismiss Process
+  Process {
+    id: integrationDismissProcess
+    running: false
+    command: []
   }
 
   // 6. Discovery Process
