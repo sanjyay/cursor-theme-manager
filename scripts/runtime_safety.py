@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Hardened Process Supervisor & Runtime Safety Utilities for Cursor Theme Manager.
 Centralizes bounded external tool execution, process-group management,
@@ -7,12 +7,14 @@ wall-clock deadlines, I/O byte limits, and output sanitization.
 
 import sys
 import os
+import stat
 import signal
 import time
 import json
 import selectors
 import subprocess
 import threading
+from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 
 # ==============================================================================
@@ -125,6 +127,153 @@ except (ValueError, AttributeError):
 
 
 # ==============================================================================
+# TRUSTED EXECUTABLE RESOLUTION & SECURE SUBPROCESS ENVIRONMENT
+# ==============================================================================
+
+TRUSTED_BIN_DIRS = (
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/bin",
+    "/sbin"
+)
+
+SAFE_SYSTEM_PATH = "/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:/bin:/sbin"
+
+ALLOWLISTED_ENV_VARS = (
+    "HOME", "USER", "LOGNAME",
+    "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_DATA_DIRS",
+    "WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE", "LC_NUMERIC", "LC_TIME"
+)
+
+DANGEROUS_ENV_VARS = {
+    "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONOPTIMIZE", "PYTHONDEBUG", "PYTHONEXECUTABLE", "PYTHONUSERBASE",
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG", "LD_ORIGIN_PATH",
+    "BASH_ENV", "ENV", "SHELLOPTS", "BASH_OPTS", "PROMPT_COMMAND",
+    "PERL5LIB", "PERLLIB", "RUBYLIB", "NODE_OPTIONS", "IFS"
+}
+
+_RESOLVED_TOOL_CACHE: Dict[str, Optional[str]] = {}
+
+
+def resolve_system_executable(name: str) -> Optional[str]:
+    """
+    Resolves an external executable from fixed system directories only.
+    Verifies:
+      - regular file
+      - executable permissions
+      - root-owned (UID 0)
+      - not group- or world-writable
+      - resolved canonical target also resides under trusted system roots and is root-owned
+    Returns canonical absolute path or None if unavailable/invalid.
+    Never relies on or falls back to PATH.
+    """
+    if not name or not isinstance(name, str):
+        return None
+
+    if name in _RESOLVED_TOOL_CACHE:
+        return _RESOLVED_TOOL_CACHE[name]
+
+    resolved_path: Optional[str] = None
+
+    if name.startswith("/"):
+        candidates = [name]
+    else:
+        candidates = [os.path.join(d, name) for d in TRUSTED_BIN_DIRS]
+
+    for candidate in candidates:
+        try:
+            if not os.path.exists(candidate):
+                continue
+            real_path = os.path.realpath(candidate)
+            if not any(real_path == d or real_path.startswith(d + "/") for d in TRUSTED_BIN_DIRS):
+                continue
+            st = os.stat(real_path)
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            if not (st.st_mode & 0o111) or not os.access(real_path, os.X_OK):
+                continue
+            if st.st_uid != 0:
+                continue
+            if st.st_mode & 0o022:
+                continue
+
+            resolved_path = candidate
+            break
+        except (OSError, PermissionError):
+            continue
+
+    _RESOLVED_TOOL_CACHE[name] = resolved_path
+    return resolved_path
+
+
+def resolve_executable(cmd: str) -> Optional[str]:
+    """
+    Resolves and validates any executable invoked by CTM.
+    If bare name -> resolves via resolve_system_executable.
+    If absolute path -> validates against trusted system binary or trusted Python interpreter / plugin script.
+    """
+    if not cmd or not isinstance(cmd, str):
+        return None
+    if not cmd.startswith("/"):
+        return resolve_system_executable(cmd)
+
+    sys_res = resolve_system_executable(cmd)
+    if sys_res is not None:
+        return sys_res
+
+    # Check active Python interpreter
+    try:
+        if os.path.samefile(cmd, sys.executable):
+            st = os.stat(cmd)
+            if stat.S_ISREG(st.st_mode) and os.access(cmd, os.X_OK):
+                if not (st.st_mode & 0o002):
+                    return cmd
+    except (OSError, ValueError):
+        pass
+
+    # Check script strictly within plugin's scripts directory
+    try:
+        script_dir = str(Path(__file__).resolve().parent)
+        real_cmd = os.path.realpath(cmd)
+        if real_cmd.startswith(script_dir + "/"):
+            st = os.stat(real_cmd)
+            if stat.S_ISREG(st.st_mode) and os.access(real_cmd, os.X_OK):
+                if st.st_uid in (0, os.getuid()) and not (st.st_mode & 0o022):
+                    return real_cmd
+    except (OSError, ValueError):
+        pass
+
+    return None
+
+
+def get_secure_subprocess_env(extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """
+    Constructs a minimal explicit environment for subprocesses.
+    Allowlists only necessary session variables, enforces a safe fixed system PATH,
+    and strips dangerous code-injection variables.
+    """
+    clean_env: Dict[str, str] = {"PATH": SAFE_SYSTEM_PATH}
+    for var in ALLOWLISTED_ENV_VARS:
+        val = os.environ.get(var)
+        if val is not None:
+            clean_env[var] = val
+
+    if extra_env:
+        for k, v in extra_env.items():
+            if k in DANGEROUS_ENV_VARS:
+                continue
+            if k == "PATH":
+                continue
+            clean_env[k] = str(v)
+
+    return clean_env
+
+
+# ==============================================================================
 # BOUNDED SUBPROCESS EXECUTION PRIMITIVE
 # ==============================================================================
 
@@ -168,7 +317,19 @@ def run_bounded(
     """
     if not isinstance(argv, (list, tuple)) or not argv:
         raise ValueError("argv must be a non-empty list of strings")
-    argv_str = [str(a) for a in argv]
+    raw_cmd = str(argv[0])
+    resolved_cmd = resolve_executable(raw_cmd)
+    if resolved_cmd is None:
+        err_text = f"Required system tool '{raw_cmd}' is unavailable or failed validation"
+        return BoundedResult(
+            exit_code=127,
+            stdout=b"",
+            stderr=err_text.encode("utf-8"),
+            error=err_text
+        )
+
+    argv_str = [resolved_cmd] + [str(a) for a in argv[1:]]
+    secure_env = get_secure_subprocess_env(env)
 
     proc = None
     pgid = None
@@ -188,7 +349,7 @@ def run_bounded(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=cwd,
-            env=env,
+            env=secure_env,
             start_new_session=True  # Creates a new process group/session
         )
         pgid = proc.pid

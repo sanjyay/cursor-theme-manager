@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Unified CLI & Dispatcher for Cursor Theme Manager.
 Supervises all actions with bounded execution, process-group isolation,
@@ -22,7 +22,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from runtime_safety import (
-    run_bounded, sanitize_text, emit_bounded_json,
+    run_bounded, resolve_system_executable, sanitize_text, emit_bounded_json,
     TIMEOUT_DISCOVERY, TIMEOUT_APPLY, TIMEOUT_CONVERT, TIMEOUT_OPEN_FOLDER,
     TIMEOUT_STATE, LIMIT_STDOUT_DEFAULT, LIMIT_STDOUT_MEDIUM, LIMIT_STDOUT_LARGE,
     LIMIT_STDOUT_SMALL, LIMIT_STDERR_DEFAULT, MAX_DISCOVERED_THEMES,
@@ -103,7 +103,7 @@ def get_preview_path(theme_dir: Path) -> str:
             cur_path = cand_file
             break
 
-    if cur_path and shutil.which("xcur2png"):
+    if cur_path and resolve_system_executable("xcur2png"):
         cache_dir.mkdir(parents=True, exist_ok=True)
         temp_dir = Path(tempfile.mkdtemp(prefix=".preview_tmp_"))
         try:
@@ -112,7 +112,7 @@ def get_preview_path(theme_dir: Path) -> str:
                 pngs = sorted(temp_dir.glob("*.png"), key=lambda p: p.stat().st_size, reverse=True)
                 if pngs:
                     best_png = pngs[0]
-                    if shutil.which("magick"):
+                    if resolve_system_executable("magick"):
                         run_bounded(["magick", str(best_png), "-resize", "64x64", str(preview_png)], timeout=2.0)
                     else:
                         shutil.copy2(best_png, preview_png)
@@ -287,7 +287,10 @@ def run_discover():
 
     emit_bounded_json({
         "themes": discovered_themes,
-        "currentXcursor": sanitize_text(current_xcursor, max_len=MAX_LEN_THEME_ID)
+        "currentXcursor": sanitize_text(current_xcursor, max_len=MAX_LEN_THEME_ID),
+        "trustedTools": {
+            "hyprctl": resolve_system_executable("hyprctl") or ""
+        }
     }, max_bytes=LIMIT_STDOUT_LARGE)
 
 
@@ -363,7 +366,7 @@ def run_ensure_hyprcursor(hypr: str, xcursor: str, theme_path: str = "") -> str:
     if (target_dir / "manifest.hl").is_file() and (target_dir / "hyprcursors").is_dir():
         return converted_name
 
-    if not shutil.which("hyprcursor-util"):
+    if not resolve_system_executable("hyprcursor-util"):
         sys.stderr.write(f"cursorctl: hyprcursor-util is required to convert XCursor theme '{xcursor}'\n")
         sys.exit(1)
 
@@ -480,6 +483,27 @@ def run_set_size_live(hypr: str, xcursor: str, theme_path: str, size: int):
         sys.exit(1)
 
 
+def _write_private_file(file_path: str, content: str, mode: int = 0o600) -> None:
+    parent_dir = os.path.dirname(file_path)
+    os.makedirs(parent_dir, exist_ok=True)
+    tmp_path = file_path + f".tmp.{os.getpid()}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    fd = os.open(tmp_path, flags, mode)
+    try:
+        os.fchmod(fd, mode)
+        with open(fd, "w", encoding="utf-8", closefd=False) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp_path, file_path)
+
+
 def run_persist_size(hypr: str, xcursor: str, size: int):
     if size not in secure_state.SUPPORTED_SIZES:
         sys.stderr.write(f"cursorctl: unsupported cursor size: {size}\n")
@@ -512,38 +536,26 @@ def run_persist_size(hypr: str, xcursor: str, size: int):
     eval_code = f'hl.env("HYPRCURSOR_SIZE", "{size}"); hl.env("XCURSOR_SIZE", "{size}")'
     run_bounded(["hyprctl", "eval", eval_code], timeout=1.5)
 
-    # 5. UWSM environment drop-in files (atomic write)
+    # 5. UWSM environment drop-in files (atomic descriptor write)
     home = os.environ.get("HOME", os.path.expanduser("~"))
     config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
-    common_dir = os.path.join(config_home, "uwsm", "env.d")
-    hypr_dir = os.path.join(config_home, "uwsm", "env-hyprland.d")
-    os.makedirs(common_dir, exist_ok=True)
-    os.makedirs(hypr_dir, exist_ok=True)
+    common_file = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
+    hypr_file = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
 
-    common_file = os.path.join(common_dir, "90-omarchy-cursor-switcher")
-    hypr_file = os.path.join(hypr_dir, "90-omarchy-cursor-switcher")
+    common_content = "# Managed by sanjyay.cursor-theme-manager.\n"
+    if xcursor and xcursor != "-":
+        common_content += f"export XCURSOR_THEME='{xcursor}'\n"
+    common_content += f"export XCURSOR_SIZE='{size}'\n"
 
-    common_tmp = common_file + f".tmp.{os.getpid()}"
-    hypr_tmp = hypr_file + f".tmp.{os.getpid()}"
+    hypr_content = "# Managed by sanjyay.cursor-theme-manager.\n"
+    if not hypr or hypr == "-":
+        hypr_content += "unset HYPRCURSOR_THEME\n"
+    else:
+        hypr_content += f"export HYPRCURSOR_THEME='{hypr}'\n"
+    hypr_content += f"export HYPRCURSOR_SIZE='{size}'\n"
 
-    with open(common_tmp, "w", encoding="utf-8") as f:
-        f.write("# Managed by sanjyay.cursor-theme-manager.\n")
-        if xcursor and xcursor != "-":
-            f.write(f"export XCURSOR_THEME='{xcursor}'\n")
-        f.write(f"export XCURSOR_SIZE='{size}'\n")
-
-    with open(hypr_tmp, "w", encoding="utf-8") as f:
-        f.write("# Managed by sanjyay.cursor-theme-manager.\n")
-        if not hypr or hypr == "-":
-            f.write("unset HYPRCURSOR_THEME\n")
-        else:
-            f.write(f"export HYPRCURSOR_THEME='{hypr}'\n")
-        f.write(f"export HYPRCURSOR_SIZE='{size}'\n")
-
-    os.chmod(common_tmp, 0o600)
-    os.chmod(hypr_tmp, 0o600)
-    os.replace(common_tmp, common_file)
-    os.replace(hypr_tmp, hypr_file)
+    _write_private_file(common_file, common_content, 0o600)
+    _write_private_file(hypr_file, hypr_content, 0o600)
 
 
 def run_capture_baseline():
@@ -611,38 +623,26 @@ def run_persist_theme(theme_json: str, size: int):
     eval_code = f'hl.env("HYPRCURSOR_THEME", "{hypr_env}"); hl.env("HYPRCURSOR_SIZE", "{size}"); hl.env("XCURSOR_THEME", "{xcur_env}"); hl.env("XCURSOR_SIZE", "{size}")'
     run_bounded(["hyprctl", "eval", eval_code], timeout=1.5)
 
-    # 5. UWSM environment drop-in files (atomic write)
+    # 5. UWSM environment drop-in files (atomic descriptor write)
     home = os.environ.get("HOME", os.path.expanduser("~"))
     config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
-    common_dir = os.path.join(config_home, "uwsm", "env.d")
-    hypr_dir = os.path.join(config_home, "uwsm", "env-hyprland.d")
-    os.makedirs(common_dir, exist_ok=True)
-    os.makedirs(hypr_dir, exist_ok=True)
+    common_file = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
+    hypr_file = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
 
-    common_file = os.path.join(common_dir, "90-omarchy-cursor-switcher")
-    hypr_file = os.path.join(hypr_dir, "90-omarchy-cursor-switcher")
+    common_content = "# Managed by sanjyay.cursor-theme-manager.\n"
+    if xcursor and xcursor != "-":
+        common_content += f"export XCURSOR_THEME='{xcursor}'\n"
+    common_content += f"export XCURSOR_SIZE='{size}'\n"
 
-    common_tmp = common_file + f".tmp.{os.getpid()}"
-    hypr_tmp = hypr_file + f".tmp.{os.getpid()}"
+    hypr_content = "# Managed by sanjyay.cursor-theme-manager.\n"
+    if not hypr or hypr == "-":
+        hypr_content += "unset HYPRCURSOR_THEME\n"
+    else:
+        hypr_content += f"export HYPRCURSOR_THEME='{hypr}'\n"
+    hypr_content += f"export HYPRCURSOR_SIZE='{size}'\n"
 
-    with open(common_tmp, "w", encoding="utf-8") as f:
-        f.write("# Managed by sanjyay.cursor-theme-manager.\n")
-        if xcursor and xcursor != "-":
-            f.write(f"export XCURSOR_THEME='{xcursor}'\n")
-        f.write(f"export XCURSOR_SIZE='{size}'\n")
-
-    with open(hypr_tmp, "w", encoding="utf-8") as f:
-        f.write("# Managed by sanjyay.cursor-theme-manager.\n")
-        if not hypr or hypr == "-":
-            f.write("unset HYPRCURSOR_THEME\n")
-        else:
-            f.write(f"export HYPRCURSOR_THEME='{hypr}'\n")
-        f.write(f"export HYPRCURSOR_SIZE='{size}'\n")
-
-    os.chmod(common_tmp, 0o600)
-    os.chmod(hypr_tmp, 0o600)
-    os.replace(common_tmp, common_file)
-    os.replace(hypr_tmp, hypr_file)
+    _write_private_file(common_file, common_content, 0o600)
+    _write_private_file(hypr_file, hypr_content, 0o600)
 
 
 # ==============================================================================
@@ -707,35 +707,23 @@ def run_apply(hypr: str, xcursor: str, theme_path: str, size: int, mode: str):
     if mode == "--commit":
         home = os.environ.get("HOME", os.path.expanduser("~"))
         config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
-        common_dir = os.path.join(config_home, "uwsm", "env.d")
-        hypr_dir = os.path.join(config_home, "uwsm", "env-hyprland.d")
-        os.makedirs(common_dir, exist_ok=True)
-        os.makedirs(hypr_dir, exist_ok=True)
+        common_file = os.path.join(config_home, "uwsm", "env.d", "90-omarchy-cursor-switcher")
+        hypr_file = os.path.join(config_home, "uwsm", "env-hyprland.d", "90-omarchy-cursor-switcher")
 
-        common_file = os.path.join(common_dir, "90-omarchy-cursor-switcher")
-        hypr_file = os.path.join(hypr_dir, "90-omarchy-cursor-switcher")
+        common_content = "# Managed by sanjyay.cursor-theme-manager.\n"
+        if xcursor != "-":
+            common_content += f"export XCURSOR_THEME='{xcursor}'\n"
+        common_content += f"export XCURSOR_SIZE='{size}'\n"
 
-        common_tmp = common_file + f".tmp.{os.getpid()}"
-        hypr_tmp = hypr_file + f".tmp.{os.getpid()}"
+        hypr_content = "# Managed by sanjyay.cursor-theme-manager.\n"
+        if effective_hypr == "-":
+            hypr_content += "unset HYPRCURSOR_THEME\n"
+        else:
+            hypr_content += f"export HYPRCURSOR_THEME='{effective_hypr}'\n"
+        hypr_content += f"export HYPRCURSOR_SIZE='{size}'\n"
 
-        with open(common_tmp, "w", encoding="utf-8") as f:
-            f.write("# Managed by sanjyay.cursor-theme-manager.\n")
-            if xcursor != "-":
-                f.write(f"export XCURSOR_THEME='{xcursor}'\n")
-            f.write(f"export XCURSOR_SIZE='{size}'\n")
-
-        with open(hypr_tmp, "w", encoding="utf-8") as f:
-            f.write("# Managed by sanjyay.cursor-theme-manager.\n")
-            if effective_hypr == "-":
-                f.write("unset HYPRCURSOR_THEME\n")
-            else:
-                f.write(f"export HYPRCURSOR_THEME='{effective_hypr}'\n")
-            f.write(f"export HYPRCURSOR_SIZE='{size}'\n")
-
-        os.chmod(common_tmp, 0o600)
-        os.chmod(hypr_tmp, 0o600)
-        os.replace(common_tmp, common_file)
-        os.replace(hypr_tmp, hypr_file)
+        _write_private_file(common_file, common_content, 0o600)
+        _write_private_file(hypr_file, hypr_content, 0o600)
 
 
 # ==============================================================================
@@ -875,6 +863,9 @@ def main():
 
     elif cmd == "state-read":
         st = secure_state.read_state()
+        st["trustedTools"] = {
+            "hyprctl": resolve_system_executable("hyprctl") or ""
+        }
         emit_bounded_json(st, max_bytes=LIMIT_STDOUT_SMALL)
 
     elif cmd == "state-write":

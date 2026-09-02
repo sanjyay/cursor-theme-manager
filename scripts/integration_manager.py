@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Integration Manager for Cursor Theme Manager.
 Handles transactional installation and removal of:
@@ -24,7 +24,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from runtime_safety import run_bounded, sanitize_text, emit_bounded_json, TIMEOUT_INTEGRATION
+from runtime_safety import (
+    run_bounded, resolve_system_executable, sanitize_text, emit_bounded_json,
+    TIMEOUT_INTEGRATION
+)
 import secure_state
 
 PLUGIN_ID = "sanjyay.cursor-theme-manager"
@@ -184,13 +187,22 @@ def enable_integration() -> Dict[str, Any]:
     installed_targets: List[str] = []
 
     try:
-        # Write and fsync each temporary file
+        # Write and fsync each temporary file with descriptor-held permissions
         for tmp_path, final_path, content, mode in tmp_manifest:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(content)
-                f.flush()
-                os.fsync(f.fileno())
-            os.chmod(tmp_path, mode)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            if hasattr(os, "O_CLOEXEC"):
+                flags |= os.O_CLOEXEC
+            fd = os.open(tmp_path, flags, mode)
+            try:
+                os.fchmod(fd, mode)
+                with open(fd, "w", encoding="utf-8", closefd=False) as f:
+                    f.write(content)
+                    f.flush()
+                    os.fsync(fd)
+            finally:
+                os.close(fd)
             staged_files.append((tmp_path, final_path, mode))
 
         # 3. Commit phase: atomic replacement
@@ -208,7 +220,7 @@ def enable_integration() -> Dict[str, Any]:
             raise RuntimeError(f"systemctl enable --now cleanup.path failed: {enable_res.error}")
 
         # Update desktop database best-effort
-        if shutil.which("update-desktop-database"):
+        if resolve_system_executable("update-desktop-database"):
             run_bounded(["update-desktop-database", "-q", os.path.dirname(desktop_file)], timeout=2.0)
 
         # 5. State update
@@ -279,7 +291,7 @@ def disable_integration() -> Dict[str, Any]:
         if is_file_owned_by_us(desktop_file):
             try:
                 os.unlink(desktop_file)
-                if shutil.which("update-desktop-database"):
+                if resolve_system_executable("update-desktop-database"):
                     run_bounded(["update-desktop-database", "-q", os.path.dirname(desktop_file)], timeout=2.0)
             except OSError:
                 pass

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Secure State Manager for Cursor Theme Manager.
 Implements private, descriptor-held state storage under $XDG_STATE_HOME/cursor-theme-manager/
@@ -45,41 +45,103 @@ def get_state_dir_path() -> str:
 
 def open_held_state_dir() -> Tuple[int, str]:
     """
-    Ensures the private state directory exists with mode 0700, verifies current UID
-    and non-symlink status, and returns an open file descriptor held for descriptor-relative operations.
+    Ensures the private state directory exists with mode 0700 by walking the directory
+    tree component-by-component relative to held directory file descriptors with O_NOFOLLOW.
+    Validates ownership, directory type, and permissions before mutating or fchmodding.
+    Never modifies permissions by pathname.
+    Returns (held_dir_fd, state_dir_path).
     """
-    state_dir = get_state_dir_path()
+    state_dir = os.path.abspath(get_state_dir_path())
+    parts = Path(state_dir).parts
+    if not parts or parts[0] != "/":
+        raise SecurityError(f"State directory path must be absolute: '{state_dir}'")
 
-    # Create directory securely if it doesn't exist
-    if not os.path.exists(state_dir):
-        os.makedirs(state_dir, mode=0o700, exist_ok=True)
+    # Start at root "/"
+    root_flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, "O_CLOEXEC"):
+        root_flags |= os.O_CLOEXEC
 
-    # Force 0700 mode on existing dir
     try:
-        os.chmod(state_dir, 0o700)
-    except OSError:
-        pass
+        current_fd = os.open("/", root_flags)
+    except OSError as e:
+        raise SecurityError(f"Failed to open root directory: {e}") from e
 
-    # Open directory with O_DIRECTORY and O_NOFOLLOW
-    flags = os.O_RDONLY | os.O_DIRECTORY
-    if hasattr(os, 'O_NOFOLLOW'):
-        flags |= os.O_NOFOLLOW
-
-    dir_fd = os.open(state_dir, flags)
     try:
-        st = os.fstat(dir_fd)
+        st = os.fstat(current_fd)
         if not stat.S_ISDIR(st.st_mode):
-            raise SecurityError(f"State path '{state_dir}' is not a directory")
-        if st.st_uid != os.getuid():
-            raise SecurityError(f"State directory '{state_dir}' is not owned by current user (UID {os.getuid()})")
-        mode = st.st_mode & 0o777
-        if mode != 0o700:
-            os.fchmod(dir_fd, 0o700)
+            raise SecurityError("Root path '/' is not a directory")
+        if st.st_uid != 0 and st.st_uid != os.getuid():
+            raise SecurityError(f"Root directory '/' owned by untrusted UID {st.st_uid}")
     except Exception:
-        os.close(dir_fd)
+        os.close(current_fd)
         raise
 
-    return dir_fd, state_dir
+    child_flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        child_flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        child_flags |= os.O_CLOEXEC
+
+    for i in range(1, len(parts)):
+        comp = parts[i]
+        is_final = (i == len(parts) - 1)
+        next_fd = -1
+
+        try:
+            try:
+                next_fd = os.open(comp, child_flags, dir_fd=current_fd)
+            except FileNotFoundError:
+                # Component is missing -> create directory component relative to held parent descriptor
+                try:
+                    os.mkdir(comp, mode=0o700, dir_fd=current_fd)
+                except FileExistsError:
+                    # Concurrently created or planted; do not assume safety, open and verify below
+                    pass
+                except OSError as e:
+                    raise SecurityError(f"Failed to create directory component '{comp}': {e}") from e
+
+                # Safely open the created component with O_NOFOLLOW
+                try:
+                    next_fd = os.open(comp, child_flags, dir_fd=current_fd)
+                except OSError as e:
+                    raise SecurityError(f"Failed to open created directory component '{comp}': {e}") from e
+            except OSError as e:
+                raise SecurityError(f"Failed to safely traverse directory component '{comp}': {e}") from e
+
+            # Verify opened inode
+            st = os.fstat(next_fd)
+            if not stat.S_ISDIR(st.st_mode):
+                raise SecurityError(f"Path component '{comp}' is not a directory")
+
+            if is_final:
+                # Final state directory must be owned by current user
+                if st.st_uid != os.getuid():
+                    raise SecurityError(f"State directory '{comp}' is not owned by current user (UID {os.getuid()})")
+
+                # Verify permissions and correct via fchmod ONLY on the verified opened descriptor
+                mode = st.st_mode & 0o777
+                if mode != 0o700:
+                    os.fchmod(next_fd, 0o700)
+            else:
+                # Intermediate directory: must be owned by current user OR root (UID 0)
+                if st.st_uid != os.getuid() and st.st_uid != 0:
+                    raise SecurityError(f"Intermediate directory component '{comp}' is owned by untrusted UID {st.st_uid}")
+
+            # Advance descriptor
+            os.close(current_fd)
+            current_fd = next_fd
+            next_fd = -1
+
+        except Exception:
+            if next_fd >= 0:
+                try: os.close(next_fd)
+                except OSError: pass
+            if current_fd >= 0:
+                try: os.close(current_fd)
+                except OSError: pass
+            raise
+
+    return current_fd, state_dir
 
 
 # ==============================================================================
@@ -255,26 +317,29 @@ def validate_original_cursor(obj: Any) -> Optional[Dict[str, Any]]:
 
 def capture_original_cursor() -> Dict[str, Any]:
     """Captures current active cursor values once before CTM modifies them."""
-    from runtime_safety import run_bounded
+    from runtime_safety import run_bounded, resolve_system_executable
 
     gtk_theme_set = False
     gtk_theme = None
-    res_t = run_bounded(["gsettings", "get", "org.gnome.desktop.interface", "cursor-theme"], timeout=2.0)
-    if res_t.ok and res_t.stdout.strip():
-        val = res_t.stdout.strip().strip("'\"")
-        if val:
-            gtk_theme_set = True
-            gtk_theme = val
+    gsettings_bin = resolve_system_executable("gsettings")
+    if gsettings_bin:
+        res_t = run_bounded([gsettings_bin, "get", "org.gnome.desktop.interface", "cursor-theme"], timeout=2.0)
+        if res_t.ok and res_t.stdout.strip():
+            val = res_t.stdout.strip().strip("'\"")
+            if val:
+                gtk_theme_set = True
+                gtk_theme = val
 
     gtk_size_set = False
     gtk_size = None
-    res_s = run_bounded(["gsettings", "get", "org.gnome.desktop.interface", "cursor-size"], timeout=2.0)
-    if res_s.ok and res_s.stdout.strip():
-        try:
-            gtk_size = int(res_s.stdout.strip())
-            gtk_size_set = True
-        except ValueError:
-            pass
+    if gsettings_bin:
+        res_s = run_bounded([gsettings_bin, "get", "org.gnome.desktop.interface", "cursor-size"], timeout=2.0)
+        if res_s.ok and res_s.stdout.strip():
+            try:
+                gtk_size = int(res_s.stdout.strip())
+                gtk_size_set = True
+            except ValueError:
+                pass
 
     env_hypr_theme_set = False
     env_hypr_theme = None
@@ -285,7 +350,9 @@ def capture_original_cursor() -> Dict[str, Any]:
     env_x_size_set = False
     env_x_size = None
 
-    res_env = run_bounded(["systemctl", "--user", "show-environment"], timeout=2.0)
+    systemctl_bin = resolve_system_executable("systemctl")
+    if systemctl_bin:
+        res_env = run_bounded([systemctl_bin, "--user", "show-environment"], timeout=2.0)
     if res_env.ok and res_env.stdout:
         for line in res_env.stdout.splitlines():
             line = line.strip()

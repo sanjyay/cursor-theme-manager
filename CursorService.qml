@@ -42,7 +42,8 @@ Item {
   readonly property bool launcherPromptSeen: integrationPromptSeen
   readonly property bool launcherLoading: integrationLoading
   readonly property string launcherError: integrationError
-  property string launcherPath: "" 
+  property string launcherPath: ""
+  property string trustedHyprctlPath: ""
 
   property bool _started: false
   property bool _stateLoaded: false
@@ -185,6 +186,10 @@ Item {
       _scanLoaded = true
       lastError = ""
       themesChangedByScan()
+
+      if (parsed && parsed.trustedTools && parsed.trustedTools.hyprctl) {
+        root.trustedHyprctlPath = String(parsed.trustedTools.hyprctl)
+      }
 
       // Populate runtimeThemeCache for any newly discovered themes
       for (var i = 0; i < normalized.length; i++) {
@@ -387,7 +392,12 @@ Item {
 
   function startLiveThemeSetcursor(runtimeThemeName, size, generation, themeObj) {
     _activeThemeGeneration = generation
-    liveThemeProcess.command = ["hyprctl", "setcursor", runtimeThemeName, String(size)]
+    var hyprBin = root.trustedHyprctlPath || "/usr/bin/hyprctl"
+    if (!hyprBin) {
+      root.lastError = "Required system tool \"hyprctl\" is unavailable or failed validation."
+      return
+    }
+    liveThemeProcess.command = [hyprBin, "setcursor", runtimeThemeName, String(size)]
     liveThemeProcess.running = true
     liveThemeWatchdog.restart()
   }
@@ -444,7 +454,12 @@ Item {
       resolvedTheme = committedTheme.xcursor || committedTheme.id || "Adwaita"
     }
 
-    liveSetcursorProcess.command = ["hyprctl", "setcursor", resolvedTheme, String(size)]
+    var hyprBin = root.trustedHyprctlPath || "/usr/bin/hyprctl"
+    if (!hyprBin) {
+      root.lastError = "Required system tool \"hyprctl\" is unavailable or failed validation."
+      return
+    }
+    liveSetcursorProcess.command = [hyprBin, "setcursor", resolvedTheme, String(size)]
     liveSetcursorProcess.running = true
     liveSetcursorWatchdog.restart()
   }
@@ -650,6 +665,9 @@ Item {
       stateReadWatchdog.stop()
       var text = exitCode === 0 ? (stateReadStdout.text || "") : ""
       root._loadedState = Model.parseState(text)
+      if (root._loadedState && root._loadedState.trustedTools && root._loadedState.trustedTools.hyprctl) {
+        root.trustedHyprctlPath = String(root._loadedState.trustedTools.hyprctl)
+      }
       root._stateLoaded = true
       root.initialize("")
     }

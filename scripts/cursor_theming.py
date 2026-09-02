@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Multi-Role Cursor Preview Extractor for Cursor Theme Manager.
 Resolves generic semantic cursor roles (default, pointer, text, move, resize, wait)

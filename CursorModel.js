@@ -243,10 +243,11 @@ function parseState(text) {
       launcherAdded: integrationEnabled,
       cursorModifiedByCtm: cursorModifiedByCtm,
       preCtmCursor: originalCursor,
-      originalCursor: originalCursor
+      originalCursor: originalCursor,
+      trustedTools: (raw.trustedTools && typeof raw.trustedTools === "object") ? raw.trustedTools : {}
     }
   } catch (error) {
-    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], launcherPromptSeen: false, launcherAdded: false }
+    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], launcherPromptSeen: false, launcherAdded: false, trustedTools: {} }
   }
 }
 

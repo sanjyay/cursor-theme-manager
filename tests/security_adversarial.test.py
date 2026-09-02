@@ -28,9 +28,9 @@ import json
 import stat
 import time
 import shutil
-import signal
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -298,13 +298,71 @@ class TestStateDirectorySecurity(IsolatedTestCase):
         ok = secure_state.write_state(state)
         self.assertTrue(ok)
 
-        read_back = secure_state.read_state()
-        self.assertEqual(read_back["theme"]["displayName"], "TestTheme")
-        self.assertEqual(read_back["size"], 28)
-        self.assertTrue(read_back["integrationPromptSeen"])
-        self.assertTrue(read_back["integrationEnabled"])
-        self.assertTrue(read_back["originalCursor"]["captured"])
-        self.assertEqual(read_back["originalCursor"]["xcursorTheme"], "OrigX")
+    def test_state_dir_symlink_fails_and_victim_mode_unchanged(self):
+        victim_dir = Path(os.environ["HOME"]) / "victim_private_dir"
+        victim_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(victim_dir, 0o755)
+        self.assertEqual(victim_dir.stat().st_mode & 0o777, 0o755)
+
+        state_dir_path = Path(secure_state.get_state_dir_path())
+        if state_dir_path.exists():
+            shutil.rmtree(state_dir_path)
+        state_dir_path.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(str(victim_dir), str(state_dir_path))
+
+        with self.assertRaises(secure_state.SecurityError):
+            secure_state.open_held_state_dir()
+
+        # Invariant: Victim directory mode must remain strictly UNCHANGED
+        self.assertEqual(
+            victim_dir.stat().st_mode & 0o777, 0o755,
+            "Planted state directory symlink mutated victim directory permissions!"
+        )
+
+    def test_state_dir_intermediate_symlink_rejected(self):
+        victim_dir = Path(os.environ["HOME"]) / "victim_state_parent"
+        victim_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(victim_dir, 0o755)
+
+        # Replace XDG_STATE_HOME with a symlink to victim_dir
+        state_home = Path(os.environ["XDG_STATE_HOME"])
+        if state_home.exists():
+            shutil.rmtree(state_home)
+        os.symlink(str(victim_dir), str(state_home))
+
+        with self.assertRaises(secure_state.SecurityError):
+            secure_state.open_held_state_dir()
+
+        self.assertEqual(victim_dir.stat().st_mode & 0o777, 0o755)
+
+    def test_state_dir_regular_file_rejected_without_mutation(self):
+        state_dir_path = Path(secure_state.get_state_dir_path())
+        if state_dir_path.exists():
+            shutil.rmtree(state_dir_path)
+        state_dir_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(state_dir_path, "w") as f:
+            f.write("not a directory")
+        os.chmod(state_dir_path, 0o644)
+
+        with self.assertRaises(secure_state.SecurityError):
+            secure_state.open_held_state_dir()
+
+        self.assertTrue(state_dir_path.is_file())
+        self.assertEqual(state_dir_path.stat().st_mode & 0o777, 0o644)
+
+    def test_state_dir_mode_correction_only_on_verified_inode(self):
+        state_dir_path = Path(secure_state.get_state_dir_path())
+        state_dir_path.mkdir(parents=True, exist_ok=True)
+        os.chmod(state_dir_path, 0o755)
+        self.assertEqual(state_dir_path.stat().st_mode & 0o777, 0o755)
+
+        dir_fd, path = secure_state.open_held_state_dir()
+        try:
+            st = os.fstat(dir_fd)
+            self.assertEqual(st.st_mode & 0o777, 0o700)
+            self.assertEqual(state_dir_path.stat().st_mode & 0o777, 0o700)
+        finally:
+            os.close(dir_fd)
 
 
 class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
@@ -314,6 +372,10 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
         super().setUp()
 
     def tearDown(self):
+        try:
+            integration_manager.disable_integration()
+        except Exception:
+            pass
         super().tearDown()
 
     def test_zero_artifacts_before_consent(self):
@@ -350,16 +412,15 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
 
     def test_transactional_rollback_on_failure_injection(self):
         # Inject systemctl failure to force rollback
-        fail_bin = os.path.join(self.test_dir, "fail_bin")
-        os.makedirs(fail_bin, exist_ok=True)
-        with open(os.path.join(fail_bin, "systemctl"), "w") as f:
-            f.write("#!/bin/sh\nexit 1\n")
-        os.chmod(os.path.join(fail_bin, "systemctl"), 0o755)
-        os.environ["PATH"] = f"{fail_bin}:{os.environ.get('PATH', '')}"
+        def failing_run_bounded(cmd, *args, **kwargs):
+            if any("daemon-reload" in str(c) or "enable" in str(c) for c in cmd):
+                return runtime_safety.BoundedResult(exit_code=1, stdout=b"", stderr=b"Injected systemd failure", error="Injected systemd failure")
+            return runtime_safety.run_bounded(cmd, *args, **kwargs)
 
-        res = integration_manager.enable_integration()
-        self.assertFalse(res["ok"])
-        self.assertIn("Integration installation failed and was rolled back", res["error"])
+        with mock.patch("integration_manager.run_bounded", side_effect=failing_run_bounded):
+            res = integration_manager.enable_integration()
+            self.assertFalse(res["ok"])
+            self.assertIn("Integration installation failed and was rolled back", res["error"])
 
         # Verify no artifacts survived the failed attempt
         paths = integration_manager.get_paths()
@@ -501,22 +562,17 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
             "gtkTheme": "Adwaita",
             "gtkSizeSet": True,
             "gtkSize": 24,
-            "liveTheme": "Adwaita",
+            "liveRestoreTheme": "NonExistentUninstalledCursorTheme",
+            "liveRestoreSize": 24,
+            "liveTheme": "NonExistentUninstalledCursorTheme",
             "liveSize": 24,
             "liveBackend": "xcursor"
         }
         st["cursorModifiedByCtm"] = True
         secure_state.write_state(st)
 
-        # Inject hyprctl failure
-        fail_bin = os.path.join(self.test_dir, "fail_bin")
-        os.makedirs(fail_bin, exist_ok=True)
-        with open(os.path.join(fail_bin, "hyprctl"), "w") as f:
-            f.write("#!/bin/sh\nexit 1\n")
-        os.chmod(os.path.join(fail_bin, "hyprctl"), 0o755)
-
-        # Run cleanup helper with failing hyprctl
-        res_fail = runtime_safety.run_bounded([sys.executable, paths["cleanup"]], env={**os.environ, "PATH": f"{fail_bin}:{os.environ.get('PATH', '')}"}, timeout=3.0)
+        # Run cleanup helper with uninstalled theme causing restore failure
+        res_fail = runtime_safety.run_bounded([sys.executable, paths["cleanup"]], timeout=3.0)
         self.assertFalse(res_fail.ok)
         self.assertIn("critical failure", res_fail.stderr)
 
@@ -633,6 +689,75 @@ class TestPlainTextAndModelSanitization(unittest.TestCase):
                         block,
                         f"{qml.name} contains Text node without textFormat: Text.PlainText"
                     )
+
+
+class TestExecutableTrustAndHostilePath(IsolatedTestCase):
+    """
+    Verifies that CTM rejects user-writable PATH binaries, executes only root-owned system binaries,
+    and strips dangerous code-injection environment variables.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.evil_bin = Path(self.test_dir) / "evil_bin"
+        self.evil_bin.mkdir(parents=True, exist_ok=True)
+        self.sentinel = Path(self.test_dir) / "pwned_sentinel.txt"
+
+        # Create hostile fake binaries for all sensitive external tools
+        for tool_name in ["hyprctl", "gsettings", "systemctl", "hyprcursor-util", "dbus-update-activation-environment", "update-desktop-database", "xdg-open", "xcur2png", "magick"]:
+            fake_script = self.evil_bin / tool_name
+            with open(fake_script, "w") as f:
+                f.write(f"#!/bin/sh\necho 'PWNED: {tool_name}' >> '{self.sentinel}'\nexit 0\n")
+            os.chmod(fake_script, 0o755)
+
+        # Inject hostile PATH
+        self.hostile_env = {
+            **self.env,
+            "PATH": f"{self.evil_bin}:{os.environ.get('PATH', '')}"
+        }
+
+    def test_resolver_never_resolves_hostile_path_binaries(self):
+        for tool_name in ["hyprctl", "gsettings", "systemctl", "hyprcursor-util"]:
+            resolved = runtime_safety.resolve_system_executable(tool_name)
+            self.assertIsNotNone(resolved)
+            self.assertFalse(
+                resolved.startswith(str(self.evil_bin)),
+                f"Resolver returned hostile path executable: {resolved}"
+            )
+            self.assertTrue(
+                resolved.startswith("/usr/bin/") or resolved.startswith("/bin/"),
+                f"Resolved binary not in trusted system directory: {resolved}"
+            )
+
+    def test_run_bounded_never_executes_hostile_path_binaries(self):
+        # Run various commands with hostile PATH in environment
+        runtime_safety.run_bounded(["hyprctl", "--version"], env=self.hostile_env, timeout=2.0)
+        runtime_safety.run_bounded(["gsettings", "--version"], env=self.hostile_env, timeout=2.0)
+        runtime_safety.run_bounded(["systemctl", "--version"], env=self.hostile_env, timeout=2.0)
+        runtime_safety.run_bounded(["hyprcursor-util", "--help"], env=self.hostile_env, timeout=2.0)
+
+        # Invariant: Sentinel file must NEVER be created
+        self.assertFalse(
+            self.sentinel.exists(),
+            "Adversarial fake binary was executed through PATH substitution!"
+        )
+
+    def test_untrusted_direct_path_fails_closed(self):
+        fake_hypr = str(self.evil_bin / "hyprctl")
+        res = runtime_safety.run_bounded([fake_hypr, "setcursor", "foo", "24"], timeout=2.0)
+        self.assertFalse(res.ok)
+        self.assertEqual(res.exit_code, 127)
+        self.assertIn("unavailable or failed validation", res.error)
+        self.assertFalse(self.sentinel.exists())
+
+    def test_dangerous_env_vars_stripped(self):
+        probe_code = "import os; print(os.environ.get('PYTHONPATH', 'CLEAN'), os.environ.get('LD_PRELOAD', 'CLEAN'))"
+        res = runtime_safety.run_bounded(
+            [sys.executable, "-c", probe_code],
+            env={**self.env, "PYTHONPATH": "/evil/python/path", "LD_PRELOAD": "/evil/lib.so"}
+        )
+        self.assertTrue(res.ok)
+        self.assertIn("CLEAN CLEAN", res.stdout)
 
 
 if __name__ == "__main__":

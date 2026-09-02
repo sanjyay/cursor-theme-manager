@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Secure Import and Management Engine for Cursor Theme Manager.
 Imports local cursor theme directories or safe archives chosen by the user into ~/.local/share/icons.

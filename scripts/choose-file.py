@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Lightweight file/directory chooser for Omarchy Cursor Switcher.
 Uses standard Python tkinter with fallback.

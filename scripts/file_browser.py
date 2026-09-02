@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Fast, secure directory browser and cursor candidate inspector for Cursor Theme Manager.
 Returns strictly bounded JSON with directories, cursor archives, and cursor theme folders.

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Standalone Removal Cleanup Helper for Cursor Theme Manager.
 Invoked by systemd user service `cursor-theme-manager-cleanup.service` when the
@@ -21,9 +21,101 @@ import json
 import subprocess
 import shutil
 from pathlib import Path
+from typing import Dict, Optional
 
 PLUGIN_ID = "sanjyay.cursor-theme-manager"
 OWNERSHIP_MARKER = "X-CursorThemeManager-Owned=true"
+
+TRUSTED_BIN_DIRS = (
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/bin",
+    "/sbin"
+)
+
+SAFE_SYSTEM_PATH = "/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:/bin:/sbin"
+
+ALLOWLISTED_ENV_VARS = (
+    "HOME", "USER", "LOGNAME",
+    "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_DATA_DIRS",
+    "WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE", "LC_NUMERIC", "LC_TIME"
+)
+
+DANGEROUS_ENV_VARS = {
+    "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONOPTIMIZE", "PYTHONDEBUG", "PYTHONEXECUTABLE", "PYTHONUSERBASE",
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG", "LD_ORIGIN_PATH",
+    "BASH_ENV", "ENV", "SHELLOPTS", "BASH_OPTS", "PROMPT_COMMAND",
+    "PERL5LIB", "PERLLIB", "RUBYLIB", "NODE_OPTIONS", "IFS"
+}
+
+_RESOLVED_TOOL_CACHE: Dict[str, Optional[str]] = {}
+
+
+def resolve_system_executable(name: str) -> Optional[str]:
+    """
+    Resolves an external executable from fixed system directories only.
+    Verifies regular file, executable permissions, root-owned (UID 0),
+    not group/world writable, and resolved canonical target resides under system roots.
+    """
+    if not name or not isinstance(name, str):
+        return None
+
+    if name in _RESOLVED_TOOL_CACHE:
+        return _RESOLVED_TOOL_CACHE[name]
+
+    resolved_path: Optional[str] = None
+    if name.startswith("/"):
+        candidates = [name]
+    else:
+        candidates = [os.path.join(d, name) for d in TRUSTED_BIN_DIRS]
+
+    for candidate in candidates:
+        try:
+            if not os.path.exists(candidate):
+                continue
+            real_path = os.path.realpath(candidate)
+            if not any(real_path == d or real_path.startswith(d + "/") for d in TRUSTED_BIN_DIRS):
+                continue
+            st = os.stat(real_path)
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            if not (st.st_mode & 0o111) or not os.access(real_path, os.X_OK):
+                continue
+            if st.st_uid != 0:
+                continue
+            if st.st_mode & 0o022:
+                continue
+
+            resolved_path = candidate
+            break
+        except (OSError, PermissionError):
+            continue
+
+    _RESOLVED_TOOL_CACHE[name] = resolved_path
+    return resolved_path
+
+
+def get_secure_subprocess_env(extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    clean_env: Dict[str, str] = {"PATH": SAFE_SYSTEM_PATH}
+    for var in ALLOWLISTED_ENV_VARS:
+        val = os.environ.get(var)
+        if val is not None:
+            clean_env[var] = val
+
+    if extra_env:
+        for k, v in extra_env.items():
+            if k in DANGEROUS_ENV_VARS:
+                continue
+            if k == "PATH":
+                continue
+            clean_env[k] = str(v)
+
+    return clean_env
+
 
 def get_paths() -> dict:
     home = os.environ.get("HOME", os.path.expanduser("~"))
@@ -51,11 +143,16 @@ def get_paths() -> dict:
 
 
 def run_cmd(args, env_override=None, timeout=3.0):
+    if not args:
+        return False, "", "Empty arguments"
+    raw_cmd = str(args[0])
+    resolved = resolve_system_executable(raw_cmd)
+    if resolved is None:
+        return False, "", f"Required system tool '{raw_cmd}' is unavailable or failed validation"
+    cmd_args = [resolved] + [str(a) for a in args[1:]]
+    secure_env = get_secure_subprocess_env(env_override)
     try:
-        env = dict(os.environ)
-        if env_override:
-            env.update(env_override)
-        res = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+        res = subprocess.run(cmd_args, capture_output=True, text=True, timeout=timeout, env=secure_env)
         return res.returncode == 0, res.stdout, res.stderr
     except Exception as e:
         return False, "", str(e)
@@ -164,7 +261,7 @@ def restore_cursor(orig) -> bool:
     live_success = True
 
     # 1. LIVE Hyprland compositor transition
-    if shutil.which("hyprctl"):
+    if resolve_system_executable("hyprctl"):
         hypr_env = {}
         sig = find_hyprland_instance()
         if sig:
@@ -284,7 +381,7 @@ def execute_cleanup():
     if os.path.exists(paths["desktop_file"]) and is_file_owned_by_us(paths["desktop_file"]):
         try:
             os.unlink(paths["desktop_file"])
-            if shutil.which("update-desktop-database"):
+            if resolve_system_executable("update-desktop-database"):
                 run_cmd(["update-desktop-database", "-q", os.path.dirname(paths["desktop_file"])])
         except OSError:
             pass
