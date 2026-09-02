@@ -71,6 +71,9 @@ Item {
   property int _preparingGeneration: 0
   property bool _pendingDiscoveryRefresh: false
   property string _pendingSelectionThemeId: ""
+  property string _activeRemovingThemeId: ""
+  property string _activeRenamingThemeId: ""
+  property string _activeRenamingNewName: ""
   property int themeModelVersion: 0
 
   // Trailing-edge live size apply debounce timer (90 ms quiet window)
@@ -577,9 +580,10 @@ Item {
     if (!theme || !theme.id || removeImportProcess.running) return
     if (!theme.imported && theme.sourceType !== "imported") return
     lastError = ""
+    _activeRemovingThemeId = String(theme.id)
     if (committedTheme && (committedTheme.id === theme.id || committedTheme.displayName === theme.displayName)) {
       var fb = Model.fallbackTheme(themes, "Banana")
-      if (fb) enqueueApply(fb, committedSize, "commit")
+      if (fb) commitTheme(fb)
     }
     rolesCache = ({})
     removeImportProcess.command = [helperPath, "remove-imported", "--id", String(theme.id)]
@@ -597,8 +601,10 @@ Item {
   function renameImportedTheme(theme, newName) {
     if (!theme || !theme.id || !newName || renameImportProcess.running) return
     lastError = ""
+    _activeRenamingThemeId = String(theme.id)
+    _activeRenamingNewName = Model.sanitizeString(newName, 100)
     rolesCache = ({})
-    renameImportProcess.command = [helperPath, "rename-imported", "--id", String(theme.id), "--name", Model.sanitizeString(newName, 100)]
+    renameImportProcess.command = [helperPath, "rename-imported", "--id", String(theme.id), "--name", _activeRenamingNewName]
     renameImportProcess.running = true
     renameImportWatchdog.restart()
   }
@@ -991,15 +997,25 @@ Item {
           root.statusText = msg
           root.lastError = ""
 
-          // Register runtime cache mapping if available from import
-          if (parsed.theme.hyprcursor) {
-            root.runtimeThemeCache[parsed.theme.id] = { name: parsed.theme.hyprcursor, prepared: true }
+          // 1. Immediate canonical theme upsert into live model (0 ms delay - card visible instantly!)
+          var canonical = Model.normalizedTheme(parsed.theme)
+          if (canonical) {
+            root.themes = Model.upsertTheme(root.themes, canonical)
+            root.themeModelVersion++
+            root.themesChangedByScan()
+
+            if (canonical.runtimeTheme && canonical.runtimePrepared) {
+              root.runtimeThemeCache[canonical.id] = { name: canonical.runtimeTheme, prepared: true }
+            }
+
+            // 2. Select and live apply immediately
+            root.commitTheme(canonical)
           }
 
-          // Set pending selection so that discovery selects and applies the authoritative theme from the model
-          root._pendingSelectionThemeId = parsed.theme.id || parsed.theme.displayName
-          root.refresh(true)
           root.importCompleted(parsed.theme, msg)
+
+          // 3. Background non-blocking reconciliation discovery
+          root.refresh(true)
         } else {
           var err = parsed.error || "Failed to import cursor theme"
           root.lastError = err
@@ -1031,6 +1047,19 @@ Item {
       removeImportWatchdog.stop()
       if (exitCode === 0) {
         root.statusText = "Imported theme removed"
+        if (root._activeRemovingThemeId) {
+          delete root.runtimeThemeCache[root._activeRemovingThemeId]
+          var nextList = []
+          for (var i = 0; i < root.themes.length; i++) {
+            if (root.themes[i].id !== root._activeRemovingThemeId) {
+              nextList.push(root.themes[i])
+            }
+          }
+          root.themes = nextList
+          root.themeModelVersion++
+          root.themesChangedByScan()
+          root._activeRemovingThemeId = ""
+        }
         root.refresh(true)
       } else {
         root.lastError = "Could not remove imported theme"
@@ -1057,6 +1086,18 @@ Item {
       if (exitCode === 0) {
         root.rolesCache = ({})
         root.statusText = "Theme renamed"
+        if (root._activeRenamingThemeId && root._activeRenamingNewName) {
+          for (var i = 0; i < root.themes.length; i++) {
+            if (root.themes[i].id === root._activeRenamingThemeId) {
+              root.themes[i].displayName = root._activeRenamingNewName
+              break
+            }
+          }
+          root.themeModelVersion++
+          root.themesChangedByScan()
+          root._activeRenamingThemeId = ""
+          root._activeRenamingNewName = ""
+        }
         root.refresh(true)
       } else {
         root.lastError = root.elide(renameImportStderr.text || "Failed to rename theme")

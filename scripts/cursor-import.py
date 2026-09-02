@@ -416,6 +416,8 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
                         out = res.stdout.strip()
                         if out:
                             theme_record["hyprcursor"] = out
+                            theme_record["runtimeTheme"] = out
+                            theme_record["runtimePrepared"] = True
                             if "hyprcursor" not in theme_record["formats"]:
                                 theme_record["formats"].append("hyprcursor")
                 except Exception as e:

@@ -91,6 +91,8 @@ function normalizedTheme(raw) {
 
   var id = sanitizeString(raw.id, 256) || hypr || xcursor
   var displayName = sanitizeString(raw.displayName, 256) || hypr || xcursor
+  var runtimeTheme = sanitizeString(raw.runtimeTheme, 256) || (hypr && hypr !== "-" ? hypr : (xcursor && xcursor !== "-" ? xcursor : id))
+  var runtimePrepared = Boolean(raw.runtimePrepared !== undefined ? raw.runtimePrepared : (hypr && hypr !== "-"))
 
   return {
     id: id,
@@ -99,6 +101,8 @@ function normalizedTheme(raw) {
     subtitle: subtitle,
     hyprcursor: hypr,
     xcursor: xcursor,
+    runtimeTheme: runtimeTheme,
+    runtimePrepared: runtimePrepared,
     path: sanitizeString(raw.path, 4096),
     formats: formats,
     previewPath: sanitizeString(raw.previewPath, 4096),
@@ -125,6 +129,8 @@ function mergeTheme(a, b) {
   var other = preferred === a ? b : a
   var formats = preferred.formats.slice()
   other.formats.forEach(function(format) { if (formats.indexOf(format) === -1) formats.push(format) })
+  var runtimeTheme = preferred.runtimeTheme || other.runtimeTheme || preferred.hyprcursor || preferred.xcursor || preferred.id
+  var runtimePrepared = Boolean(preferred.runtimePrepared || other.runtimePrepared)
   return {
     id: preferred.id || other.id,
     displayName: preferred.displayName || other.displayName,
@@ -132,6 +138,8 @@ function mergeTheme(a, b) {
     subtitle: preferred.subtitle || other.subtitle,
     hyprcursor: preferred.hyprcursor || other.hyprcursor,
     xcursor: preferred.xcursor || other.xcursor,
+    runtimeTheme: runtimeTheme,
+    runtimePrepared: runtimePrepared,
     path: preferred.path || other.path,
     formats: formats,
     previewPath: preferred.previewPath || other.previewPath,
@@ -142,6 +150,35 @@ function mergeTheme(a, b) {
     license: preferred.license || other.license,
     previewable: true
   }
+}
+
+function upsertTheme(themesList, rawOrNormalizedTheme) {
+  var normalized = normalizedTheme(rawOrNormalizedTheme)
+  if (!normalized || !isThemeVisible(normalized)) return (themesList || []).slice()
+
+  var list = Array.isArray(themesList) ? themesList.slice() : []
+  var existingIdx = -1
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].id === normalized.id || (list[i].imported && list[i].displayName === normalized.displayName)) {
+      existingIdx = i
+      break
+    }
+  }
+
+  if (existingIdx !== -1) {
+    list[existingIdx] = mergeTheme(list[existingIdx], normalized)
+  } else {
+    list.unshift(normalized)
+  }
+
+  list.sort(function(a, b) {
+    var typeOrderA = a.sourceType === "imported" ? 0 : (a.sourceType === "user" ? 1 : 2)
+    var typeOrderB = b.sourceType === "imported" ? 0 : (b.sourceType === "user" ? 1 : 2)
+    if (typeOrderA !== typeOrderB) return typeOrderA - typeOrderB
+    return sanitizeString(a.displayName, 256).localeCompare(sanitizeString(b.displayName, 256))
+  })
+
+  return list
 }
 
 function normalizeThemes(rawThemes) {
@@ -436,6 +473,7 @@ if (typeof module !== "undefined") module.exports = {
   canDecreaseSize: canDecreaseSize,
   normalizedTheme: normalizedTheme,
   normalizeThemes: normalizeThemes,
+  upsertTheme: upsertTheme,
   parseState: parseState,
   stateDocument: stateDocument,
   findTheme: findTheme,

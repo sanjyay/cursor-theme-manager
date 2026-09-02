@@ -144,4 +144,31 @@ assert.strictEqual(tiledGeom.gridWidth, 3 * 72 + 2 * 14) // 244px
 assert.strictEqual(tiledGeom.gridHeight, 2 * 92 + 1 * 12) // 196px
 assert.strictEqual(tiledGeom.containerHeight, 196 + 28) // 224px
 
+// upsertTheme tests
+const initialList = [
+  { id: "Adwaita", displayName: "Adwaita", hyprcursor: "", xcursor: "Adwaita", formats: ["xcursor"], sourceType: "system" }
+]
+const newImported = {
+  id: "CursorSwitcher-Imported-Banana-12345",
+  displayName: "Banana",
+  formats: ["xcursor", "hyprcursor"],
+  hyprcursor: "CursorSwitcher-XCursor-CursorSwitcher-Imported-Banana-12345-67890",
+  xcursor: "CursorSwitcher-Imported-Banana-12345",
+  sourceType: "imported",
+  imported: true
+}
+
+const upserted = Model.upsertTheme(initialList, newImported)
+assert.strictEqual(upserted.length, 2)
+assert.strictEqual(upserted[0].displayName, "Banana")
+assert.strictEqual(upserted[0].imported, true)
+assert.strictEqual(upserted[1].displayName, "Adwaita")
+
+// Re-upserting same theme updates in-place without duplicating
+const updatedImported = { ...newImported, displayName: "Banana Pro" }
+const reUpserted = Model.upsertTheme(upserted, updatedImported)
+assert.strictEqual(reUpserted.length, 2)
+assert.strictEqual(reUpserted[0].displayName, "Banana Pro")
+
 console.log("model tests: ok")
+
