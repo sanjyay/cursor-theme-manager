@@ -24,6 +24,8 @@ Item {
   property bool ready: false
   property bool scanning: false
   property bool applying: false
+  readonly property bool importing: Boolean(importProcess.running)
+  property string importTargetName: ""
   property string lastError: ""
   property string statusText: "Starting…"
   property double lastScanMs: 0
@@ -566,7 +568,8 @@ Item {
   function importTheme(sourcePath, optionalName) {
     if (!sourcePath || importProcess.running) return
     lastError = ""
-    statusText = "Importing theme…"
+    importTargetName = optionalName ? String(optionalName) : (String(sourcePath).split("/").pop() || "")
+    statusText = "Importing " + (importTargetName || "cursor theme") + "…"
     var args = [helperPath, "import", "--source", String(sourcePath)]
     if (optionalName) {
       args.push("--name", Model.sanitizeString(optionalName, 100))
@@ -996,6 +999,7 @@ Item {
           var msg = parsed.alreadyImported ? "Already imported: " + parsed.theme.displayName : "Successfully imported " + parsed.theme.displayName
           root.statusText = msg
           root.lastError = ""
+          root.importTargetName = ""
 
           // 1. Immediate canonical theme upsert into live model (0 ms delay - card visible instantly!)
           var canonical = Model.normalizedTheme(parsed.theme)

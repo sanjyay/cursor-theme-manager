@@ -473,6 +473,95 @@ Item {
         }
       }
 
+      // Global Import Loading Prompt Modal
+      Item {
+        id: importLoadingModal
+        anchors.fill: parent
+        z: 80
+        readonly property bool shouldShow: Boolean(root.service && root.service.importing && !importDialog.active)
+        visible: opacity > 0
+        opacity: shouldShow ? 1.0 : 0.0
+        Behavior on opacity { NumberAnimation { duration: 140 } }
+
+        Rectangle {
+          anchors.fill: parent
+          color: Util.alpha("#000000", 0.65)
+          MouseArea {
+            anchors.fill: parent
+          }
+        }
+
+        Rectangle {
+          anchors.centerIn: parent
+          width: Math.min(parent.width - Style.space(32), Style.space(380))
+          height: Style.space(160)
+          radius: Style.cornerRadius
+          color: Color.popups.background
+          border.color: Color.popups.border
+          border.width: 1
+          clip: true
+
+          MouseArea {
+            anchors.fill: parent
+          }
+
+          Column {
+            anchors.centerIn: parent
+            spacing: Style.space(14)
+
+            Item {
+              anchors.horizontalCenter: parent.horizontalCenter
+              width: Style.space(40)
+              height: Style.space(40)
+
+              Text {
+                id: globalSpinnerIcon
+                anchors.centerIn: parent
+                text: "󰑮"
+                textFormat: Text.PlainText
+                color: Color.accent
+                font.family: Style.font.family
+                font.pixelSize: Style.space(32)
+
+                RotationAnimation on rotation {
+                  loops: Animation.Infinite
+                  from: 0
+                  to: 360
+                  duration: 1100
+                  running: importLoadingModal.visible
+                }
+              }
+            }
+
+            Column {
+              anchors.horizontalCenter: parent.horizontalCenter
+              spacing: Style.space(4)
+
+              Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "Importing Cursor Theme…"
+                textFormat: Text.PlainText
+                color: Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
+
+              Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: (root.service && root.service.importTargetName) ? root.service.importTargetName : "Processing cursor theme…"
+                textFormat: Text.PlainText
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+                maximumLineCount: 1
+              }
+            }
+          }
+        }
+      }
+
       // In-App Import Modal Dialog
       ImportDialog {
         id: importDialog

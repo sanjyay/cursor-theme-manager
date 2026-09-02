@@ -708,5 +708,77 @@ Item {
         }
       }
     }
+    // Loading Overlay inside ImportDialog
+    Rectangle {
+      id: loadingOverlay
+      anchors.fill: dialogBox
+      radius: Style.cornerRadius
+      color: Util.alpha(Color.popups.background, 0.94)
+      border.color: Color.popups.border
+      border.width: 1
+      visible: opacity > 0
+      opacity: (root.service && root.service.importing) ? 1.0 : 0.0
+      Behavior on opacity { NumberAnimation { duration: 150 } }
+      z: 100
+
+      MouseArea {
+        anchors.fill: parent
+      }
+
+      Column {
+        anchors.centerIn: parent
+        spacing: Style.space(16)
+
+        Item {
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: Style.space(48)
+          height: Style.space(48)
+
+          Text {
+            id: spinnerIcon
+            anchors.centerIn: parent
+            text: "󰑮"
+            textFormat: Text.PlainText
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.space(36)
+
+            RotationAnimation on rotation {
+              loops: Animation.Infinite
+              from: 0
+              to: 360
+              duration: 1100
+              running: loadingOverlay.visible
+            }
+          }
+        }
+
+        Column {
+          anchors.horizontalCenter: parent.horizontalCenter
+          spacing: Style.space(6)
+
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "Importing Cursor Theme…"
+            textFormat: Text.PlainText
+            color: Color.popups.text
+            font.family: Style.font.family
+            font.pixelSize: Style.font.title
+            font.bold: true
+          }
+
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: (root.service && root.service.importTargetName) ? root.service.importTargetName : "Extracting and preparing cursor files…"
+            textFormat: Text.PlainText
+            color: Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            elide: Text.ElideRight
+            maximumLineCount: 1
+          }
+        }
+      }
+    }
   }
 }
