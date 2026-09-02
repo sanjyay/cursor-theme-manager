@@ -109,11 +109,11 @@ Item {
         visible: root.userThemes.length > 0
 
         Text {
-          text: "USER"
+          text: "IMPORTED"
           textFormat: Text.PlainText
-          color: Color.muted
+          color: Color.popups.text
           font.family: Style.font.family
-          font.pixelSize: Style.font.caption - 2
+          font.pixelSize: Style.font.bodySmall
           font.bold: true
           leftPadding: Style.space(8)
           bottomPadding: Style.space(2)
@@ -202,9 +202,9 @@ Item {
         Text {
           text: "SYSTEM"
           textFormat: Text.PlainText
-          color: Color.muted
+          color: Color.popups.text
           font.family: Style.font.family
-          font.pixelSize: Style.font.caption - 2
+          font.pixelSize: Style.font.bodySmall
           font.bold: true
           leftPadding: Style.space(8)
           bottomPadding: Style.space(2)
