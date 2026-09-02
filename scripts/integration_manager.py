@@ -108,12 +108,14 @@ def get_status() -> Dict[str, Any]:
     all_artifacts = desktop_exists and cleanup_exists and path_unit_exists and service_unit_exists
 
     st = secure_state.read_state()
-    prompt_seen = bool(st.get("integrationPromptSeen", st.get("launcherPromptSeen", False)))
     state_enabled = bool(st.get("integrationEnabled", st.get("launcherAdded", False)))
+    effective_enabled = all_artifacts and state_enabled
+    # Prompt is persistently seen ONLY if integration is actually enabled; otherwise setup is required
+    prompt_seen = effective_enabled
 
     return {
         "ok": True,
-        "enabled": all_artifacts and state_enabled,
+        "enabled": effective_enabled,
         "promptSeen": prompt_seen,
         "stateEnabled": state_enabled,
         "artifacts": {
@@ -127,11 +129,8 @@ def get_status() -> Dict[str, Any]:
 
 
 def dismiss_prompt() -> Dict[str, Any]:
-    st = secure_state.read_state()
-    st["integrationPromptSeen"] = True
-    st["launcherPromptSeen"] = True
-    secure_state.write_state(st)
-    return {"ok": True, "promptSeen": True}
+    # In-memory / session-only dismissal — never write durable files solely for prompt dismissal
+    return {"ok": True, "promptSeen": False}
 
 
 def enable_integration() -> Dict[str, Any]:

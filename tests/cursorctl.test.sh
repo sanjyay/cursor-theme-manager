@@ -100,14 +100,14 @@ python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data.get("o
 STATUS_0=$(PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" integration-status)
 python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["enabled"] == False; assert data["promptSeen"] == False' "$STATUS_0"
 
-# 2. Dismiss prompt
+# 2. Dismiss prompt (in-memory/session only, zero durable state)
 DISMISS_RES=$(PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" integration-dismiss-prompt)
-python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["ok"] == True; assert data["promptSeen"] == True' "$DISMISS_RES"
+python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["ok"] == True' "$DISMISS_RES"
 [[ ! -e "$XDG_DATA_HOME/applications/cursor-theme-manager.desktop" ]]
 [[ ! -e "$HOME/.local/libexec/cursor-theme-manager/cleanup" ]]
 
 STATUS_1=$(PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" integration-status)
-python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["enabled"] == False; assert data["promptSeen"] == True' "$STATUS_1"
+python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["enabled"] == False; assert data["promptSeen"] == False' "$STATUS_1"
 
 # 3. Enable Integration (installs all 4 persistent artifacts)
 ENABLE_RES=$(PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" integration-enable)
@@ -150,6 +150,6 @@ python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["ok"] 
 [[ ! -e "$SERVICE_UNIT" ]]
 
 STATUS_3=$(PATH="$MOCK_BIN:$PATH" "$ROOT/scripts/cursorctl" integration-status)
-python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["enabled"] == False; assert data["promptSeen"] == True' "$STATUS_3"
+python3 -c 'import sys, json; data = json.loads(sys.argv[1]); assert data["enabled"] == False; assert data["promptSeen"] == False' "$STATUS_3"
 
 echo "cursorctl tests: ok"

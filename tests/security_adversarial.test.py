@@ -327,9 +327,11 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
         paths = integration_manager.get_paths()
         for key in ["desktop", "cleanup", "path_unit", "service_unit"]:
             self.assertFalse(os.path.exists(paths[key]))
+        # Assert no durable state file created solely for dismissal
+        self.assertFalse(os.path.exists(self.iso.state_dir / "state.json"))
         st = integration_manager.get_status()
         self.assertFalse(st["enabled"])
-        self.assertTrue(st["promptSeen"])
+        self.assertFalse(st["promptSeen"])
 
     def test_transactional_installation_success(self):
         res = integration_manager.enable_integration()

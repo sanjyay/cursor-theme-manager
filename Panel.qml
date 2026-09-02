@@ -511,7 +511,7 @@ Item {
         anchors.fill: parent
         z: 70
         property bool dismissedLocally: false
-        readonly property bool shouldShow: Boolean(root.service && root.service.ready && !root.service.integrationPromptSeen && !dismissedLocally)
+        readonly property bool shouldShow: Boolean(root.service && root.service.ready && root.service.setupRequired && !dismissedLocally)
         visible: opacity > 0
         opacity: shouldShow ? 1.0 : 0.0
         Behavior on opacity { NumberAnimation { duration: 140 } }

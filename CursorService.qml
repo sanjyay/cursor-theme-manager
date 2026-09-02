@@ -30,7 +30,9 @@ Item {
 
   // Integration & Removal Lifecycle State
   property bool integrationEnabled: false
-  property bool integrationPromptSeen: false
+  property bool setupDismissedThisSession: false
+  readonly property bool setupRequired: !integrationEnabled && !setupDismissedThisSession
+  property bool integrationPromptSeen: integrationEnabled || setupDismissedThisSession
   property bool integrationLoading: false
   property string integrationError: ""
   property var integrationArtifacts: ({})
@@ -53,29 +55,25 @@ Item {
   property string _discoverOutput: ""
   property string _discoverError: ""
 
-  // Minimum throttle interval between consecutive hyprctl setcursor calls (~80 ms)
-  readonly property int minLiveSetcursorInterval: 80
-  property double _lastLiveSetcursorTime: 0
-
-  // Request Generation Tracking
+  // Size State & Trailing-Edge Request Generation Tracking
+  property int requestedSize: 16
+  property int liveAppliedSize: 16
+  property int _persistedSize: 16
   property int _sizeRequestGeneration: 0
   property int _activeLiveGeneration: 0
-  property int _pendingLiveGeneration: 0
-  property int _pendingLiveSize: 0
-  property int _persistedSize: 16
 
-  // Throttle timer for trailing-edge live apply
+  // Trailing-edge live apply debounce timer (90 ms quiet window)
   Timer {
-    id: liveThrottleTimer
-    interval: 80
+    id: trailingLiveSizeTimer
+    interval: 90
     repeat: false
-    onTriggered: root.dispatchPendingLiveSetcursor()
+    onTriggered: root.dispatchTrailingLiveSize()
   }
 
-  // Persistence debounce timer (runs silently only after user stops resizing for 300 ms)
+  // Silent configuration persistence timer (runs after live setcursor completes)
   Timer {
     id: commitSizeDebounceTimer
-    interval: 300
+    interval: 150
     repeat: false
     onTriggered: root.flushFinalSizePersistence()
   }
@@ -122,13 +120,13 @@ Item {
 
   Timer { id: startupTimer; interval: 25; repeat: false; onTriggered: root.start() }
 
-  // Automatic first-run presentation timer (only triggers if launcherPromptSeen is false)
+  // Automatic first-run presentation timer (triggers only if setup is required)
   Timer {
     id: firstRunTimer
     interval: 200
     repeat: false
     onTriggered: {
-      if (!root.launcherPromptSeen) {
+      if (root.setupRequired) {
         var pluginId = manifest && manifest.id ? String(manifest.id) : "sanjyay.cursor-theme-manager"
         if (root.shell && typeof root.shell.summon === "function") {
           root.shell.summon(pluginId, "{}")
@@ -212,9 +210,12 @@ Item {
     if (ready || !_stateLoaded || !_scanLoaded) return
 
     committedSize = Model.validSize(_loadedState.size)
+    requestedSize = committedSize
+    liveAppliedSize = committedSize
+    _persistedSize = committedSize
     importedThemes = _loadedState.importedThemes || []
-    integrationPromptSeen = Boolean(_loadedState.integrationPromptSeen || _loadedState.launcherPromptSeen)
     integrationEnabled = Boolean(_loadedState.integrationEnabled || _loadedState.launcherAdded)
+    integrationPromptSeen = integrationEnabled || setupDismissedThisSession
 
     var found = _loadedState.ok ? Model.findTheme(themes, _loadedState.theme) : null
     if (!found) found = Model.fallbackTheme(themes, currentXcursor)
@@ -269,52 +270,34 @@ Item {
     previewTimer.stop()
     _debouncedPreview = null
     var target = Model.validSize(size)
-    if (target === committedSize && !liveSetcursorProcess.running && !commitSizeDebounceTimer.running && target === _persistedSize) return
+    if (target === requestedSize && !liveSetcursorProcess.running && !trailingLiveSizeTimer.running && !commitSizeDebounceTimer.running && target === _persistedSize) return
 
-    // 1. Synchronous Instant UI Update (0 ms latency)
+    // 1. Synchronous Instant UI Update (0 ms latency, no subprocess)
     _sizeRequestGeneration++
+    requestedSize = target
     committedSize = target
     if (root._loadedState) root._loadedState.cursorModifiedByCtm = true
-    statusText = (committedTheme ? (committedTheme.displayName || committedTheme.id) : "Cursor") + " · " + committedSize + " px"
+    statusText = (committedTheme ? (committedTheme.displayName || committedTheme.id) : "Cursor") + " · " + requestedSize + " px"
 
-    // 2. Leading-Edge or Throttled Trailing-Edge Dispatch
-    var now = Date.now()
-    var elapsed = now - _lastLiveSetcursorTime
-
-    if (!liveSetcursorProcess.running && elapsed >= minLiveSetcursorInterval) {
-      // LEADING EDGE: Apply immediately
-      liveThrottleTimer.stop()
-      _pendingLiveGeneration = 0
-      _pendingLiveSize = 0
-      startLiveSetcursor(target, _sizeRequestGeneration)
-    } else {
-      // TRAILING EDGE: Coalesce latest value and schedule throttle timer
-      _pendingLiveSize = target
-      _pendingLiveGeneration = _sizeRequestGeneration
-      if (!liveThrottleTimer.running) {
-        var waitMs = Math.max(15, minLiveSetcursorInterval - elapsed)
-        liveThrottleTimer.interval = waitMs
-        liveThrottleTimer.restart()
-      }
-    }
-
-    // 3. Queue Final Persistence after user stops resizing (300 ms idle)
-    commitSizeDebounceTimer.restart()
+    // 2. Trailing-edge ONLY live apply: restart debounce timer on every input click
+    trailingLiveSizeTimer.restart()
   }
 
-  function dispatchPendingLiveSetcursor() {
-    if (liveSetcursorProcess.running || _pendingLiveGeneration === 0) return
-    var target = _pendingLiveSize
-    var gen = _pendingLiveGeneration
-    _pendingLiveGeneration = 0
-    _pendingLiveSize = 0
+  function dispatchTrailingLiveSize() {
+    if (!committedTheme) return
+    var target = requestedSize
+    var gen = _sizeRequestGeneration
+
+    if (liveSetcursorProcess.running) {
+      return
+    }
+
     startLiveSetcursor(target, gen)
   }
 
   function startLiveSetcursor(size, generation) {
     if (!committedTheme) return
     _activeLiveGeneration = generation
-    _lastLiveSetcursorTime = Date.now()
 
     var resolvedTheme = committedTheme.hyprcursor || committedTheme.xcursor || committedTheme.id || "Adwaita"
     if (resolvedTheme === "-") {
@@ -329,7 +312,7 @@ Item {
   function flushFinalSizePersistence() {
     if (!committedTheme) return
     var finalGen = _sizeRequestGeneration
-    var finalSize = committedSize
+    var finalSize = requestedSize
     _persistedSize = finalSize
 
     var hypr = committedTheme.hyprcursor || "-"
@@ -425,9 +408,8 @@ Item {
   function removeLauncher() { disableIntegration() }
 
   function dismissIntegrationPrompt() {
+    setupDismissedThisSession = true
     integrationPromptSeen = true
-    integrationDismissProcess.command = [helperPath, "integration-dismiss-prompt"]
-    integrationDismissProcess.running = true
     integrationChanged()
     launcherChanged()
   }
@@ -566,7 +548,7 @@ Item {
           var res = JSON.parse(integrationStatusStdout.text || "{}")
           if (res.ok) {
             root.integrationEnabled = Boolean(res.enabled)
-            root.integrationPromptSeen = Boolean(res.promptSeen)
+            root.integrationPromptSeen = root.integrationEnabled || root.setupDismissedThisSession
             root.integrationArtifacts = res.artifacts || ({})
             if (res.paths && res.paths.desktop) root.launcherPath = res.paths.desktop
             root.integrationChanged()
@@ -966,7 +948,7 @@ Item {
     }
   }
 
-  // 10. Fast-Path Direct Live Setcursor Process
+  // 10. Trailing-Edge Direct Live Setcursor Process (Exactly one reload per burst)
   Timer {
     id: liveSetcursorWatchdog
     interval: 1500
@@ -975,8 +957,8 @@ Item {
       if (liveSetcursorProcess.running) {
         liveSetcursorProcess.running = false
         root._activeLiveGeneration = 0
-        if (root._pendingLiveGeneration > 0) {
-          root.dispatchPendingLiveSetcursor()
+        if (root._sizeRequestGeneration > root._activeLiveGeneration) {
+          trailingLiveSizeTimer.restart()
         }
       }
     }
@@ -991,15 +973,14 @@ Item {
       var completedGen = root._activeLiveGeneration
       root._activeLiveGeneration = 0
 
-      if (root._pendingLiveGeneration > completedGen) {
-        var now = Date.now()
-        var elapsed = now - root._lastLiveSetcursorTime
-        if (elapsed >= root.minLiveSetcursorInterval) {
-          root.dispatchPendingLiveSetcursor()
-        } else {
-          liveThrottleTimer.interval = Math.max(15, root.minLiveSetcursorInterval - elapsed)
-          liveThrottleTimer.restart()
-        }
+      if (exitCode === 0 && completedGen >= root._sizeRequestGeneration) {
+        root.liveAppliedSize = root.requestedSize
+        root.commitSizeDebounceTimer.restart()
+      }
+
+      // If user clicked again while setcursor was in flight
+      if (root._sizeRequestGeneration > completedGen) {
+        trailingLiveSizeTimer.restart()
       }
     }
   }
