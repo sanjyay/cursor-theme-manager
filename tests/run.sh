@@ -75,7 +75,10 @@ python3 "$ROOT/tests/security_adversarial.test.py"
 echo "=== 10. Test Hygiene & Real Directory Isolation Assertions ==="
 python3 tests/test_hygiene.test.py
 
-echo "=== 11. QML Lint Validation ==="
+echo "=== 11. Size Coalescing & Fast-Path Tests ==="
+python3 tests/size_coalescing.test.py
+
+echo "=== 12. QML Lint Validation ==="
 qmllint -I /usr/share/omarchy/shell Panel.qml CursorService.qml components/*.qml
 qmllint tests/manual-cursor-roles.qml
 

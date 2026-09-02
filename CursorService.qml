@@ -53,6 +53,26 @@ Item {
   property string _discoverOutput: ""
   property string _discoverError: ""
 
+  // Size Request Generation & Coalescing State
+  property int _sizeRequestGeneration: 0
+  property int _activeLiveGeneration: 0
+  property int _pendingLiveGeneration: 0
+  property int _pendingLiveSize: 0
+
+  Timer {
+    id: liveSizeDebounceTimer
+    interval: 35
+    repeat: false
+    onTriggered: root.dispatchPendingLiveSize()
+  }
+
+  Timer {
+    id: commitSizeDebounceTimer
+    interval: 250
+    repeat: false
+    onTriggered: root.flushFinalSizeCommit()
+  }
+
   signal themesChangedByScan()
   signal importCompleted(var theme, string message)
   signal importFailed(string error)
@@ -241,15 +261,60 @@ Item {
   function commitSize(size) {
     previewTimer.stop()
     _debouncedPreview = null
-    committedSize = Model.validSize(size)
+    var target = Model.validSize(size)
+    if (target === committedSize && !liveSizeProcess.running && !commitSizeDebounceTimer.running) return
+
+    // 1. Immediately update UI state synchronously (0ms latency)
+    _sizeRequestGeneration++
+    committedSize = target
     if (root._loadedState) root._loadedState.cursorModifiedByCtm = true
-    if (committedTheme) enqueueApply(committedTheme, committedSize, "commit")
-    persistState()
+    statusText = (committedTheme ? (committedTheme.displayName || committedTheme.id) : "Cursor") + " · " + committedSize + " px"
+
+    // 2. Queue live fast path
+    _pendingLiveSize = target
+    _pendingLiveGeneration = _sizeRequestGeneration
+    if (!liveSizeProcess.running) {
+      liveSizeDebounceTimer.restart()
+    }
+
+    // 3. Queue final persistent commit after user stops resizing
+    commitSizeDebounceTimer.restart()
   }
 
-  function enqueueApply(theme, size, kind) {
+  function dispatchPendingLiveSize() {
+    if (liveSizeProcess.running || _pendingLiveGeneration === 0) return
+    if (!committedTheme) return
+
+    var gen = _pendingLiveGeneration
+    var sz = _pendingLiveSize
+    _pendingLiveGeneration = 0
+    _activeLiveGeneration = gen
+
+    var hypr = committedTheme.hyprcursor || "-"
+    var xcur = committedTheme.xcursor || "-"
+    var tpath = committedTheme.path || ""
+
+    liveSizeProcess.command = [
+      helperPath, "set-size-live",
+      "--hyprcursor", hypr,
+      "--xcursor", xcur,
+      "--theme-path", tpath,
+      "--size", String(sz)
+    ]
+    liveSizeProcess.running = true
+    liveSizeWatchdog.restart()
+  }
+
+  function flushFinalSizeCommit() {
+    if (!committedTheme) return
+    var finalGen = _sizeRequestGeneration
+    enqueueApply(committedTheme, committedSize, "commit", finalGen)
+  }
+
+  function enqueueApply(theme, size, kind, generation) {
     if (!theme) return
-    _queuedApply = { theme: theme, size: Model.validSize(size), kind: kind }
+    var gen = generation !== undefined ? generation : (++_sizeRequestGeneration)
+    _queuedApply = { theme: theme, size: Model.validSize(size), kind: kind, generation: gen }
     if (!applyProcess.running) startQueuedApply()
   }
 
@@ -867,6 +932,37 @@ Item {
     }
   }
 
+  // 10. Fast-Path Live Size Process
+  Timer {
+    id: liveSizeWatchdog
+    interval: 3000
+    repeat: false
+    onTriggered: {
+      if (liveSizeProcess.running) {
+        liveSizeProcess.running = false
+        root._activeLiveGeneration = 0
+        if (root._pendingLiveGeneration > 0) {
+          root.dispatchPendingLiveSize()
+        }
+      }
+    }
+  }
+
+  Process {
+    id: liveSizeProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      liveSizeWatchdog.stop()
+      var completedGen = root._activeLiveGeneration
+      root._activeLiveGeneration = 0
+      if (root._pendingLiveGeneration > completedGen) {
+        root.dispatchPendingLiveSize()
+      }
+    }
+  }
+
+  // 11. Full Persistent Apply Process
   Timer {
     id: applyWatchdog
     interval: 12000
@@ -892,33 +988,39 @@ Item {
       applyWatchdog.stop()
       var request = root._activeApply
       root.applying = false
+      var reqGen = request ? (request.generation || 0) : 0
+
       if (exitCode !== 0) {
-        root.lastError = root.elide(applyStderr.text || root._applyStderr || applyStdout.text || root._applyStdout || "Cursor could not be applied")
-        console.warn("sanjyay.cursor-theme-manager:", root.lastError)
-        if (request && request.kind === "commit") {
-          root.statusText = "Failed to switch to " + request.theme.displayName
-        } else if (request && request.kind === "preview") {
-          root.previewTheme = null
-          root.previewSize = 0
-          root.statusText = "Preview unavailable for " + request.theme.displayName
+        if (reqGen >= root._sizeRequestGeneration) {
+          root.lastError = root.elide(applyStderr.text || root._applyStderr || applyStdout.text || root._applyStdout || "Cursor could not be applied")
+          console.warn("sanjyay.cursor-theme-manager:", root.lastError)
+          if (request && request.kind === "commit") {
+            root.statusText = "Failed to switch to " + (request.theme ? (request.theme.displayName || request.theme.id) : "theme")
+          } else if (request && request.kind === "preview") {
+            root.previewTheme = null
+            root.previewSize = 0
+            root.statusText = "Preview unavailable for " + (request.theme ? (request.theme.displayName || request.theme.id) : "theme")
+          }
         }
       } else if (request) {
-        root.lastError = ""
-        if (request.kind === "preview") {
-          root.previewTheme = request.theme
-          root.previewSize = request.size
-          root.statusText = "Previewing " + request.theme.displayName
-        } else if (request.kind === "commit") {
-          root.committedTheme = request.theme
-          root.committedSize = request.size
-          root.previewTheme = null
-          root.previewSize = 0
-          root.persistState()
-          root.statusText = request.theme.displayName + " · " + request.size + " px"
-        } else {
-          root.previewTheme = null
-          root.previewSize = 0
-          root.statusText = root.committedTheme ? root.committedTheme.displayName + " · " + root.committedSize + " px" : "Ready"
+        if (reqGen >= root._sizeRequestGeneration) {
+          root.lastError = ""
+          if (request.kind === "preview") {
+            root.previewTheme = request.theme
+            root.previewSize = request.size
+            root.statusText = "Previewing " + (request.theme.displayName || request.theme.id)
+          } else if (request.kind === "commit") {
+            root.committedTheme = request.theme
+            root.committedSize = request.size
+            root.previewTheme = null
+            root.previewSize = 0
+            root.persistState()
+            root.statusText = (request.theme.displayName || request.theme.id) + " · " + request.size + " px"
+          } else {
+            root.previewTheme = null
+            root.previewSize = 0
+            root.statusText = root.committedTheme ? (root.committedTheme.displayName || root.committedTheme.id) + " · " + root.committedSize + " px" : "Ready"
+          }
         }
       }
       root._activeApply = null

@@ -398,6 +398,11 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
             "subtitle": meta["license"] if meta["license"] and meta["license"] != "Unknown" else ""
         }
 
+        marker_file = os.path.join(install_path, ".cursor-theme-manager-imported")
+        legacy_marker = os.path.join(install_path, ".omarchy-cursor-switcher-imported")
+        theme_record["version"] = 1
+        theme_record["kind"] = "imported-user-theme"
+
         if "xcursor" in meta["formats"] and "hyprcursor" not in meta["formats"]:
             cursorctl_bin = os.path.join(script_dir or os.path.dirname(__file__), "cursorctl")
             if os.path.isfile(cursorctl_bin):
@@ -416,10 +421,6 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
                 except Exception as e:
                     sys.stderr.write(f"Conversion note: {e}\n")
 
-        marker_file = os.path.join(install_path, ".cursor-theme-manager-imported")
-        legacy_marker = os.path.join(install_path, ".omarchy-cursor-switcher-imported")
-        theme_record["version"] = 1
-        theme_record["kind"] = "imported-user-theme"
         with open(marker_file, "w", encoding="utf-8") as f:
             json.dump(theme_record, f, indent=2)
         with open(legacy_marker, "w", encoding="utf-8") as f:

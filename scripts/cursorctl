@@ -318,16 +318,22 @@ def run_ensure_hyprcursor(hypr: str, xcursor: str, theme_path: str = "") -> str:
         sys.stderr.write(f"cursorctl: XCursor directory not found for theme '{xcursor}'\n")
         sys.exit(1)
 
-    # 3. Compute content hash
+    # 3. Compute content hash of actual cursor files
     hasher = hashlib.sha256()
-    for root, _, files in os.walk(xdir):
-        for f in sorted(files):
-            fp = Path(root) / f
-            hasher.update(str(fp.relative_to(xdir)).encode("utf-8"))
-            try:
-                hasher.update(fp.read_bytes())
-            except Exception:
-                pass
+    if (xdir / "index.theme").is_file():
+        hasher.update(b"index.theme\n")
+        try: hasher.update((xdir / "index.theme").read_bytes())
+        except Exception: pass
+    cursors_dir = xdir / "cursors"
+    if cursors_dir.is_dir():
+        for root, _, files in os.walk(cursors_dir):
+            for f in sorted(files):
+                fp = Path(root) / f
+                hasher.update(str(fp.relative_to(cursors_dir)).encode("utf-8"))
+                try:
+                    hasher.update(fp.read_bytes())
+                except Exception:
+                    pass
     hash_short = hasher.hexdigest()[:12]
     converted_name = f"CursorSwitcher-XCursor-{xcursor}-{hash_short}"
     target_dir = user_icons / converted_name
@@ -428,6 +434,28 @@ def run_ensure_hyprcursor(hypr: str, xcursor: str, theme_path: str = "") -> str:
         return converted_name
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def run_set_size_live(hypr: str, xcursor: str, theme_path: str, size: int):
+    if size not in secure_state.SUPPORTED_SIZES:
+        sys.stderr.write(f"cursorctl: unsupported cursor size: {size}\n")
+        sys.exit(1)
+
+    effective_hypr = "-"
+    if hypr and hypr != "-" and valid_name(hypr):
+        effective_hypr = hypr
+    elif xcursor and xcursor != "-" and valid_name(xcursor):
+        effective_hypr = run_ensure_hyprcursor(hypr, xcursor, theme_path)
+
+    if effective_hypr != "-":
+        res = run_bounded(["hyprctl", "setcursor", effective_hypr, str(size)], timeout=1.0)
+        sys.exit(0 if res.ok else 1)
+    elif xcursor and xcursor != "-":
+        res = run_bounded(["hyprctl", "setcursor", xcursor, str(size)], timeout=1.0)
+        sys.exit(0 if res.ok else 1)
+    else:
+        sys.stderr.write("cursorctl: no valid cursor theme for live size change\n")
+        sys.exit(1)
 
 
 # ==============================================================================
@@ -558,6 +586,25 @@ def main():
                 i += 1
         res = run_ensure_hyprcursor(hypr, xcursor, theme_path)
         sys.stdout.write(res + "\n")
+        sys.exit(0)
+
+    elif cmd == "set-size-live":
+        hypr = "-"; xcursor = "-"; theme_path = ""; size = 24
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] == "--hyprcursor" and i + 1 < len(sys.argv):
+                hypr = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--xcursor" and i + 1 < len(sys.argv):
+                xcursor = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--theme-path" and i + 1 < len(sys.argv):
+                theme_path = sys.argv[i+1]; i += 2
+            elif sys.argv[i] == "--size" and i + 1 < len(sys.argv):
+                try: size = int(sys.argv[i+1])
+                except ValueError: pass
+                i += 2
+            else:
+                i += 1
+        run_set_size_live(hypr, xcursor, theme_path, size)
         sys.exit(0)
 
     elif cmd == "apply":
