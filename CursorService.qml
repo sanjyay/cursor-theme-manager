@@ -186,7 +186,9 @@ Item {
 
   function requestStateRead(source) {
     if (_destroying || stateReadProcess.running) return
-    stateReadProcess.command = [helperPath, "state-read"]
+    var args = [helperPath, "state-read"]
+    if (source === "startup") args.push("--restore-live")
+    stateReadProcess.command = args
     traceLifecycle("state-read-requested", source || "startup")
     stateReadProcess.running = true
     stateReadWatchdog.restart()

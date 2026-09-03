@@ -1068,6 +1068,7 @@ def main():
             emit_bounded_json({"ok": False, "error": "Invalid directory path"}, exit_code=1)
 
     elif cmd == "state-read":
+        restore_live = "--restore-live" in sys.argv[2:]
         st = secure_state.read_state()
         int_status = integration_manager.get_status()
         # During remove -> immediate reinstall, the old cleanup deliberately
@@ -1082,6 +1083,37 @@ def main():
             })
             st["recoveryPending"] = True
             st["recoveryOrphaned"] = bool(int_status.get("recoveryOrphaned"))
+        elif restore_live and st.get("cursorModifiedByCtm") and not st.get("recoveryPending"):
+            try:
+                theme_dict = st.get("theme") or {}
+                size = st.get("size")
+                if size in secure_state.SUPPORTED_SIZES and isinstance(theme_dict, dict):
+                    hypr = theme_dict.get("hyprcursor") or ""
+                    xcursor = theme_dict.get("xcursor") or ""
+                    runtime_theme = hypr if (hypr and hypr != "-") else xcursor
+                    if runtime_theme and runtime_theme != "-" and valid_name(runtime_theme):
+                        perform_live_cursor_mutation(runtime_theme, size)
+                        # Sync Hyprland internal environment so future app launches inherit correct size
+                        hypr_env = "" if not hypr or hypr == "-" else hypr
+                        xcur_env = "" if not xcursor or xcursor == "-" else xcursor
+                        eval_code = f'hl.env("HYPRCURSOR_THEME", "{hypr_env}"); hl.env("HYPRCURSOR_SIZE", "{size}"); hl.env("XCURSOR_THEME", "{xcur_env}"); hl.env("XCURSOR_SIZE", "{size}")'
+                        run_bounded(["hyprctl", "eval", eval_code], timeout=1.5)
+
+                        # Sync systemd & dbus user environment so apps and tools (like wiggle) discover the size
+                        assignments = [f"XCURSOR_SIZE={size}", f"HYPRCURSOR_SIZE={size}"]
+                        if hypr and hypr != "-":
+                            assignments.append(f"HYPRCURSOR_THEME={hypr}")
+                        if xcursor and xcursor != "-":
+                            assignments.append(f"XCURSOR_THEME={xcursor}")
+                        run_bounded(["systemctl", "--user", "set-environment"] + assignments, timeout=1.5)
+                        run_bounded(["dbus-update-activation-environment", "--systemd"] + assignments, timeout=1.5)
+
+                        # Sync GTK
+                        if xcursor and xcursor != "-":
+                            run_bounded(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", xcursor], timeout=1.5)
+                        run_bounded(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)], timeout=1.5)
+            except Exception as exc:
+                sys.stderr.write(f"cursorctl: notice: restore-live during state-read failed: {exc}\n")
         st["integrationEnabled"] = int_status["enabled"]
         st["integrationPromptSeen"] = int_status["promptSeen"]
         st["launcherAdded"] = int_status["enabled"]
