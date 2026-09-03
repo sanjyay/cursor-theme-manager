@@ -623,6 +623,64 @@ def _write_private_file(file_path: str, content: str, mode: int = 0o600) -> None
         raise
 
 
+def sync_x11_and_gtk_cursor(xcursor: str, size: int) -> None:
+    """Synchronizes X11 default index.theme, GTK settings.ini, and X11 RESOURCE_MANAGER.
+    Ensures XWayland / Electron / CEF applications (like Spotify) follow the active CTM cursor."""
+    home = os.environ.get("HOME", os.path.expanduser("~"))
+    data_home = os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local", "share"))
+    config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
+
+    # 1. Update X11 default/index.theme in ~/.icons and ~/.local/share/icons
+    if xcursor and xcursor != "-" and valid_name(xcursor):
+        content = (
+            "# Managed by sanjyay.cursor-theme-manager.\n"
+            "[Icon Theme]\n"
+            "Name=Default\n"
+            "Comment=Default Cursor Theme\n"
+            f"Inherits={xcursor}\n"
+        )
+        for base in [os.path.join(home, ".icons", "default"), os.path.join(data_home, "icons", "default")]:
+            theme_file = os.path.join(base, "index.theme")
+            try:
+                _write_private_file(theme_file, content, 0o644)
+            except Exception as exc:
+                sys.stderr.write(f"cursorctl: notice: failed writing {theme_file}: {exc}\n")
+
+    # 2. Update GTK settings.ini in gtk-3.0 and gtk-4.0
+    for gtk_dir in ["gtk-3.0", "gtk-4.0"]:
+        settings_file = os.path.join(config_home, gtk_dir, "settings.ini")
+        if os.path.exists(settings_file):
+            try:
+                lines = []
+                with open(settings_file, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                new_lines = []
+                in_settings = False
+                theme_set = False
+                size_set = False
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith("[") and stripped.endswith("]"):
+                        in_settings = (stripped.lower() == "[settings]")
+                    elif in_settings:
+                        if stripped.startswith("gtk-cursor-theme-name") and xcursor and xcursor != "-":
+                            new_lines.append(f"gtk-cursor-theme-name={xcursor}\n")
+                            theme_set = True
+                            continue
+                        elif stripped.startswith("gtk-cursor-theme-size") and size > 0:
+                            new_lines.append(f"gtk-cursor-theme-size={size}\n")
+                            size_set = True
+                            continue
+                    new_lines.append(line)
+                if not theme_set and xcursor and xcursor != "-":
+                    new_lines.append(f"gtk-cursor-theme-name={xcursor}\n")
+                if not size_set and size > 0:
+                    new_lines.append(f"gtk-cursor-theme-size={size}\n")
+                _write_private_file(settings_file, "".join(new_lines), 0o644)
+            except Exception as exc:
+                sys.stderr.write(f"cursorctl: notice: failed updating {settings_file}: {exc}\n")
+
+
 def run_persist_size(hypr: str, xcursor: str, size: int):
     if size not in secure_state.SUPPORTED_SIZES:
         sys.stderr.write(f"cursorctl: unsupported cursor size: {size}\n")
@@ -680,6 +738,7 @@ def run_persist_size(hypr: str, xcursor: str, size: int):
 
     _write_private_file(common_file, common_content, 0o600)
     _write_private_file(hypr_file, hypr_content, 0o600)
+    sync_x11_and_gtk_cursor(xcursor, size)
 
 
 def run_capture_baseline():
@@ -766,6 +825,7 @@ def run_persist_theme(theme_json: str, size: int):
 
     _write_private_file(common_file, common_content, 0o600)
     _write_private_file(hypr_file, hypr_content, 0o600)
+    sync_x11_and_gtk_cursor(xcursor, size)
 
 
 # ==============================================================================
@@ -838,6 +898,7 @@ def run_apply(hypr: str, xcursor: str, theme_path: str, size: int, mode: str):
 
         _write_private_file(common_file, common_content, 0o600)
         _write_private_file(hypr_file, hypr_content, 0o600)
+        sync_x11_and_gtk_cursor(xcursor, size)
 
 
 # ==============================================================================
@@ -1112,6 +1173,9 @@ def main():
                         if xcursor and xcursor != "-":
                             run_bounded(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", xcursor], timeout=1.5)
                         run_bounded(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)], timeout=1.5)
+
+                        # Sync X11 default index.theme, GTK settings.ini, and X11 RESOURCE_MANAGER
+                        sync_x11_and_gtk_cursor(xcursor, size)
             except Exception as exc:
                 sys.stderr.write(f"cursorctl: notice: restore-live during state-read failed: {exc}\n")
         st["integrationEnabled"] = int_status["enabled"]

@@ -760,6 +760,56 @@ def restore_cursor(orig) -> bool:
     sys.stderr.write(f"cursorctl cleanup: uwsm_restore_ok={str(uwsm_ok).lower()}\n")
     all_persistent_ok = all_persistent_ok and uwsm_ok
 
+    # 3b. Restore X11 index.theme, GTK settings.ini, and X11 RESOURCE_MANAGER
+    home = paths.get("home", os.path.expanduser("~"))
+    data_home = paths.get("data_home", os.path.join(home, ".local", "share"))
+    config_home = paths.get("config_home", os.path.join(home, ".config"))
+
+    restore_xcursor = orig.get("xcursorTheme") or orig.get("gtkTheme")
+    restore_gtk_size = orig.get("gtkSize") or orig.get("xcursorSize")
+
+    for base in [os.path.join(home, ".icons", "default"), os.path.join(data_home, "icons", "default")]:
+        theme_file = os.path.join(base, "index.theme")
+        if os.path.exists(theme_file) and marker_contains(theme_file, "Managed by sanjyay.cursor-theme-manager"):
+            if restore_xcursor and valid_name(restore_xcursor):
+                content = f"[Icon Theme]\nName=Default\nComment=Default Cursor Theme\nInherits={restore_xcursor}\n"
+                try:
+                    with open(theme_file, "w", encoding="utf-8") as f:
+                        f.write(content)
+                except Exception:
+                    pass
+            else:
+                try:
+                    os.unlink(theme_file)
+                except Exception:
+                    pass
+
+    for gtk_dir in ["gtk-3.0", "gtk-4.0"]:
+        settings_file = os.path.join(config_home, gtk_dir, "settings.ini")
+        if os.path.exists(settings_file):
+            try:
+                lines = []
+                with open(settings_file, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                new_lines = []
+                in_settings = False
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith("[") and stripped.endswith("]"):
+                        in_settings = (stripped.lower() == "[settings]")
+                    elif in_settings:
+                        if stripped.startswith("gtk-cursor-theme-name") and restore_xcursor:
+                            new_lines.append(f"gtk-cursor-theme-name={restore_xcursor}\n")
+                            continue
+                        elif stripped.startswith("gtk-cursor-theme-size") and restore_gtk_size:
+                            new_lines.append(f"gtk-cursor-theme-size={restore_gtk_size}\n")
+                            continue
+                    new_lines.append(line)
+                with open(settings_file, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+            except Exception:
+                pass
+
     # 4. LIVE transition is mandatory and deliberately last. Persistent
     # environment values are not a substitute for changing the visible cursor.
     inherited_sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
