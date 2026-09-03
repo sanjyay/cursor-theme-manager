@@ -680,6 +680,76 @@ def sync_x11_and_gtk_cursor(xcursor: str, size: int) -> None:
             except Exception as exc:
                 sys.stderr.write(f"cursorctl: notice: failed updating {settings_file}: {exc}\n")
 
+    # 2b. Update GTK2 ~/.gtkrc-2.0 if present
+    gtk2_file = os.path.join(home, ".gtkrc-2.0")
+    if os.path.exists(gtk2_file):
+        try:
+            lines = []
+            with open(gtk2_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            new_lines = []
+            theme_set = False
+            size_set = False
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("gtk-cursor-theme-name") and xcursor and xcursor != "-":
+                    new_lines.append(f'gtk-cursor-theme-name="{xcursor}"\n')
+                    theme_set = True
+                    continue
+                elif stripped.startswith("gtk-cursor-theme-size") and size > 0:
+                    new_lines.append(f'gtk-cursor-theme-size={size}\n')
+                    size_set = True
+                    continue
+                new_lines.append(line)
+            if not theme_set and xcursor and xcursor != "-":
+                new_lines.append(f'gtk-cursor-theme-name="{xcursor}"\n')
+            if not size_set and size > 0:
+                new_lines.append(f'gtk-cursor-theme-size={size}\n')
+            _write_private_file(gtk2_file, "".join(new_lines), 0o644)
+        except Exception as exc:
+            sys.stderr.write(f"cursorctl: notice: failed updating {gtk2_file}: {exc}\n")
+
+    # 3. Update X11 RESOURCE_MANAGER on live display
+    display = os.environ.get("DISPLAY")
+    if display:
+        try:
+            import ctypes
+            x11 = ctypes.CDLL("libX11.so.6")
+            x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+            x11.XOpenDisplay.restype = ctypes.c_void_p
+            x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+            x11.XDefaultRootWindow.restype = ctypes.c_ulong
+            x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+            x11.XInternAtom.restype = ctypes.c_ulong
+            x11.XChangeProperty.argtypes = [
+                ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong,
+                ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int
+            ]
+            x11.XChangeProperty.restype = ctypes.c_int
+            x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            x11.XSync.restype = ctypes.c_int
+            x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+            x11.XCloseDisplay.restype = ctypes.c_int
+
+            dpy = x11.XOpenDisplay(None)
+            if dpy:
+                try:
+                    root = x11.XDefaultRootWindow(dpy)
+                    prop = x11.XInternAtom(dpy, b"RESOURCE_MANAGER", 0)
+                    string_atom = x11.XInternAtom(dpy, b"STRING", 0)
+                    res_parts = []
+                    if xcursor and xcursor != "-":
+                        res_parts.append(f"Xcursor.theme: {xcursor}\n")
+                    if size > 0:
+                        res_parts.append(f"Xcursor.size: {size}\n")
+                    data = "".join(res_parts).encode("utf-8")
+                    x11.XChangeProperty(dpy, root, prop, string_atom, 8, 0, data, len(data))
+                    x11.XSync(dpy, 0)
+                finally:
+                    x11.XCloseDisplay(dpy)
+        except Exception:
+            pass
+
 
 def run_persist_size(hypr: str, xcursor: str, size: int):
     if size not in secure_state.SUPPORTED_SIZES:

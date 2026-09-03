@@ -810,6 +810,67 @@ def restore_cursor(orig) -> bool:
             except Exception:
                 pass
 
+    gtk2_file = os.path.join(home, ".gtkrc-2.0")
+    if os.path.exists(gtk2_file):
+        try:
+            lines = []
+            with open(gtk2_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            new_lines = []
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("gtk-cursor-theme-name") and restore_xcursor:
+                    new_lines.append(f'gtk-cursor-theme-name="{restore_xcursor}"\n')
+                    continue
+                elif stripped.startswith("gtk-cursor-theme-size") and restore_gtk_size:
+                    new_lines.append(f'gtk-cursor-theme-size={restore_gtk_size}\n')
+                    continue
+                new_lines.append(line)
+            with open(gtk2_file, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+        except Exception:
+            pass
+
+    display = os.environ.get("DISPLAY")
+    if display:
+        try:
+            import ctypes
+            x11 = ctypes.CDLL("libX11.so.6")
+            x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+            x11.XOpenDisplay.restype = ctypes.c_void_p
+            x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+            x11.XDefaultRootWindow.restype = ctypes.c_ulong
+            x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+            x11.XInternAtom.restype = ctypes.c_ulong
+            x11.XChangeProperty.argtypes = [
+                ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong,
+                ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int
+            ]
+            x11.XChangeProperty.restype = ctypes.c_int
+            x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            x11.XSync.restype = ctypes.c_int
+            x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+            x11.XCloseDisplay.restype = ctypes.c_int
+
+            dpy = x11.XOpenDisplay(None)
+            if dpy:
+                try:
+                    root = x11.XDefaultRootWindow(dpy)
+                    prop = x11.XInternAtom(dpy, b"RESOURCE_MANAGER", 0)
+                    string_atom = x11.XInternAtom(dpy, b"STRING", 0)
+                    res_parts = []
+                    if restore_xcursor and valid_name(restore_xcursor):
+                        res_parts.append(f"Xcursor.theme: {restore_xcursor}\n")
+                    if restore_gtk_size:
+                        res_parts.append(f"Xcursor.size: {restore_gtk_size}\n")
+                    data = "".join(res_parts).encode("utf-8")
+                    x11.XChangeProperty(dpy, root, prop, string_atom, 8, 0, data, len(data))
+                    x11.XSync(dpy, 0)
+                finally:
+                    x11.XCloseDisplay(dpy)
+        except Exception:
+            pass
+
     # 4. LIVE transition is mandatory and deliberately last. Persistent
     # environment values are not a substitute for changing the visible cursor.
     inherited_sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
