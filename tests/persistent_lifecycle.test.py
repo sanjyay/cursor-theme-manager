@@ -217,6 +217,57 @@ class TestPersistentLifecycleRecovery(IsolatedTestCase):
             self.assertFalse(integration_manager.get_status()["recoveryPending"])
             self._first_mutation(current["pluginFingerprint"])
 
+    def test_failed_or_inactive_cleanup_actor_is_orphaned_and_reconciles(self):
+        old = self._identity()
+        enabled = integration_manager.enable_integration(old["pluginFingerprint"])
+        self.assertTrue(enabled["ok"], enabled)
+        self._publish_managed_state(
+            old["pluginFingerprint"], integration_enabled=True,
+            instance=enabled["instanceId"],
+        )
+        current = self._next_identity()
+
+        status = integration_manager.get_status()
+        self.assertTrue(status["recoveryPending"])
+        self.assertTrue(status["recoveryOrphaned"])
+        self.assertFalse(status["recoveryActorPresent"])
+
+        with mock.patch.object(cleanup_helper, "restore_cursor", return_value=True):
+            result = cleanup_helper.reconcile_orphaned_state(current["pluginFingerprint"])
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["reconciled"], result)
+        self.assertFalse((self.iso.state_dir / "state.json").exists())
+        self.assertFalse(integration_manager.get_status()["recoveryPending"])
+
+        # Confirm old stale artifacts were retired
+        paths = cleanup_helper.get_paths()
+        self.assertFalse(os.path.exists(paths["path_unit"]))
+        self.assertFalse(os.path.exists(paths["service_unit"]))
+        self.assertFalse(os.path.exists(paths["cleanup_exe"]))
+        self._first_mutation(current["pluginFingerprint"])
+
+    def test_actively_running_cleanup_actor_causes_new_install_to_wait(self):
+        old = self._identity()
+        enabled = integration_manager.enable_integration(old["pluginFingerprint"])
+        self.assertTrue(enabled["ok"], enabled)
+        self._publish_managed_state(
+            old["pluginFingerprint"], integration_enabled=True,
+            instance=enabled["instanceId"],
+        )
+        current = self._next_identity()
+
+        with mock.patch.object(integration_manager, "is_recovery_service_active", return_value=True):
+            status = integration_manager.get_status()
+            self.assertTrue(status["recoveryPending"])
+            self.assertFalse(status["recoveryOrphaned"])
+            self.assertTrue(status["recoveryActorPresent"])
+
+        with mock.patch.object(cleanup_helper, "recovery_actor_active", return_value=True):
+            res = cleanup_helper.reconcile_orphaned_state(current["pluginFingerprint"])
+            self.assertFalse(res["ok"])
+            self.assertTrue(res["recoveryPending"])
+            self.assertIn("still available", res["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -121,11 +121,30 @@ function canonicalFamily(name) {
 
 function themeKey(theme) {
   if (!theme) return ""
-  return (sanitizeString(theme.id, 256) || sanitizeString(theme.hyprcursor, 256) || sanitizeString(theme.xcursor, 256) || sanitizeString(theme.displayName, 256)).toLowerCase()
+  var name = canonicalFamily(theme.displayName)
+  if (name) return name
+  return (sanitizeString(theme.id, 256) || sanitizeString(theme.hyprcursor, 256) || sanitizeString(theme.xcursor, 256)).toLowerCase().trim()
 }
 
 function mergeTheme(a, b) {
-  var preferred = b.imported || (a.sourceType === "system" && b.sourceType === "user") ? b : a
+  var preferred = a
+  if (b.imported && !a.imported) {
+    preferred = b
+  } else if (!b.imported && a.imported) {
+    preferred = a
+  } else if (b.imported && a.imported) {
+    if (a.runtimePrepared && !b.runtimePrepared) {
+      preferred = a
+    } else if (b.runtimePrepared && !a.runtimePrepared) {
+      preferred = b
+    } else if (a.importedAt && b.importedAt && a.importedAt > b.importedAt) {
+      preferred = a
+    } else {
+      preferred = b
+    }
+  } else if (a.sourceType === "system" && b.sourceType === "user") {
+    preferred = b
+  }
   var other = preferred === a ? b : a
   var formats = preferred.formats.slice()
   other.formats.forEach(function(format) { if (formats.indexOf(format) === -1) formats.push(format) })
@@ -158,8 +177,9 @@ function upsertTheme(themesList, rawOrNormalizedTheme) {
 
   var list = Array.isArray(themesList) ? themesList.slice() : []
   var existingIdx = -1
+  var normKey = themeKey(normalized)
   for (var i = 0; i < list.length; i++) {
-    if (list[i].id === normalized.id || (list[i].imported && list[i].displayName === normalized.displayName)) {
+    if (themeKey(list[i]) === normKey || list[i].id === normalized.id) {
       existingIdx = i
       break
     }
@@ -214,14 +234,16 @@ function parseState(text) {
     size: DefaultSize,
     importedThemes: [],
     launcherPromptSeen: false,
-    launcherAdded: false
+    launcherAdded: false,
+    recoveryPending: false,
+    recoveryOrphaned: false
   }
   if (!text || typeof text !== "string" || !text.trim()) return fallback
-  if (text.length > 65536) return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], launcherPromptSeen: false, launcherAdded: false }
+  if (text.length > 65536) return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], launcherPromptSeen: false, launcherAdded: false, recoveryPending: false, recoveryOrphaned: false }
 
   try {
     var raw = JSON.parse(text)
-    if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid", theme: null, size: DefaultSize, importedThemes: [], launcherPromptSeen: false, launcherAdded: false }
+    if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid", theme: null, size: DefaultSize, importedThemes: [], launcherPromptSeen: false, launcherAdded: false, recoveryPending: false, recoveryOrphaned: false }
 
     var theme = raw.theme ? normalizedTheme(raw.theme) : (raw.manualTheme ? normalizedTheme(raw.manualTheme) : null)
     var size = validSize(raw.size !== undefined ? raw.size : raw.manualSize, DefaultSize)
@@ -232,6 +254,8 @@ function parseState(text) {
     var integrationPluginFingerprint = (typeof raw.integrationPluginFingerprint === "string" && /^[a-fA-F0-9]{64}$/.test(raw.integrationPluginFingerprint)) ? raw.integrationPluginFingerprint : null
     var originalCursor = (raw.preCtmCursor && typeof raw.preCtmCursor === "object") ? raw.preCtmCursor : ((raw.originalCursor && typeof raw.originalCursor === "object") ? raw.originalCursor : null)
     var cursorModifiedByCtm = Boolean(raw.cursorModifiedByCtm)
+    var recoveryPending = Boolean(raw.recoveryPending)
+    var recoveryOrphaned = Boolean(raw.recoveryOrphaned)
 
     return {
       ok: true,
@@ -246,12 +270,14 @@ function parseState(text) {
       launcherPromptSeen: integrationPromptSeen,
       launcherAdded: integrationEnabled,
       cursorModifiedByCtm: cursorModifiedByCtm,
+      recoveryPending: recoveryPending,
+      recoveryOrphaned: recoveryOrphaned,
       preCtmCursor: originalCursor,
       originalCursor: originalCursor,
       trustedTools: (raw.trustedTools && typeof raw.trustedTools === "object") ? raw.trustedTools : {}
     }
   } catch (error) {
-    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], integrationInstanceId: null, launcherPromptSeen: false, launcherAdded: false, trustedTools: {} }
+    return { ok: false, reason: "corrupt", theme: null, size: DefaultSize, importedThemes: [], integrationInstanceId: null, launcherPromptSeen: false, launcherAdded: false, trustedTools: {}, recoveryPending: false, recoveryOrphaned: false }
   }
 }
 

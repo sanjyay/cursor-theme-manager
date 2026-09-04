@@ -16,6 +16,7 @@ import zipfile
 import hashlib
 import tempfile
 import argparse
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -98,6 +99,91 @@ def read_managed_text_marker(path: str, required: str):
         return None
 
 
+def safe_read_text_file(filepath: str, max_bytes: int = 65536) -> str | None:
+    try:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(filepath, flags)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > max_bytes:
+                return None
+            raw = os.read(fd, max_bytes + 1)
+            if len(raw) > max_bytes:
+                return None
+            return raw.decode("utf-8", errors="ignore")
+        finally:
+            os.close(fd)
+    except Exception:
+        return None
+
+
+def safe_write_text_file(filepath: str, content: str) -> bool:
+    """Safely writes a regular text file without following symlinks, using atomic descriptor-relative replacement."""
+    try:
+        parent = os.path.dirname(filepath)
+        fname = os.path.basename(filepath)
+        if not parent or not fname or "/" in fname or "\\" in fname:
+            return False
+        if not os.path.isdir(parent) or os.path.islink(parent):
+            return False
+        if os.path.islink(filepath):
+            return False
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        dir_fd = os.open(parent, flags)
+    except Exception:
+        return False
+
+    tmp_name = None
+    try:
+        st = os.fstat(dir_fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or (st.st_mode & 0o022):
+            return False
+        tmp_name = f".tmp-{fname}-{secrets.token_hex(6)}"
+        tmp_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            tmp_flags |= os.O_NOFOLLOW
+        tmp_fd = os.open(tmp_name, tmp_flags, 0o644, dir_fd=dir_fd)
+        try:
+            data = content.encode("utf-8")
+            total_written = 0
+            while total_written < len(data):
+                w = os.write(tmp_fd, data[total_written:])
+                if w <= 0:
+                    raise OSError("write failed")
+                total_written += w
+            os.fsync(tmp_fd)
+        finally:
+            os.close(tmp_fd)
+
+        try:
+            dst_st = os.stat(fname, dir_fd=dir_fd, follow_symlinks=False)
+            if not stat.S_ISREG(dst_st.st_mode) or dst_st.st_uid != os.getuid():
+                return False
+        except FileNotFoundError:
+            pass
+
+        os.replace(tmp_name, fname, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        tmp_name = None
+        os.fsync(dir_fd)
+        return True
+    except Exception:
+        return False
+    finally:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name, dir_fd=dir_fd)
+            except OSError:
+                pass
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
+
+
 def sanitize_filename(name: str) -> str:
     cleaned = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', name)
     return cleaned.strip('._') or "imported_theme"
@@ -141,18 +227,22 @@ def scan_license_in_dir(theme_dir: str) -> str:
         for fname in os.listdir(theme_dir):
             if re.match(r'^(license|copying|copyright)(\.[a-z0-9]+)?$', fname, re.IGNORECASE):
                 fpath = os.path.join(theme_dir, fname)
-                if os.path.isfile(fpath) and not os.path.islink(fpath):
-                    try:
-                        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-                            txt = f.read(8192)
-                            detected = detect_license_text(txt)
-                            if detected != "Unknown":
-                                return detected
-                    except Exception:
-                        pass
+                txt = safe_read_text_file(fpath, max_bytes=8192)
+                if txt:
+                    detected = detect_license_text(txt)
+                    if detected != "Unknown":
+                        return detected
     except Exception:
         pass
     return "Unknown"
+
+
+IGNORED_HASH_FILES = {
+    ".cursor-theme-manager-imported",
+    ".omarchy-cursor-switcher-imported",
+    ".cursor-theme-manager-generated",
+    ".omarchy-cursor-switcher-converted",
+}
 
 
 def compute_content_hash(theme_root: str) -> str:
@@ -160,6 +250,8 @@ def compute_content_hash(theme_root: str) -> str:
     cursor_files = []
     for root, _, files in os.walk(theme_root):
         for f in files:
+            if f in IGNORED_HASH_FILES:
+                continue
             full = os.path.join(root, f)
             rel = os.path.relpath(full, theme_root)
             cursor_files.append((rel, full))
@@ -174,6 +266,29 @@ def compute_content_hash(theme_root: str) -> str:
                 with open(full, "rb") as f:
                     while chunk := f.read(65536):
                         hasher.update(chunk)
+        except Exception:
+            pass
+    return hasher.hexdigest()
+
+
+def compute_legacy_content_hash(theme_root: str) -> str:
+    """Computes the legacy content hash used prior to commit 5e321a4 (followed symlinks to read bytes)."""
+    hasher = hashlib.sha256()
+    cursor_files = []
+    for root, _, files in os.walk(theme_root):
+        for f in files:
+            if f in IGNORED_HASH_FILES:
+                continue
+            full = os.path.join(root, f)
+            rel = os.path.relpath(full, theme_root)
+            cursor_files.append((rel, full))
+    cursor_files.sort()
+    for rel, full in cursor_files:
+        hasher.update(rel.encode("utf-8"))
+        try:
+            with open(full, "rb") as f:
+                while chunk := f.read(65536):
+                    hasher.update(chunk)
         except Exception:
             pass
     return hasher.hexdigest()
@@ -322,17 +437,14 @@ def detect_theme_metadata(theme_root: str, user_name_override: str = ""):
 
     if has_manifest:
         formats.append("hyprcursor")
-        try:
-            m_path = os.path.join(theme_root, "manifest.hl")
-            if os.path.isfile(m_path) and not os.path.islink(m_path):
-                with open(m_path, "r", encoding="utf-8", errors="ignore") as f:
-                    raw = f.read(65536)
-                    for line in raw.splitlines():
-                        m = re.match(r'^\s*name\s*=\s*([^\n\r]+)', line)
-                        if m and not declared_name:
-                            declared_name = m.group(1).strip().strip('"\'')
-        except Exception:
-            pass
+        m_path = os.path.join(theme_root, "manifest.hl")
+        raw = safe_read_text_file(m_path, max_bytes=65536)
+        if raw and not declared_name:
+            for line in raw.splitlines():
+                m = re.match(r'^\s*name\s*=\s*([^\n\r]+)', line)
+                if m and not declared_name:
+                    declared_name = m.group(1).strip().strip('"\'')
+                    break
 
     if has_xcursors:
         formats.append("xcursor")
@@ -340,17 +452,14 @@ def detect_theme_metadata(theme_root: str, user_name_override: str = ""):
         if not cursor_files:
             raise ValueError("The cursors/ directory is empty; no cursor images found.")
         index_theme = os.path.join(theme_root, "index.theme")
-        if os.path.isfile(index_theme) and not os.path.islink(index_theme) and not declared_name:
-            try:
-                with open(index_theme, "r", encoding="utf-8", errors="ignore") as f:
-                    raw = f.read(65536)
-                    for line in raw.splitlines():
-                        m = re.match(r'^\s*Name\s*=\s*([^\n\r]+)', line)
-                        if m:
-                            declared_name = m.group(1).strip()
-                            break
-            except Exception:
-                pass
+        if not declared_name:
+            raw = safe_read_text_file(index_theme, max_bytes=65536)
+            if raw:
+                for line in raw.splitlines():
+                    m = re.match(r'^\s*Name\s*=\s*([^\n\r]+)', line)
+                    if m:
+                        declared_name = m.group(1).strip()
+                        break
 
     if not declared_name:
         declared_name = os.path.basename(theme_root)
@@ -378,17 +487,33 @@ def copy_theme_atomically(src_dir: str, dst_dir: str):
             shutil.rmtree(temp_dst, ignore_errors=True)
 
 
-def check_existing_hash(icons_dir: str, content_hash: str):
+def check_existing_hash(icons_dir: str, content_hash: str, legacy_hash: str = ""):
     """Checks if an imported theme with the same content hash already exists."""
     if not os.path.isdir(icons_dir):
         return None
+    short_hash = content_hash[:12] if content_hash else ""
+    legacy_short = legacy_hash[:12] if legacy_hash else ""
     for entry in os.listdir(icons_dir):
         full = os.path.join(icons_dir, entry)
         if os.path.isdir(full) and not os.path.islink(full) and IMPORTED_ID_RE.fullmatch(entry):
-            marker = os.path.join(full, ".omarchy-cursor-switcher-imported")
-            meta = read_managed_import_marker(marker, entry)
-            if meta and meta.get("contentHash") == content_hash:
-                return meta
+            marker1 = os.path.join(full, ".omarchy-cursor-switcher-imported")
+            marker2 = os.path.join(full, ".cursor-theme-manager-imported")
+            meta = read_managed_import_marker(marker1, entry) or read_managed_import_marker(marker2, entry)
+            if meta:
+                stored = meta.get("contentHash")
+                if stored and (stored == content_hash or (legacy_hash and stored == legacy_hash)):
+                    return meta
+                if (short_hash and entry.endswith(f"-{short_hash}")) or (legacy_short and entry.endswith(f"-{legacy_short}")):
+                    return meta
+                try:
+                    disk_hash = compute_content_hash(full)
+                    if disk_hash == content_hash or (legacy_hash and disk_hash == legacy_hash):
+                        return meta
+                    disk_legacy = compute_legacy_content_hash(full)
+                    if (disk_legacy and disk_legacy == content_hash) or (legacy_hash and disk_legacy == legacy_hash):
+                        return meta
+                except Exception:
+                    pass
     return None
 
 
@@ -400,6 +525,26 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
     data_home = os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local/share"))
     icons_dir = os.path.join(data_home, "icons")
     os.makedirs(icons_dir, exist_ok=True)
+
+    try:
+        real_source = os.path.realpath(source_path)
+        real_icons = os.path.realpath(icons_dir)
+        if real_source == real_icons or real_source.startswith(real_icons + os.sep):
+            rel = os.path.relpath(real_source, real_icons)
+            entry = rel.split(os.sep)[0]
+            cand = os.path.join(real_icons, entry)
+            if IMPORTED_ID_RE.fullmatch(entry) and os.path.isdir(cand) and not os.path.islink(cand):
+                m1 = os.path.join(cand, ".cursor-theme-manager-imported")
+                m2 = os.path.join(cand, ".omarchy-cursor-switcher-imported")
+                existing_meta = read_managed_import_marker(m1, entry) or read_managed_import_marker(m2, entry)
+                if existing_meta:
+                    return {
+                        "ok": True,
+                        "alreadyImported": True,
+                        "theme": existing_meta
+                    }
+    except Exception:
+        pass
 
     stage_temp = tempfile.mkdtemp(prefix=".cs-stage-")
     try:
@@ -421,9 +566,21 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
         validate_theme_security(theme_root)
         meta = detect_theme_metadata(theme_root, display_name_override)
         content_hash = compute_content_hash(theme_root)
+        legacy_hash = compute_legacy_content_hash(theme_root)
 
-        existing = check_existing_hash(icons_dir, content_hash)
+        existing = check_existing_hash(icons_dir, content_hash, legacy_hash)
         if existing:
+            if existing.get("contentHash") != content_hash:
+                try:
+                    existing_path = existing.get("path") or os.path.join(icons_dir, existing["id"])
+                    if os.path.isdir(existing_path) and not os.path.islink(existing_path):
+                        existing["contentHash"] = content_hash
+                        m1 = os.path.join(existing_path, ".cursor-theme-manager-imported")
+                        m2 = os.path.join(existing_path, ".omarchy-cursor-switcher-imported")
+                        for m in (m1, m2):
+                            safe_write_text_file(m, json.dumps(existing, indent=2))
+                except Exception:
+                    pass
             return {
                 "ok": True,
                 "alreadyImported": True,
@@ -481,10 +638,9 @@ def run_import(source_path: str, display_name_override: str = "", script_dir: st
                 except Exception as e:
                     sys.stderr.write(f"Conversion note: {e}\n")
 
-        with open(marker_file, "w", encoding="utf-8") as f:
-            json.dump(theme_record, f, indent=2)
-        with open(legacy_marker, "w", encoding="utf-8") as f:
-            json.dump(theme_record, f, indent=2)
+        marker_text = json.dumps(theme_record, indent=2)
+        safe_write_text_file(marker_file, marker_text)
+        safe_write_text_file(legacy_marker, marker_text)
 
         return {
             "ok": True,
@@ -515,11 +671,39 @@ def run_remove(theme_id: str):
         return {"ok": False, "error": f"Imported theme directory not found: {target}"}
 
     marker1 = os.path.join(target, ".cursor-theme-manager-imported")
-    marker2 = os.path.join(target, ".omarchy-cursor-switcher-imported")
-    if not (read_managed_import_marker(marker1, theme_id) or read_managed_import_marker(marker2, theme_id)):
+    meta = read_managed_import_marker(marker1, theme_id) or read_managed_import_marker(marker2, theme_id)
+    if not meta:
         return {"ok": False, "error": f"Directory is not managed by Cursor Theme Manager import: {target}"}
 
+    content_hash = meta.get("contentHash")
+    display_name = meta.get("displayName")
+
     shutil.rmtree(target)
+
+    # Clean up any positively identified managed duplicate imports with identical hash or display name
+    for entry in os.listdir(icons_dir):
+        if entry == theme_id:
+            continue
+        full = os.path.join(icons_dir, entry)
+        if not os.path.isdir(full) or os.path.islink(full) or not IMPORTED_ID_RE.fullmatch(entry):
+            continue
+        m1 = os.path.join(full, ".cursor-theme-manager-imported")
+        m2 = os.path.join(full, ".omarchy-cursor-switcher-imported")
+        other_meta = read_managed_import_marker(m1, entry) or read_managed_import_marker(m2, entry)
+        if other_meta:
+            is_dup = False
+            if content_hash and other_meta.get("contentHash") == content_hash:
+                is_dup = True
+            elif display_name and other_meta.get("displayName") == display_name:
+                is_dup = True
+            if is_dup:
+                shutil.rmtree(full, ignore_errors=True)
+                for sub in os.listdir(icons_dir):
+                    sub_full = os.path.join(icons_dir, sub)
+                    if not os.path.isdir(sub_full) or os.path.islink(sub_full):
+                        continue
+                    if sub.startswith(f"CursorSwitcher-XCursor-{entry}") or sub.startswith(f"CursorSwitcher-Themed-{entry}"):
+                        shutil.rmtree(sub_full, ignore_errors=True)
 
     for entry in os.listdir(icons_dir):
         full = os.path.join(icons_dir, entry)
@@ -573,49 +757,46 @@ def run_rename(theme_id: str, new_name: str):
 
     try:
         meta["displayName"] = clean_name
-        with open(marker1, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
-        with open(marker2, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
+        marker_data = json.dumps(meta, indent=2)
+        safe_write_text_file(marker1, marker_data)
+        safe_write_text_file(marker2, marker_data)
     except Exception as e:
         return {"ok": False, "error": f"Failed to update metadata marker: {e}"}
 
     idx_path = os.path.join(target, "index.theme")
-    if os.path.isfile(idx_path):
+    idx_content = safe_read_text_file(idx_path, max_bytes=65536)
+    if idx_content is not None:
         try:
             lines = []
             found = False
-            with open(idx_path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    if line.strip().startswith("Name="):
-                        lines.append(f"Name={clean_name}\n")
-                        found = True
-                    else:
-                        lines.append(line)
+            for line in idx_content.splitlines(keepends=True):
+                if line.strip().startswith("Name="):
+                    lines.append(f"Name={clean_name}\n")
+                    found = True
+                else:
+                    lines.append(line)
             if not found:
                 lines.insert(0, f"Name={clean_name}\n")
-            with open(idx_path, "w", encoding="utf-8") as f:
-                f.writelines(lines)
+            safe_write_text_file(idx_path, "".join(lines))
         except Exception as e:
             return {"ok": False, "error": f"Failed to update index.theme: {e}"}
 
     for mname in ["manifest.hl", "manifest.toml"]:
         mpath = os.path.join(target, mname)
-        if os.path.isfile(mpath):
+        mcontent = safe_read_text_file(mpath, max_bytes=65536)
+        if mcontent is not None:
             try:
                 lines = []
                 found = False
-                with open(mpath, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        if line.strip().startswith("name =") or line.strip().startswith("name="):
-                            lines.append(f"name = {clean_name}\n")
-                            found = True
-                        else:
-                            lines.append(line)
+                for line in mcontent.splitlines(keepends=True):
+                    if line.strip().startswith("name =") or line.strip().startswith("name="):
+                        lines.append(f"name = {clean_name}\n")
+                        found = True
+                    else:
+                        lines.append(line)
                 if not found:
                     lines.insert(0, f"name = {clean_name}\n")
-                with open(mpath, "w", encoding="utf-8") as f:
-                    f.writelines(lines)
+                safe_write_text_file(mpath, "".join(lines))
             except Exception:
                 pass
 

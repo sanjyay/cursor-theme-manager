@@ -870,14 +870,89 @@ def remove_secure_state_dir(expected_instance: Optional[str] = None,
         os.close(dir_fd)
 
 
+def recovery_actor_active() -> bool:
+    """Return true only if cursor-theme-manager-cleanup.service is actively executing or indeterminate."""
+    res = run_cmd(["systemctl", "--user", "is-active", "cursor-theme-manager-cleanup.service"], timeout=1.0)
+    if res.timed_out or res.limit_exceeded:
+        return True
+    return bool(res.ok and res.stdout.strip() in ("active", "activating"))
+
+
 def recovery_artifacts_present(expected_instance: Optional[str]) -> bool:
     """Return true when an installed cleanup actor can still process recovery."""
     paths = get_paths()
     candidates = (paths["cleanup_exe"], paths["path_unit"], paths["service_unit"])
-    return any(
+    has_files = any(
         os.path.exists(path) and is_file_owned_by_us(path, expected_instance)
         for path in candidates
     )
+    return has_files and recovery_actor_active()
+
+
+def safe_unlink_owned_artifact(path: str, expected_instance: Optional[str] = None) -> bool:
+    """Safely unlinks a CTM artifact via held parent descriptor, refusing symlinks and unowned files."""
+    if not os.path.lexists(path):
+        return True
+    if not is_file_owned_by_us(path, expected_instance):
+        return False
+    parent_fd = open_held_parent_dir(path, create=False)
+    if parent_fd is None:
+        return False
+    try:
+        basename = os.path.basename(path)
+        marker = f"X-CursorThemeManager-Instance={expected_instance}" if expected_instance else OWNERSHIP_MARKER
+        if not safe_unlink_config_file(parent_fd, basename, required_marker=marker):
+            return safe_unlink_config_file(parent_fd, basename, required_marker=OWNERSHIP_MARKER)
+        return True
+    finally:
+        os.close(parent_fd)
+
+
+def safe_rmdir_path(dirpath: str) -> bool:
+    """Safely removes an empty directory via held parent descriptor, refusing symlinks."""
+    if not os.path.lexists(dirpath):
+        return True
+    parent_fd = open_held_parent_dir(dirpath, create=False)
+    if parent_fd is None:
+        return False
+    try:
+        basename = os.path.basename(dirpath)
+        st = os.stat(basename, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+            return False
+        os.rmdir(basename, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(parent_fd)
+
+
+def retire_old_instance_artifacts(expected_instance: Optional[str] = None) -> None:
+    """Safely retire persistent artifacts left behind by an uninstalled or failed installation."""
+    paths = get_paths()
+    if os.path.lexists(paths["path_unit"]):
+        run_cmd(["systemctl", "--user", "stop", "cursor-theme-manager-cleanup.path"])
+        run_cmd(["systemctl", "--user", "disable", "cursor-theme-manager-cleanup.path"])
+        safe_unlink_owned_artifact(paths["path_unit"], expected_instance)
+
+    if os.path.lexists(paths["service_unit"]):
+        safe_unlink_owned_artifact(paths["service_unit"], expected_instance)
+
+    run_cmd(["systemctl", "--user", "daemon-reload"])
+    run_cmd(["systemctl", "--user", "reset-failed", "cursor-theme-manager-cleanup.service"])
+
+    if os.path.lexists(paths["cleanup_exe"]):
+        safe_unlink_owned_artifact(paths["cleanup_exe"], expected_instance)
+
+    if os.path.lexists(paths["libexec_dir"]):
+        safe_rmdir_path(paths["libexec_dir"])
+
+    if os.path.lexists(paths["desktop_file"]):
+        if safe_unlink_owned_artifact(paths["desktop_file"], expected_instance):
+            if resolve_system_executable("update-desktop-database"):
+                run_cmd(["update-desktop-database", "-q", os.path.dirname(paths["desktop_file"])])
 
 
 def reconcile_orphaned_state(current_plugin_fingerprint: str) -> dict:
@@ -926,6 +1001,8 @@ def reconcile_orphaned_state(current_plugin_fingerprint: str) -> dict:
             return {"ok": True, "reconciled": False, "reason": "current-state-published"}
         if latest:
             return {"ok": False, "recoveryPending": True, "error": "Recovery ownership changed; retry shortly."}
+
+    retire_old_instance_artifacts(old_instance)
 
     return {"ok": True, "reconciled": True, "retiredPluginFingerprint": old_fingerprint}
 
@@ -1254,42 +1331,28 @@ def execute_cleanup(expected_instance: Optional[str] = None,
 
     _cleanup_checkpoint("before-artifact-cleanup")
     # Remove marker-owned desktop file (if matching expected_instance or stale)
-    if os.path.exists(paths["desktop_file"]) and is_file_owned_by_us(paths["desktop_file"], expected_instance):
-        try:
-            os.unlink(paths["desktop_file"])
+    if os.path.lexists(paths["desktop_file"]):
+        if safe_unlink_owned_artifact(paths["desktop_file"], expected_instance):
             if resolve_system_executable("update-desktop-database"):
                 run_cmd(["update-desktop-database", "-q", os.path.dirname(paths["desktop_file"])])
-        except OSError:
-            pass
 
     # Self-cleanup: remove systemd units and cleanup executable
-    if os.path.exists(paths["path_unit"]) and is_file_owned_by_us(paths["path_unit"], expected_instance):
-        try:
-            run_cmd(["systemctl", "--user", "stop", "cursor-theme-manager-cleanup.path"])
-            run_cmd(["systemctl", "--user", "disable", "cursor-theme-manager-cleanup.path"])
-            os.unlink(paths["path_unit"])
-        except OSError:
-            pass
+    if os.path.lexists(paths["path_unit"]):
+        run_cmd(["systemctl", "--user", "stop", "cursor-theme-manager-cleanup.path"])
+        run_cmd(["systemctl", "--user", "disable", "cursor-theme-manager-cleanup.path"])
+        safe_unlink_owned_artifact(paths["path_unit"], expected_instance)
 
-    if os.path.exists(paths["service_unit"]) and is_file_owned_by_us(paths["service_unit"], expected_instance):
-        try:
-            os.unlink(paths["service_unit"])
-        except OSError:
-            pass
+    if os.path.lexists(paths["service_unit"]):
+        safe_unlink_owned_artifact(paths["service_unit"], expected_instance)
 
     run_cmd(["systemctl", "--user", "daemon-reload"])
 
     # Unlink own executable and remove libexec directory
-    if os.path.exists(paths["cleanup_exe"]) and is_file_owned_by_us(paths["cleanup_exe"], expected_instance):
-        try:
-            os.unlink(paths["cleanup_exe"])
-        except OSError:
-            pass
-    if os.path.isdir(paths["libexec_dir"]):
-        try:
-            os.rmdir(paths["libexec_dir"])
-        except OSError:
-            pass
+    if os.path.lexists(paths["cleanup_exe"]):
+        safe_unlink_owned_artifact(paths["cleanup_exe"], expected_instance)
+
+    if os.path.lexists(paths["libexec_dir"]):
+        safe_rmdir_path(paths["libexec_dir"])
 
     # Clean up CTM-generated internal conversion caches
     user_icons = os.path.join(paths["data_home"], "icons")

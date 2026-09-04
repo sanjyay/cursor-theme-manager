@@ -117,7 +117,7 @@ class IsolatedTestCase(unittest.TestCase):
             if argv:
                 cmd_str = " ".join(str(a) for a in argv)
                 if any(tool in cmd_str for tool in ("systemctl", "gsettings", "hyprctl", "dbus-update-activation-environment")):
-                    out = b"active\n" if "is-active" in argv else b""
+                    out = b"active\n" if ("is-active" in argv and "cursor-theme-manager-cleanup.path" in argv) else b""
                     return runtime_safety.BoundedResult(
                         exit_code=0, stdout=out, stderr=b"", timed_out=False, limit_exceeded=False
                     )

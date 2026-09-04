@@ -847,3 +847,50 @@ def safe_unlink_config_file(parent_fd: int, basename: str, required_marker: Opti
     except Exception:
         return False
 
+
+def safe_rmdir_directory(parent_fd: int, basename: str) -> bool:
+    """
+    Safely removes an empty directory relative to held parent directory descriptor.
+    Verifies that target is a directory owned by the current user (refusing symlinks).
+    """
+    if parent_fd is None or parent_fd < 0 or not basename or "/" in basename:
+        return False
+
+    try:
+        st = os.stat(basename, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+            return False
+        os.rmdir(basename, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return True
+    except Exception:
+        return False
+
+
+def safe_unlink_file_path(filepath: str, required_marker: Optional[str] = None) -> bool:
+    """Safely traverses held parent and unlinks regular file verifying ownership and content."""
+    if not os.path.lexists(filepath):
+        return True
+    parent_fd = open_held_parent_dir(filepath, create=False)
+    if parent_fd is None:
+        return False
+    try:
+        basename = os.path.basename(filepath)
+        return safe_unlink_config_file(parent_fd, basename, required_marker=required_marker)
+    finally:
+        os.close(parent_fd)
+
+
+def safe_rmdir_path(dirpath: str) -> bool:
+    """Safely traverses held parent and removes directory verifying ownership and type."""
+    if not os.path.lexists(dirpath):
+        return True
+    parent_fd = open_held_parent_dir(dirpath, create=False)
+    if parent_fd is None:
+        return False
+    try:
+        basename = os.path.basename(dirpath)
+        return safe_rmdir_directory(parent_fd, basename)
+    finally:
+        os.close(parent_fd)
+

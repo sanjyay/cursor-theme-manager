@@ -144,6 +144,13 @@ assert.strictEqual(Model.parseState("{oops").reason, "corrupt")
 assert.strictEqual(Model.parseState("{oops").size, 16)
 assert.strictEqual(Model.parseState("").reason, "missing")
 assert.strictEqual(Model.parseState("").size, 16)
+assert.strictEqual(Model.parseState("").recoveryPending, false)
+assert.strictEqual(Model.parseState("").recoveryOrphaned, false)
+
+const recoveryParsed = Model.parseState(JSON.stringify({ recoveryPending: true, recoveryOrphaned: true }))
+assert.strictEqual(recoveryParsed.ok, true)
+assert.strictEqual(recoveryParsed.recoveryPending, true)
+assert.strictEqual(recoveryParsed.recoveryOrphaned, true)
 
 // Responsive preview layout calculation tests
 assert.strictEqual(Model.previewColumns(600, 72, 14, 16), 6) // Wide window -> 6 cols
@@ -194,5 +201,25 @@ const updatedImported = { ...newImported, displayName: "Banana Pro" }
 const reUpserted = Model.upsertTheme(upserted, updatedImported)
 assert.strictEqual(reUpserted.length, 2)
 assert.strictEqual(reUpserted[0].displayName, "Banana Pro")
+
+// Deduplication: Two imported themes with same display name (e.g. legacy hash vs new hash) collapse to one
+const dupDiscovered = [
+  { id: "CursorSwitcher-Imported-Banana-542bccf69750", displayName: "Banana", formats: ["xcursor"], imported: true, sourceType: "imported", importedAt: "2026-09-02T10:00:00Z" },
+  { id: "CursorSwitcher-Imported-Banana-f57d1a8d1a4a", displayName: "Banana", formats: ["xcursor", "hyprcursor"], runtimePrepared: true, imported: true, sourceType: "imported", importedAt: "2026-09-04T10:00:00Z" },
+  { id: "Banana", displayName: "Banana", formats: ["xcursor"], sourceType: "system" }
+]
+const deduped = Model.normalizeThemes(dupDiscovered)
+assert.strictEqual(deduped.length, 1)
+assert.strictEqual(deduped[0].displayName, "Banana")
+assert.strictEqual(deduped[0].imported, true)
+assert.strictEqual(deduped[0].runtimePrepared, true)
+assert.strictEqual(deduped[0].formats.length, 2)
+
+// Upserting an imported theme matching an existing system theme merges into it
+const systemOnly = [{ id: "Banana", displayName: "Banana", formats: ["xcursor"], sourceType: "system" }]
+const upsertMerged = Model.upsertTheme(systemOnly, newImported)
+assert.strictEqual(upsertMerged.length, 1)
+assert.strictEqual(upsertMerged[0].displayName, "Banana")
+assert.strictEqual(upsertMerged[0].imported, true)
 
 console.log("model tests: ok")

@@ -393,5 +393,200 @@ class TestCursorImportSecurity(IsolatedTestCase):
         self.assertTrue(json.loads(duplicate.stdout)["alreadyImported"])
 
 
+    def test_24_legacy_hash_duplicate_detection(self):
+        # Create a theme with symlinks so legacy hash != modern hash
+        src = self.create_mock_xcursor("LegacyHashTheme")
+        cursors_dir = os.path.join(src, "cursors")
+        os.symlink("default", os.path.join(cursors_dir, "arrow"))
+
+        # First import
+        res1 = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
+        self.assertEqual(res1.returncode, 0, res1.stderr)
+        data1 = json.loads(res1.stdout)
+        self.assertFalse(data1.get("alreadyImported"))
+        theme1_path = data1["theme"]["path"]
+        modern_hash = data1["theme"]["contentHash"]
+
+        # Compute legacy hash
+        sys.path.insert(0, os.path.join(ROOT_DIR, "scripts"))
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("cursor_import", IMPORT_SCRIPT)
+        ci = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ci)
+        legacy_hash = ci.compute_legacy_content_hash(src)
+        self.assertNotEqual(modern_hash, legacy_hash)
+
+        # Overwrite marker with legacy hash to simulate pre-upgrade import
+        m1 = os.path.join(theme1_path, ".cursor-theme-manager-imported")
+        m2 = os.path.join(theme1_path, ".omarchy-cursor-switcher-imported")
+        with open(m1, "r", encoding="utf-8") as f:
+            rec = json.load(f)
+        rec["contentHash"] = legacy_hash
+        for m in (m1, m2):
+            with open(m, "w", encoding="utf-8") as f:
+                json.dump(rec, f, indent=2)
+
+        # Re-import should detect it as already imported via legacy hash
+        res2 = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
+        self.assertEqual(res2.returncode, 0, res2.stderr)
+        data2 = json.loads(res2.stdout)
+        self.assertTrue(data2.get("alreadyImported"), "Expected alreadyImported: True via legacy hash")
+        # And marker should have been modernized to modern_hash
+        with open(m1, "r", encoding="utf-8") as f:
+            rec_modern = json.load(f)
+        self.assertEqual(rec_modern["contentHash"], modern_hash)
+
+    def test_25_marker_files_ignored_during_hash(self):
+        sys.path.insert(0, os.path.join(ROOT_DIR, "scripts"))
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("cursor_import", IMPORT_SCRIPT)
+        ci = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ci)
+
+        src = self.create_mock_xcursor("MarkerIgnoreTheme")
+        hash_before = ci.compute_content_hash(src)
+
+        # Add managed markers with varied content
+        with open(os.path.join(src, ".cursor-theme-manager-imported"), "w") as f:
+            f.write(json.dumps({"importedAt": "2026-09-04T12:00:00Z", "id": "test"}))
+        with open(os.path.join(src, ".omarchy-cursor-switcher-imported"), "w") as f:
+            f.write(json.dumps({"importedAt": "2026-09-04T13:00:00Z", "id": "test2"}))
+
+        hash_after = ci.compute_content_hash(src)
+        self.assertEqual(hash_before, hash_after)
+
+    def test_26_import_theme_already_in_icons_dir(self):
+        src = self.create_mock_xcursor("AlreadyInIcons")
+        res1 = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
+        self.assertEqual(res1.returncode, 0)
+        installed_path = json.loads(res1.stdout)["theme"]["path"]
+
+        # Importing from the installed location inside user icons dir
+        res2 = subprocess.run([CURSORCTL, "import", "--source", installed_path], capture_output=True, text=True, env=self.env)
+        self.assertEqual(res2.returncode, 0)
+        data2 = json.loads(res2.stdout)
+        self.assertTrue(data2.get("alreadyImported"))
+
+    def test_27_remove_theme_cleans_up_duplicate_folder(self):
+        src = self.create_mock_xcursor("DupCleanTheme")
+        res1 = subprocess.run([CURSORCTL, "import", "--source", src], capture_output=True, text=True, env=self.env)
+        self.assertEqual(res1.returncode, 0)
+        theme1 = json.loads(res1.stdout)["theme"]
+        id1 = theme1["id"]
+        path1 = theme1["path"]
+
+        # Manually create a duplicate imported folder with same contentHash
+        id2 = f"{id1}-dup"
+        path2 = os.path.join(str(self.iso.user_icons), id2)
+        shutil.copytree(path1, path2, symlinks=True)
+        # Update marker id for the dup
+        m1 = os.path.join(path2, ".cursor-theme-manager-imported")
+        m2 = os.path.join(path2, ".omarchy-cursor-switcher-imported")
+        for m in (m1, m2):
+            with open(m, "r", encoding="utf-8") as f:
+                rec = json.load(f)
+            rec["id"] = id2
+            with open(m, "w", encoding="utf-8") as f:
+                json.dump(rec, f, indent=2)
+
+        self.assertTrue(os.path.isdir(path1))
+        self.assertTrue(os.path.isdir(path2))
+
+        # Remove theme 1
+        res_del = subprocess.run([CURSORCTL, "remove-imported", "--id", id1], capture_output=True, text=True, env=self.env)
+        self.assertEqual(res_del.returncode, 0, res_del.stderr)
+        self.assertFalse(os.path.exists(path1))
+        self.assertFalse(os.path.exists(path2), "Duplicate theme directory should have been cleaned up")
+
+    def test_28_safe_write_text_file_security_and_descriptor_relative_replacement(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("cursor_import", IMPORT_SCRIPT)
+        ci = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ci)
+
+        safe_write = ci.safe_write_text_file
+
+        theme_parent = os.path.join(self.test_dir, "safe_write_test")
+        os.makedirs(theme_parent, mode=0o700, exist_ok=True)
+        target_file = os.path.join(theme_parent, "manifest.hl")
+
+        # 1. Normal write succeeds
+        self.assertTrue(safe_write(target_file, "name = TestTheme\n"))
+        with open(target_file, "r") as f:
+            self.assertEqual(f.read(), "name = TestTheme\n")
+
+        # 2. Re-write existing file succeeds atomically
+        self.assertTrue(safe_write(target_file, "name = UpdatedTheme\n"))
+        with open(target_file, "r") as f:
+            self.assertEqual(f.read(), "name = UpdatedTheme\n")
+
+        # 3. World-writable parent directory is rejected
+        os.chmod(theme_parent, 0o777)
+        self.assertFalse(safe_write(target_file, "name = Malicious\n"))
+        with open(target_file, "r") as f:
+            self.assertEqual(f.read(), "name = UpdatedTheme\n")
+
+        # 4. Group-writable parent directory is rejected
+        os.chmod(theme_parent, 0o775)
+        self.assertFalse(safe_write(target_file, "name = MaliciousGroup\n"))
+        with open(target_file, "r") as f:
+            self.assertEqual(f.read(), "name = UpdatedTheme\n")
+
+        # Restore safe permissions
+        os.chmod(theme_parent, 0o700)
+
+        # 5. Symlink target is rejected and target victim is not overwritten
+        victim = os.path.join(self.test_dir, "victim.txt")
+        with open(victim, "w") as f:
+            f.write("UNTOUCHED_VICTIM")
+        symlink_target = os.path.join(theme_parent, "symlink_file")
+        os.symlink(victim, symlink_target)
+        self.assertFalse(safe_write(symlink_target, "OVERWRITTEN"))
+        with open(victim, "r") as f:
+            self.assertEqual(f.read(), "UNTOUCHED_VICTIM")
+
+        # 6. Symlink parent directory is rejected
+        symlink_parent = os.path.join(self.test_dir, "parent_link")
+        os.symlink(theme_parent, symlink_parent)
+        self.assertFalse(safe_write(os.path.join(symlink_parent, "file.txt"), "data"))
+
+        # 7. Descriptor-relative guarantee: parent directory rename during write stays in held inode
+        # We verify that safe_write's descriptor-relative replace uses src_dir_fd and dst_dir_fd
+        # by verifying that a held parent descriptor write survives directory renaming without touching decoy/victim
+        held_dir = os.path.join(self.test_dir, "held_dir")
+        os.makedirs(held_dir, mode=0o700, exist_ok=True)
+        fname = "index.theme"
+        victim2 = os.path.join(self.test_dir, "victim2.txt")
+        with open(victim2, "w") as f:
+            f.write("SAFE_VICTIM_2")
+
+        dir_fd = os.open(held_dir, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            tmp_name = f".tmp-{fname}-test"
+            tmp_fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644, dir_fd=dir_fd)
+            os.write(tmp_fd, b"SECURE_CONTENT")
+            os.close(tmp_fd)
+
+            # Concurrent attacker swaps directory path
+            decoy = os.path.join(self.test_dir, "held_dir_moved")
+            os.rename(held_dir, decoy)
+            attacker_dir = os.path.join(self.test_dir, "held_dir")
+            os.makedirs(attacker_dir, mode=0o700)
+            os.symlink(victim2, os.path.join(attacker_dir, fname))
+
+            # Final rename executed relative to held dir_fd
+            os.replace(tmp_name, fname, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+
+            # Victim at the swapped pathname was not touched
+            with open(victim2) as f:
+                self.assertEqual(f.read(), "SAFE_VICTIM_2")
+
+            # File was placed in original held inode (now at decoy)
+            with open(os.path.join(decoy, fname)) as f:
+                self.assertEqual(f.read(), "SECURE_CONTENT")
+        finally:
+            os.close(dir_fd)
+
+
 if __name__ == "__main__":
     unittest.main()

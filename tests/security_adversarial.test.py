@@ -563,6 +563,28 @@ class TestConsentedIntegrationAndRemovalAdversarial(IsolatedTestCase):
         self.assertIn("not owned by Cursor Theme Manager", res["error"])
         self.assertTrue(os.path.exists(paths["desktop"]))
 
+    def test_symlink_artifact_removal_refused_and_victim_preserved(self):
+        paths = integration_manager.get_paths()
+        victim = self.iso.home / "victim.txt"
+        victim.write_text("precious user data\n", encoding="utf-8")
+
+        for key in ("cleanup", "path_unit", "service_unit", "desktop"):
+            with self.subTest(key=key):
+                target = paths[key]
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                if os.path.lexists(target):
+                    os.unlink(target)
+                os.symlink(str(victim), target)
+
+                self.assertTrue(os.path.islink(target))
+                # Both integration_manager and cleanup_helper safe unlinking must refuse symlinks
+                self.assertFalse(integration_manager.safe_unlink_owned_artifact(target, key))
+                self.assertFalse(cleanup_helper.safe_unlink_owned_artifact(target))
+                self.assertTrue(victim.is_file())
+                self.assertEqual(victim.read_text(encoding="utf-8"), "precious user data\n")
+                self.assertTrue(os.path.islink(target))
+                os.unlink(target)
+
     def test_watcher_noop_when_plugin_directory_still_exists(self):
         # Real UI startup creates a token before Integration is enabled. The
         # standalone cleanup copy must derive the same token fingerprint.

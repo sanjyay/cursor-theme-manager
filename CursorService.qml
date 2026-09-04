@@ -1437,7 +1437,14 @@ Item {
         root.liveAppliedSize = root.requestedSize
         commitSizeDebounceTimer.restart()
       } else if (exitCode !== 0) {
-        root.lastError = root.elide(liveSetcursorStderr.text || "The cursor size was not changed because the original cursor could not be saved safely.")
+        var errSize = (liveSetcursorStderr.text || "").trim()
+        if (!errSize) {
+          try {
+            var jSize = JSON.parse(liveSetcursorStdout.text || "{}")
+            if (jSize.error) errSize = String(jSize.error)
+          } catch(e) {}
+        }
+        root.lastError = root.elide(errSize || "The cursor size was not changed because the original cursor could not be saved safely.")
         root.statusText = "Cursor size change failed"
       }
 
@@ -1539,7 +1546,14 @@ Item {
         root.liveAppliedTheme = root.committedTheme
         persistThemeDebounceTimer.restart()
       } else if (exitCode !== 0) {
-        root.lastError = root.elide(liveThemeStderr.text || "The cursor theme was not changed because the original cursor could not be saved safely.")
+        var errTheme = (liveThemeStderr.text || "").trim()
+        if (!errTheme) {
+          try {
+            var jTheme = JSON.parse(liveThemeStdout.text || "{}")
+            if (jTheme.error) errTheme = String(jTheme.error)
+          } catch(e) {}
+        }
+        root.lastError = root.elide(errTheme || "The cursor theme was not changed because the original cursor could not be saved safely.")
         root.statusText = "Cursor theme change failed"
       }
     }

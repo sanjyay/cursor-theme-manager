@@ -28,7 +28,8 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from runtime_safety import (
     run_bounded, resolve_system_executable, sanitize_text, emit_bounded_json,
-    TIMEOUT_INTEGRATION
+    TIMEOUT_INTEGRATION, open_held_parent_dir, safe_unlink_config_file,
+    safe_unlink_file_path, safe_rmdir_path
 )
 import secure_state
 
@@ -293,6 +294,33 @@ def restore_owned_artifact(filepath: str, snapshot: Tuple[bytes, int]) -> None:
         raise
 
 
+def is_recovery_service_active() -> bool:
+    """Return True if cursor-theme-manager-cleanup.service is actively executing or indeterminate."""
+    res = run_bounded(["systemctl", "--user", "is-active", "cursor-theme-manager-cleanup.service"], timeout=1.0)
+    if res.timed_out or res.limit_exceeded:
+        return True
+    return bool(res.ok and res.stdout.strip() in ("active", "activating"))
+
+
+def safe_unlink_owned_artifact(filepath: str, kind: str, expected_instance: Optional[str] = None) -> bool:
+    """Safely unlinks an owned artifact via held parent descriptor, refusing symlinks and foreign files."""
+    if not os.path.lexists(filepath):
+        return True
+    if not is_owned_artifact(filepath, kind, expected_instance):
+        return False
+    parent_fd = open_held_parent_dir(filepath, create=False)
+    if parent_fd is None:
+        return False
+    try:
+        basename = os.path.basename(filepath)
+        marker = f"X-CursorThemeManager-Instance={expected_instance}" if expected_instance else OWNERSHIP_MARKER
+        if not safe_unlink_config_file(parent_fd, basename, required_marker=marker):
+            return safe_unlink_config_file(parent_fd, basename, required_marker=OWNERSHIP_MARKER)
+        return True
+    finally:
+        os.close(parent_fd)
+
+
 def get_status() -> Dict[str, Any]:
     paths = get_paths()
     st = secure_state.read_state()
@@ -315,7 +343,7 @@ def get_status() -> Dict[str, Any]:
         "pathUnit": is_owned_artifact(paths["path_unit"], "path_unit", st_instance),
         "serviceUnit": is_owned_artifact(paths["service_unit"], "service_unit", st_instance),
     }
-    recovery_actor_present = any(recovery_artifacts.values())
+    recovery_actor_present = any(recovery_artifacts.values()) and is_recovery_service_active()
     recovery_orphaned = foreign_state and not recovery_actor_present
     recovery_pending = foreign_state
 
@@ -543,22 +571,18 @@ ExecStart=%h/.local/libexec/cursor-theme-manager/cleanup --instance {instance_id
     except Exception as e:
         # Transactional Rollback: clean up all temporary and installed files
         for tmp_path, _, _, _ in tmp_manifest:
-            if os.path.exists(tmp_path):
-                try: os.unlink(tmp_path)
-                except OSError: pass
+            safe_unlink_file_path(tmp_path)
 
         for target in installed_targets:
             previous = previous_artifacts.get(target)
             try:
                 if previous is not None:
                     restore_owned_artifact(target, previous)
-                elif os.path.exists(target):
-                    os.unlink(target)
+                else:
+                    safe_unlink_owned_artifact(target, "any", instance_id)
             except OSError:
                 pass
-        if os.path.isdir(libexec_dir):
-            try: os.rmdir(libexec_dir)
-            except OSError: pass
+        safe_rmdir_path(libexec_dir)
 
         if state_committed and previous_state is not None:
             try:
@@ -587,46 +611,35 @@ def disable_integration(expected_plugin_fingerprint: Optional[str] = None) -> Di
     path_unit = paths["path_unit"]
     service_unit = paths["service_unit"]
 
+    st = secure_state.read_state()
+    expected_instance = st.get("integrationInstanceId")
+
+    # Fail closed: reject removal if any existing desktop file is not owned by us
+    if os.path.lexists(desktop_file) and not is_owned_artifact(desktop_file, "desktop", expected_instance):
+        return {
+            "ok": False,
+            "error": f"Refusing to remove desktop entry: not owned by Cursor Theme Manager ({desktop_file})."
+        }
+
     # Stop and disable systemd path unit
     run_bounded(["systemctl", "--user", "stop", "cursor-theme-manager-cleanup.path"], timeout=2.0)
     run_bounded(["systemctl", "--user", "disable", "cursor-theme-manager-cleanup.path"], timeout=2.0)
 
-    st = secure_state.read_state()
-    expected_instance = st.get("integrationInstanceId")
-
-    # Remove only instance-bound files created by this integration.
-    if os.path.exists(path_unit) and is_owned_artifact(path_unit, "path_unit", expected_instance):
-        try: os.unlink(path_unit)
-        except OSError: pass
-
-    if os.path.exists(service_unit) and is_owned_artifact(service_unit, "service_unit", expected_instance):
-        try: os.unlink(service_unit)
-        except OSError: pass
+    # Remove only instance-bound files created by this integration via held parent descriptors
+    safe_unlink_owned_artifact(path_unit, "path_unit", expected_instance)
+    safe_unlink_owned_artifact(service_unit, "service_unit", expected_instance)
 
     run_bounded(["systemctl", "--user", "daemon-reload"], timeout=2.0)
 
     # Remove cleanup helper
-    if os.path.exists(cleanup_file) and is_owned_artifact(cleanup_file, "cleanup", expected_instance):
-        try: os.unlink(cleanup_file)
-        except OSError: pass
-    if os.path.isdir(libexec_dir):
-        try: os.rmdir(libexec_dir)
-        except OSError: pass
+    safe_unlink_owned_artifact(cleanup_file, "cleanup", expected_instance)
+    safe_rmdir_path(libexec_dir)
 
     # Remove desktop file if owned by us
-    if os.path.exists(desktop_file):
-        if is_owned_artifact(desktop_file, "desktop", expected_instance):
-            try:
-                os.unlink(desktop_file)
-                if resolve_system_executable("update-desktop-database"):
-                    run_bounded(["update-desktop-database", "-q", os.path.dirname(desktop_file)], timeout=2.0)
-            except OSError:
-                pass
-        else:
-            return {
-                "ok": False,
-                "error": f"Refusing to remove desktop entry: not owned by Cursor Theme Manager ({desktop_file})."
-            }
+    if os.path.lexists(desktop_file):
+        if safe_unlink_owned_artifact(desktop_file, "desktop", expected_instance):
+            if resolve_system_executable("update-desktop-database"):
+                run_bounded(["update-desktop-database", "-q", os.path.dirname(desktop_file)], timeout=2.0)
 
     # Update state
     st["integrationEnabled"] = False
