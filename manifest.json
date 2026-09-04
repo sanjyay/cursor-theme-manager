@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "sanjyay.cursor-theme-manager",
+  "id": "sanjyyayy.cursor-theme-manager",
   "name": "Cursor Theme Manager",
   "version": "1.0.0",
-  "author": "sanjyay",
+  "author": "sanjyyayy",
   "license": "GPL-3.0-or-later",
   "description": "A local-first cursor theme manager and previewer for Omarchy and Hyprland with Hyprcursor/XCursor support, discrete scaling, and safe in-app theme importing.",
   "kinds": ["service", "panel"],
