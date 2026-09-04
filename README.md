@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/6bbe3356-60f8-4d80-8214-e79091741f7c
 ### Via Omarchy CLI
 
 ```bash
-omarchy plugin add https://github.com/sanjyay/cursor-theme-manager --enable
+omarchy plugin add https://github.com/sanjyyayy/cursor-theme-manager --enable
 ```
 
 > **Note:** Installing Cursor Theme Manager does not install any cursor themes. Existing themes on the system are discovered automatically.
@@ -29,9 +29,9 @@ omarchy plugin add https://github.com/sanjyay/cursor-theme-manager --enable
 Clone or symlink the repository into your Omarchy plugins directory:
 
 ```bash
-git clone https://github.com/sanjyay/cursor-theme-manager.git ~/.config/omarchy/plugins/sanjyay.cursor-theme-manager
+git clone https://github.com/sanjyyayy/cursor-theme-manager.git ~/.config/omarchy/plugins/sanjyyayy.cursor-theme-manager
 omarchy-shell shell rescanPlugins
-omarchy plugin enable sanjyay.cursor-theme-manager
+omarchy plugin enable sanjyyayy.cursor-theme-manager
 ```
 ## Getting Additional Cursor Themes
 
@@ -356,13 +356,13 @@ Cursor Theme Manager integrates with standard Omarchy shell controls:
 
 - **Omarchy Shell IPC:**
   ```bash
-  omarchy-shell shell summon sanjyay.cursor-theme-manager '{}'
-  omarchy-shell shell toggle sanjyay.cursor-theme-manager '{}'
-  omarchy-shell shell hide sanjyay.cursor-theme-manager
+  omarchy-shell shell summon sanjyyayy.cursor-theme-manager '{}'
+  omarchy-shell shell toggle sanjyyayy.cursor-theme-manager '{}'
+  omarchy-shell shell hide sanjyyayy.cursor-theme-manager
   ```
 - **Application Launcher:** When enabled via **Add to Applications**, launch Cursor Theme Manager directly from your application launcher (Super + Space) or by running:
   ```bash
-  omarchy-shell shell toggle sanjyay.cursor-theme-manager '{}'
+  omarchy-shell shell toggle sanjyyayy.cursor-theme-manager '{}'
   ```
 
 ---
@@ -450,7 +450,7 @@ Cursor Theme Manager adheres strictly to defensive security standards:
 When integration is enabled, Cursor Theme Manager is removed automatically simply by running:
 
 ```bash
-omarchy plugin remove sanjyay.cursor-theme-manager
+omarchy plugin remove sanjyyayy.cursor-theme-manager
 ```
 
 ### What Happens During Automatic Removal:
