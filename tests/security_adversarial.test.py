@@ -38,11 +38,19 @@ SCRIPTS_DIR = ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import importlib.machinery
+import importlib.util
+
 import runtime_safety
 import secure_state
 import integration_manager
 import cleanup_helper
 from test_isolation import IsolatedTestCase
+
+cursorctl_loader = importlib.machinery.SourceFileLoader("cursorctl_adv", str(SCRIPTS_DIR / "cursorctl"))
+cursorctl_spec = importlib.util.spec_from_loader("cursorctl_adv", cursorctl_loader)
+cursorctl = importlib.util.module_from_spec(cursorctl_spec)
+cursorctl_loader.exec_module(cursorctl)
 
 
 def is_pid_alive(pid: int) -> bool:
@@ -1230,6 +1238,250 @@ class TestExecutableTrustAndHostilePath(IsolatedTestCase):
         self.assertIn("integrationInstanceId: integrationInstanceId", qml_content)
         self.assertIn("integrationPluginFingerprint: integrationPluginFingerprint", qml_content)
         self.assertIn("root.integrationInstanceId = res.instanceId", qml_content)
+
+
+class TestGtkAndConfigSyncSecurity(IsolatedTestCase):
+    """Verifies that GTK and X11 synchronization securely enforces held-parent descriptor identity,
+    symlink refusal, non-blocking FIFO rejection, size bounding, and clean restoration."""
+
+    def test_gtk3_and_gtk4_settings_ini_symlink_refused_and_target_unmodified(self):
+        canary = self.iso.home / "canary_secret.txt"
+        canary.write_text("SENSITIVE_DATA_DO_NOT_TOUCH", encoding="utf-8")
+
+        for gtk_dir in ["gtk-3.0", "gtk-4.0"]:
+            d = self.iso.xdg_config / gtk_dir
+            d.mkdir(parents=True, exist_ok=True)
+            settings = d / "settings.ini"
+            settings.symlink_to(canary)
+
+        # Apply through cursorctl
+        cursorctl.sync_x11_and_gtk_cursor("Adwaita", 32)
+        self.assertEqual(canary.read_text(encoding="utf-8"), "SENSITIVE_DATA_DO_NOT_TOUCH")
+
+        # Cleanup through cleanup_helper
+        with mock.patch.object(cleanup_helper, "run_cmd", return_value=cleanup_helper.CommandResult(ok=True, exit_code=0)), \
+             mock.patch.object(cleanup_helper, "find_hyprland_instance", return_value="sig"), \
+             mock.patch.object(cleanup_helper, "resolve_system_executable", return_value="/usr/bin/hyprctl"), \
+             mock.patch.object(cleanup_helper, "has_cursor_data", return_value=True):
+            cleanup_helper.restore_cursor({
+                "captured": True,
+                "gtkThemeSet": True,
+                "gtkTheme": "Adwaita",
+                "gtkSizeSet": True,
+                "gtkSize": 24,
+                "liveRestoreTheme": "Adwaita",
+                "liveRestoreSize": 24
+            })
+
+        self.assertEqual(canary.read_text(encoding="utf-8"), "SENSITIVE_DATA_DO_NOT_TOUCH")
+        for gtk_dir in ["gtk-3.0", "gtk-4.0"]:
+            settings = self.iso.xdg_config / gtk_dir / "settings.ini"
+            self.assertTrue(settings.is_symlink())
+
+    def test_gtk2_rc_symlink_refused_and_target_unmodified(self):
+        canary = self.iso.home / "canary_gtk2.txt"
+        canary.write_text("SENSITIVE_GTK2_DATA", encoding="utf-8")
+
+        gtk2_rc = self.iso.home / ".gtkrc-2.0"
+        gtk2_rc.symlink_to(canary)
+
+        cursorctl.sync_x11_and_gtk_cursor("Adwaita", 32)
+        self.assertEqual(canary.read_text(encoding="utf-8"), "SENSITIVE_GTK2_DATA")
+
+        with mock.patch.object(cleanup_helper, "run_cmd", return_value=cleanup_helper.CommandResult(ok=True, exit_code=0)), \
+             mock.patch.object(cleanup_helper, "find_hyprland_instance", return_value="sig"), \
+             mock.patch.object(cleanup_helper, "resolve_system_executable", return_value="/usr/bin/hyprctl"), \
+             mock.patch.object(cleanup_helper, "has_cursor_data", return_value=True):
+            cleanup_helper.restore_cursor({
+                "captured": True,
+                "gtkThemeSet": True,
+                "gtkTheme": "Adwaita",
+                "gtkSizeSet": True,
+                "gtkSize": 24,
+                "liveRestoreTheme": "Adwaita",
+                "liveRestoreSize": 24
+            })
+
+        self.assertEqual(canary.read_text(encoding="utf-8"), "SENSITIVE_GTK2_DATA")
+        self.assertTrue(gtk2_rc.is_symlink())
+
+    def test_gtk_directory_symlink_refused(self):
+        evil_dir = self.iso.home / "evil_redirect_dir"
+        evil_dir.mkdir()
+
+        self.iso.xdg_config.mkdir(parents=True, exist_ok=True)
+        (self.iso.xdg_config / "gtk-3.0").symlink_to(evil_dir)
+
+        cursorctl.sync_x11_and_gtk_cursor("Adwaita", 32)
+        self.assertEqual(list(evil_dir.iterdir()), [])
+
+        with mock.patch.object(cleanup_helper, "run_cmd", return_value=cleanup_helper.CommandResult(ok=True, exit_code=0)), \
+             mock.patch.object(cleanup_helper, "find_hyprland_instance", return_value="sig"), \
+             mock.patch.object(cleanup_helper, "resolve_system_executable", return_value="/usr/bin/hyprctl"), \
+             mock.patch.object(cleanup_helper, "has_cursor_data", return_value=True):
+            cleanup_helper.restore_cursor({
+                "captured": True,
+                "gtkThemeSet": True,
+                "gtkTheme": "Adwaita",
+                "gtkSizeSet": True,
+                "gtkSize": 24,
+                "liveRestoreTheme": "Adwaita",
+                "liveRestoreSize": 24
+            })
+
+        self.assertEqual(list(evil_dir.iterdir()), [])
+
+    def test_x11_default_theme_symlink_refused(self):
+        canary = self.iso.home / "canary_x11.txt"
+        canary.write_text("SENSITIVE_X11_DATA", encoding="utf-8")
+
+        icons_default = self.iso.home / ".icons" / "default"
+        icons_default.mkdir(parents=True, exist_ok=True)
+        (icons_default / "index.theme").symlink_to(canary)
+
+        cursorctl.sync_x11_and_gtk_cursor("Adwaita", 32)
+        self.assertEqual(canary.read_text(encoding="utf-8"), "SENSITIVE_X11_DATA")
+
+        with mock.patch.object(cleanup_helper, "run_cmd", return_value=cleanup_helper.CommandResult(ok=True, exit_code=0)), \
+             mock.patch.object(cleanup_helper, "find_hyprland_instance", return_value="sig"), \
+             mock.patch.object(cleanup_helper, "resolve_system_executable", return_value="/usr/bin/hyprctl"), \
+             mock.patch.object(cleanup_helper, "has_cursor_data", return_value=True):
+            cleanup_helper.restore_cursor({
+                "captured": True,
+                "xcursorThemeSet": True,
+                "xcursorTheme": "Adwaita",
+                "liveRestoreTheme": "Adwaita",
+                "liveRestoreSize": 24
+            })
+
+        self.assertEqual(canary.read_text(encoding="utf-8"), "SENSITIVE_X11_DATA")
+        self.assertTrue((icons_default / "index.theme").is_symlink())
+
+    def test_fifo_special_files_handled_without_hang(self):
+        d = self.iso.xdg_config / "gtk-3.0"
+        d.mkdir(parents=True, exist_ok=True)
+        fifo_settings = d / "settings.ini"
+        os.mkfifo(fifo_settings)
+
+        fifo_gtk2 = self.iso.home / ".gtkrc-2.0"
+        os.mkfifo(fifo_gtk2)
+
+        start = time.monotonic()
+        cursorctl.sync_x11_and_gtk_cursor("Adwaita", 32)
+        with mock.patch.object(cleanup_helper, "run_cmd", return_value=cleanup_helper.CommandResult(ok=True, exit_code=0)), \
+             mock.patch.object(cleanup_helper, "find_hyprland_instance", return_value="sig"), \
+             mock.patch.object(cleanup_helper, "resolve_system_executable", return_value="/usr/bin/hyprctl"), \
+             mock.patch.object(cleanup_helper, "has_cursor_data", return_value=True):
+            cleanup_helper.restore_cursor({
+                "captured": True,
+                "gtkThemeSet": True,
+                "gtkTheme": "Adwaita",
+                "gtkSizeSet": True,
+                "gtkSize": 24,
+                "liveRestoreTheme": "Adwaita",
+                "liveRestoreSize": 24
+            })
+        duration = time.monotonic() - start
+
+        # Must execute promptly without hanging on FIFOs
+        self.assertLess(duration, 2.0)
+        self.assertTrue(stat.S_ISFIFO(fifo_settings.stat().st_mode))
+        self.assertTrue(stat.S_ISFIFO(fifo_gtk2.stat().st_mode))
+
+    def test_oversized_config_ignored_without_modification(self):
+        d = self.iso.xdg_config / "gtk-3.0"
+        d.mkdir(parents=True, exist_ok=True)
+        settings = d / "settings.ini"
+        large_content = "# large ini\n" + ("A" * (200 * 1024))
+        settings.write_text(large_content, encoding="utf-8")
+
+        cursorctl.sync_x11_and_gtk_cursor("Adwaita", 32)
+        self.assertEqual(settings.stat().st_size, len(large_content.encode("utf-8")))
+
+        with mock.patch.object(cleanup_helper, "run_cmd", return_value=cleanup_helper.CommandResult(ok=True, exit_code=0)), \
+             mock.patch.object(cleanup_helper, "find_hyprland_instance", return_value="sig"), \
+             mock.patch.object(cleanup_helper, "resolve_system_executable", return_value="/usr/bin/hyprctl"), \
+             mock.patch.object(cleanup_helper, "has_cursor_data", return_value=True):
+            cleanup_helper.restore_cursor({
+                "captured": True,
+                "gtkThemeSet": True,
+                "gtkTheme": "Adwaita",
+                "gtkSizeSet": True,
+                "gtkSize": 24,
+                "liveRestoreTheme": "Adwaita",
+                "liveRestoreSize": 24
+            })
+        self.assertEqual(settings.stat().st_size, len(large_content.encode("utf-8")))
+
+    def test_legitimate_gtk_and_x11_synchronization_and_restoration(self):
+        d3 = self.iso.xdg_config / "gtk-3.0"
+        d3.mkdir(parents=True, exist_ok=True)
+        (d3 / "settings.ini").write_text(
+            "[Settings]\ngtk-theme-name=Adwaita\ngtk-cursor-theme-name=OldTheme\ngtk-cursor-theme-size=24\ngtk-font-name=Cantarell 11\n",
+            encoding="utf-8"
+        )
+
+        d4 = self.iso.xdg_config / "gtk-4.0"
+        d4.mkdir(parents=True, exist_ok=True)
+        (d4 / "settings.ini").write_text(
+            "[Settings]\ngtk-cursor-theme-name=OldTheme\ngtk-cursor-theme-size=24\n",
+            encoding="utf-8"
+        )
+
+        gtk2 = self.iso.home / ".gtkrc-2.0"
+        gtk2.write_text(
+            'gtk-theme-name="Adwaita"\ngtk-cursor-theme-name="OldTheme"\ngtk-cursor-theme-size=24\n',
+            encoding="utf-8"
+        )
+
+        # Apply new theme and size
+        cursorctl.sync_x11_and_gtk_cursor("NewTheme", 32)
+
+        content3 = (d3 / "settings.ini").read_text(encoding="utf-8")
+        self.assertIn("gtk-cursor-theme-name=NewTheme", content3)
+        self.assertIn("gtk-cursor-theme-size=32", content3)
+        self.assertIn("gtk-theme-name=Adwaita", content3)
+        self.assertIn("gtk-font-name=Cantarell 11", content3)
+
+        content4 = (d4 / "settings.ini").read_text(encoding="utf-8")
+        self.assertIn("gtk-cursor-theme-name=NewTheme", content4)
+        self.assertIn("gtk-cursor-theme-size=32", content4)
+
+        content_gtk2 = gtk2.read_text(encoding="utf-8")
+        self.assertIn('gtk-cursor-theme-name="NewTheme"', content_gtk2)
+        self.assertIn('gtk-cursor-theme-size=32', content_gtk2)
+        self.assertIn('gtk-theme-name="Adwaita"', content_gtk2)
+
+        theme_file = self.iso.home / ".icons" / "default" / "index.theme"
+        self.assertTrue(theme_file.is_file())
+        self.assertIn("Inherits=NewTheme", theme_file.read_text(encoding="utf-8"))
+
+        # Restore baseline
+        with mock.patch.object(cleanup_helper, "run_cmd", return_value=cleanup_helper.CommandResult(ok=True, exit_code=0)), \
+             mock.patch.object(cleanup_helper, "find_hyprland_instance", return_value="sig"), \
+             mock.patch.object(cleanup_helper, "resolve_system_executable", return_value="/usr/bin/hyprctl"), \
+             mock.patch.object(cleanup_helper, "has_cursor_data", return_value=True):
+            cleanup_helper.restore_cursor({
+                "captured": True,
+                "gtkThemeSet": True,
+                "gtkTheme": "OldTheme",
+                "gtkSizeSet": True,
+                "gtkSize": 24,
+                "xcursorThemeSet": True,
+                "xcursorTheme": "OldTheme",
+                "liveRestoreTheme": "OldTheme",
+                "liveRestoreSize": 24
+            })
+
+        restored3 = (d3 / "settings.ini").read_text(encoding="utf-8")
+        self.assertIn("gtk-cursor-theme-name=OldTheme", restored3)
+        self.assertIn("gtk-cursor-theme-size=24", restored3)
+
+        restored_gtk2 = gtk2.read_text(encoding="utf-8")
+        self.assertIn('gtk-cursor-theme-name="OldTheme"', restored_gtk2)
+        self.assertIn('gtk-cursor-theme-size=24', restored_gtk2)
+
+        self.assertIn("Inherits=OldTheme", theme_file.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

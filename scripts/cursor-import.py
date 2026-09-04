@@ -167,9 +167,13 @@ def compute_content_hash(theme_root: str) -> str:
     for rel, full in cursor_files:
         hasher.update(rel.encode("utf-8"))
         try:
-            with open(full, "rb") as f:
-                while chunk := f.read(65536):
-                    hasher.update(chunk)
+            st = os.lstat(full)
+            if stat.S_ISLNK(st.st_mode):
+                hasher.update(b"symlink:" + os.readlink(full).encode("utf-8", errors="ignore"))
+            elif stat.S_ISREG(st.st_mode):
+                with open(full, "rb") as f:
+                    while chunk := f.read(65536):
+                        hasher.update(chunk)
         except Exception:
             pass
     return hasher.hexdigest()
@@ -319,11 +323,14 @@ def detect_theme_metadata(theme_root: str, user_name_override: str = ""):
     if has_manifest:
         formats.append("hyprcursor")
         try:
-            with open(os.path.join(theme_root, "manifest.hl"), "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    m = re.match(r'^\s*name\s*=\s*([^\n\r]+)', line)
-                    if m and not declared_name:
-                        declared_name = m.group(1).strip().strip('"\'')
+            m_path = os.path.join(theme_root, "manifest.hl")
+            if os.path.isfile(m_path) and not os.path.islink(m_path):
+                with open(m_path, "r", encoding="utf-8", errors="ignore") as f:
+                    raw = f.read(65536)
+                    for line in raw.splitlines():
+                        m = re.match(r'^\s*name\s*=\s*([^\n\r]+)', line)
+                        if m and not declared_name:
+                            declared_name = m.group(1).strip().strip('"\'')
         except Exception:
             pass
 
@@ -333,10 +340,11 @@ def detect_theme_metadata(theme_root: str, user_name_override: str = ""):
         if not cursor_files:
             raise ValueError("The cursors/ directory is empty; no cursor images found.")
         index_theme = os.path.join(theme_root, "index.theme")
-        if os.path.isfile(index_theme) and not declared_name:
+        if os.path.isfile(index_theme) and not os.path.islink(index_theme) and not declared_name:
             try:
                 with open(index_theme, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
+                    raw = f.read(65536)
+                    for line in raw.splitlines():
                         m = re.match(r'^\s*Name\s*=\s*([^\n\r]+)', line)
                         if m:
                             declared_name = m.group(1).strip()

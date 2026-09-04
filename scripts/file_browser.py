@@ -6,6 +6,7 @@ Returns strictly bounded JSON with directories, cursor archives, and cursor them
 
 import sys
 import os
+import stat
 import re
 import json
 import argparse
@@ -75,11 +76,20 @@ def is_cursor_theme_dir(dir_path_str: str) -> tuple[bool, str]:
             theme_name = os.path.basename(dir_path_str)
             if index_file_path:
                 try:
-                    with open(index_file_path, "r", encoding="utf-8", errors="ignore") as f:
-                        for line in f:
-                            if line.strip().lower().startswith("name="):
-                                theme_name = line.strip().split("=", 1)[1].strip()
-                                break
+                    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+                    if hasattr(os, "O_NOFOLLOW"):
+                        flags |= os.O_NOFOLLOW
+                    fd = os.open(index_file_path, flags)
+                    try:
+                        st = os.fstat(fd)
+                        if stat.S_ISREG(st.st_mode) and st.st_size <= 16384:
+                            raw = os.read(fd, 16384).decode("utf-8", errors="ignore")
+                            for line in raw.splitlines():
+                                if line.strip().lower().startswith("name="):
+                                    theme_name = line.strip().split("=", 1)[1].strip()
+                                    break
+                    finally:
+                        os.close(fd)
                 except Exception:
                     pass
             return True, sanitize_text(theme_name, max_len=MAX_LEN_DISPLAY_NAME)

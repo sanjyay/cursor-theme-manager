@@ -25,11 +25,268 @@ import time
 import selectors
 import subprocess
 import shutil
+import secrets
 from pathlib import Path
 from typing import Dict, Optional
 
 PLUGIN_ID = "sanjyay.cursor-theme-manager"
 OWNERSHIP_MARKER = "X-CursorThemeManager-Owned=true"
+
+NAME_RE = re.compile(r'^[a-zA-Z0-9_\-\.\ ]+$')
+
+
+def valid_name(name: str) -> bool:
+    if not name or ".." in name:
+        return False
+    return bool(NAME_RE.match(name))
+
+
+MAX_CONFIG_BYTES = 131072  # 128 KiB
+
+
+def open_held_parent_dir(path: str, create: bool = False, create_mode: int = 0o755) -> Optional[int]:
+    """
+    Safely opens and holds a directory file descriptor for the parent directory of `path`.
+    Walks from root '/' component-by-component with O_NOFOLLOW | O_DIRECTORY.
+    Validates ownership and permissions of each component:
+    - Root or current-user ownership
+    - No group/world-writable components (unless root-owned with sticky bit, e.g. /tmp)
+    - Final parent directory must be owned by the current user.
+    Never follows symlinks. Returns the held directory fd, or None on failure.
+    """
+    try:
+        abs_path = os.path.abspath(path)
+        parent_path = os.path.dirname(abs_path)
+        parts = Path(parent_path).parts
+        if not parts or parts[0] != "/":
+            return None
+
+        flags = os.O_RDONLY | os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+
+        current_fd = os.open("/", flags)
+        try:
+            st = os.fstat(current_fd)
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid not in (0, os.getuid()):
+                os.close(current_fd)
+                return None
+        except Exception:
+            os.close(current_fd)
+            return None
+
+        for comp in parts[1:]:
+            next_fd = -1
+            try:
+                try:
+                    next_fd = os.open(comp, flags, dir_fd=current_fd)
+                except FileNotFoundError:
+                    if not create:
+                        os.close(current_fd)
+                        return None
+                    try:
+                        os.mkdir(comp, mode=create_mode, dir_fd=current_fd)
+                    except FileExistsError:
+                        pass
+                    except OSError:
+                        os.close(current_fd)
+                        return None
+                    try:
+                        next_fd = os.open(comp, flags, dir_fd=current_fd)
+                    except OSError:
+                        os.close(current_fd)
+                        return None
+                except OSError:
+                    os.close(current_fd)
+                    return None
+
+                st = os.fstat(next_fd)
+                if not stat.S_ISDIR(st.st_mode):
+                    os.close(next_fd)
+                    os.close(current_fd)
+                    return None
+
+                if st.st_uid not in (0, os.getuid()):
+                    os.close(next_fd)
+                    os.close(current_fd)
+                    return None
+
+                mode = st.st_mode & 0o7777
+                if st.st_uid == os.getuid() and (mode & 0o022):
+                    os.close(next_fd)
+                    os.close(current_fd)
+                    return None
+                if st.st_uid == 0 and (mode & 0o022) and not (mode & stat.S_ISVTX):
+                    os.close(next_fd)
+                    os.close(current_fd)
+                    return None
+
+                os.close(current_fd)
+                current_fd = next_fd
+                next_fd = -1
+            except Exception:
+                if next_fd >= 0:
+                    try: os.close(next_fd)
+                    except OSError: pass
+                if current_fd >= 0:
+                    try: os.close(current_fd)
+                    except OSError: pass
+                return None
+
+        # Verify final parent directory is owned by current user
+        try:
+            st = os.fstat(current_fd)
+            if st.st_uid != os.getuid():
+                os.close(current_fd)
+                return None
+        except Exception:
+            os.close(current_fd)
+            return None
+
+        return current_fd
+    except Exception:
+        return None
+
+
+def safe_read_config_file(parent_fd: int, basename: str, max_bytes: int = MAX_CONFIG_BYTES) -> Optional[str]:
+    """
+    Safely reads a regular configuration file relative to held parent directory descriptor.
+    Enforces non-blocking, non-following descriptor open, regular file check,
+    current-user ownership, and strict byte size bounding.
+    """
+    if parent_fd is None or parent_fd < 0 or not basename or "/" in basename:
+        return None
+
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+
+    try:
+        fd = os.open(basename, flags, dir_fd=parent_fd)
+    except OSError:
+        return None
+
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > max_bytes:
+            return None
+        raw = os.read(fd, max_bytes + 1)
+        if len(raw) > max_bytes:
+            return None
+        return raw.decode("utf-8", errors="replace")
+    except (OSError, UnicodeError):
+        return None
+    finally:
+        os.close(fd)
+
+
+def safe_write_config_file(parent_fd: int, basename: str, content: str, mode: int = 0o644) -> bool:
+    """
+    Safely writes a regular configuration file relative to held parent directory descriptor.
+    Prevents overwriting symlinks or foreign-owned files, writes via private temp file
+    relative to held parent, fsyncs data, and replaces atomically.
+    """
+    if parent_fd is None or parent_fd < 0 or not basename or "/" in basename:
+        return False
+
+    data = content.encode("utf-8")
+    if len(data) > MAX_CONFIG_BYTES:
+        return False
+
+    # Check existing target without following symlinks
+    try:
+        st_target = os.stat(basename, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISREG(st_target.st_mode) or st_target.st_uid != os.getuid():
+            return False
+        target_mode = stat.S_IMODE(st_target.st_mode) & 0o666
+        if target_mode:
+            mode = target_mode
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+
+    tmp_name = f".{basename}.tmp.{os.getpid()}_{secrets.token_hex(8)}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+
+    try:
+        tmp_fd = os.open(tmp_name, flags, mode, dir_fd=parent_fd)
+    except OSError:
+        return False
+
+    try:
+        st_tmp = os.fstat(tmp_fd)
+        if not stat.S_ISREG(st_tmp.st_mode) or st_tmp.st_uid != os.getuid():
+            raise OSError("Temp file failed ownership or type validation")
+        os.fchmod(tmp_fd, mode)
+        total = 0
+        while total < len(data):
+            w = os.write(tmp_fd, data[total:])
+            if w == 0:
+                raise OSError("Write returned 0 bytes")
+            total += w
+        os.fsync(tmp_fd)
+    except Exception:
+        os.close(tmp_fd)
+        try:
+            os.unlink(tmp_name, dir_fd=parent_fd)
+        except OSError:
+            pass
+        return False
+    else:
+        os.close(tmp_fd)
+
+    try:
+        # Re-check target file is not a symlink or foreign-owned right before replace
+        try:
+            st_target = os.stat(basename, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat.S_ISREG(st_target.st_mode) or st_target.st_uid != os.getuid():
+                raise OSError("Target file validation failed before replacement")
+        except FileNotFoundError:
+            pass
+
+        os.replace(tmp_name, basename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return True
+    except Exception:
+        try:
+            os.unlink(tmp_name, dir_fd=parent_fd)
+        except OSError:
+            pass
+        return False
+
+
+def safe_unlink_config_file(parent_fd: int, basename: str, required_marker: Optional[str] = None) -> bool:
+    """
+    Safely unlinks a file relative to held parent directory descriptor.
+    Verifies that target is a regular file owned by the current user (refusing to unlink symlinks),
+    and optionally validates that required_marker is present in content before unlinking.
+    """
+    if parent_fd is None or parent_fd < 0 or not basename or "/" in basename:
+        return False
+
+    try:
+        st = os.stat(basename, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+            return False
+        if required_marker is not None:
+            content = safe_read_config_file(parent_fd, basename)
+            if not content or required_marker not in content:
+                return False
+        os.unlink(basename, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return True
+    except Exception:
+        return False
+
 
 TRUSTED_BIN_DIRS = (
     "/usr/bin",
@@ -748,15 +1005,18 @@ def restore_cursor(orig) -> bool:
     for uwsm_path in (paths["uwsm_common"], paths["uwsm_hypr"]):
         if not os.path.lexists(uwsm_path):
             continue
-        if not marker_contains(uwsm_path, "Managed by sanjyay.cursor-theme-manager"):
+        parent_fd = open_held_parent_dir(uwsm_path, create=False)
+        if parent_fd is None:
             uwsm_ok = False
-            sys.stderr.write(f"cursorctl cleanup: UWSM restore refused unowned file {uwsm_path!r}\n")
+            sys.stderr.write(f"cursorctl cleanup: UWSM restore refused unsafe path {uwsm_path!r}\n")
             continue
         try:
-            os.unlink(uwsm_path)
-        except OSError as exc:
-            uwsm_ok = False
-            sys.stderr.write(f"cursorctl cleanup: UWSM restore unlink failed for {uwsm_path!r}: {exc}\n")
+            basename = os.path.basename(uwsm_path)
+            if not safe_unlink_config_file(parent_fd, basename, required_marker="Managed by sanjyay.cursor-theme-manager"):
+                uwsm_ok = False
+                sys.stderr.write(f"cursorctl cleanup: UWSM restore refused unowned file {uwsm_path!r}\n")
+        finally:
+            os.close(parent_fd)
     sys.stderr.write(f"cursorctl cleanup: uwsm_restore_ok={str(uwsm_ok).lower()}\n")
     all_persistent_ok = all_persistent_ok and uwsm_ok
 
@@ -767,30 +1027,47 @@ def restore_cursor(orig) -> bool:
 
     restore_xcursor = orig.get("xcursorTheme") or orig.get("gtkTheme")
     restore_gtk_size = orig.get("gtkSize") or orig.get("xcursorSize")
+    clean_restore_size = None
+    if restore_gtk_size:
+        try:
+            val_size = int(restore_gtk_size)
+            if 16 <= val_size <= 256:
+                clean_restore_size = val_size
+        except (ValueError, TypeError):
+            pass
+
+    valid_restore_xcursor = bool(restore_xcursor and valid_name(restore_xcursor))
 
     for base in [os.path.join(home, ".icons", "default"), os.path.join(data_home, "icons", "default")]:
         theme_file = os.path.join(base, "index.theme")
-        if os.path.exists(theme_file) and marker_contains(theme_file, "Managed by sanjyay.cursor-theme-manager"):
-            if restore_xcursor and valid_name(restore_xcursor):
-                content = f"[Icon Theme]\nName=Default\nComment=Default Cursor Theme\nInherits={restore_xcursor}\n"
-                try:
-                    with open(theme_file, "w", encoding="utf-8") as f:
-                        f.write(content)
-                except Exception:
-                    pass
-            else:
-                try:
-                    os.unlink(theme_file)
-                except Exception:
-                    pass
+        parent_fd = open_held_parent_dir(theme_file, create=False)
+        if parent_fd is None:
+            continue
+        try:
+            content = safe_read_config_file(parent_fd, "index.theme")
+            if content and "Managed by sanjyay.cursor-theme-manager" in content:
+                if valid_restore_xcursor:
+                    new_content = (
+                        "[Icon Theme]\n"
+                        "Name=Default\n"
+                        "Comment=Default Cursor Theme\n"
+                        f"Inherits={restore_xcursor}\n"
+                    )
+                    safe_write_config_file(parent_fd, "index.theme", new_content, 0o644)
+                else:
+                    safe_unlink_config_file(parent_fd, "index.theme", required_marker="Managed by sanjyay.cursor-theme-manager")
+        finally:
+            os.close(parent_fd)
 
     for gtk_dir in ["gtk-3.0", "gtk-4.0"]:
         settings_file = os.path.join(config_home, gtk_dir, "settings.ini")
-        if os.path.exists(settings_file):
-            try:
-                lines = []
-                with open(settings_file, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
+        parent_fd = open_held_parent_dir(settings_file, create=False)
+        if parent_fd is None:
+            continue
+        try:
+            content = safe_read_config_file(parent_fd, "settings.ini")
+            if content is not None:
+                lines = content.splitlines(keepends=True)
                 new_lines = []
                 in_settings = False
                 for line in lines:
@@ -798,38 +1075,37 @@ def restore_cursor(orig) -> bool:
                     if stripped.startswith("[") and stripped.endswith("]"):
                         in_settings = (stripped.lower() == "[settings]")
                     elif in_settings:
-                        if stripped.startswith("gtk-cursor-theme-name") and restore_xcursor:
+                        if stripped.startswith("gtk-cursor-theme-name") and valid_restore_xcursor:
                             new_lines.append(f"gtk-cursor-theme-name={restore_xcursor}\n")
                             continue
-                        elif stripped.startswith("gtk-cursor-theme-size") and restore_gtk_size:
-                            new_lines.append(f"gtk-cursor-theme-size={restore_gtk_size}\n")
+                        elif stripped.startswith("gtk-cursor-theme-size") and clean_restore_size:
+                            new_lines.append(f"gtk-cursor-theme-size={clean_restore_size}\n")
                             continue
                     new_lines.append(line)
-                with open(settings_file, "w", encoding="utf-8") as f:
-                    f.writelines(new_lines)
-            except Exception:
-                pass
+                safe_write_config_file(parent_fd, "settings.ini", "".join(new_lines), 0o644)
+        finally:
+            os.close(parent_fd)
 
     gtk2_file = os.path.join(home, ".gtkrc-2.0")
-    if os.path.exists(gtk2_file):
+    parent_fd = open_held_parent_dir(gtk2_file, create=False)
+    if parent_fd is not None:
         try:
-            lines = []
-            with open(gtk2_file, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            new_lines = []
-            for line in lines:
-                stripped = line.strip()
-                if stripped.startswith("gtk-cursor-theme-name") and restore_xcursor:
-                    new_lines.append(f'gtk-cursor-theme-name="{restore_xcursor}"\n')
-                    continue
-                elif stripped.startswith("gtk-cursor-theme-size") and restore_gtk_size:
-                    new_lines.append(f'gtk-cursor-theme-size={restore_gtk_size}\n')
-                    continue
-                new_lines.append(line)
-            with open(gtk2_file, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
-        except Exception:
-            pass
+            content = safe_read_config_file(parent_fd, ".gtkrc-2.0")
+            if content is not None:
+                lines = content.splitlines(keepends=True)
+                new_lines = []
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith("gtk-cursor-theme-name") and valid_restore_xcursor:
+                        new_lines.append(f'gtk-cursor-theme-name="{restore_xcursor}"\n')
+                        continue
+                    elif stripped.startswith("gtk-cursor-theme-size") and clean_restore_size:
+                        new_lines.append(f'gtk-cursor-theme-size={clean_restore_size}\n')
+                        continue
+                    new_lines.append(line)
+                safe_write_config_file(parent_fd, ".gtkrc-2.0", "".join(new_lines), 0o644)
+        finally:
+            os.close(parent_fd)
 
     display = os.environ.get("DISPLAY")
     if display:
@@ -859,10 +1135,10 @@ def restore_cursor(orig) -> bool:
                     prop = x11.XInternAtom(dpy, b"RESOURCE_MANAGER", 0)
                     string_atom = x11.XInternAtom(dpy, b"STRING", 0)
                     res_parts = []
-                    if restore_xcursor and valid_name(restore_xcursor):
+                    if valid_restore_xcursor:
                         res_parts.append(f"Xcursor.theme: {restore_xcursor}\n")
-                    if restore_gtk_size:
-                        res_parts.append(f"Xcursor.size: {restore_gtk_size}\n")
+                    if clean_restore_size:
+                        res_parts.append(f"Xcursor.size: {clean_restore_size}\n")
                     data = "".join(res_parts).encode("utf-8")
                     x11.XChangeProperty(dpy, root, prop, string_atom, 8, 0, data, len(data))
                     x11.XSync(dpy, 0)

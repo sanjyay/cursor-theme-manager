@@ -27,7 +27,8 @@ from runtime_safety import (
     TIMEOUT_STATE, LIMIT_STDOUT_DEFAULT, LIMIT_STDOUT_MEDIUM, LIMIT_STDOUT_LARGE,
     LIMIT_STDOUT_SMALL, LIMIT_STDERR_DEFAULT, MAX_DISCOVERED_THEMES,
     MAX_LEN_THEME_ID, MAX_LEN_DISPLAY_NAME, MAX_LEN_PATH, MAX_LEN_SUBTITLE,
-    MAX_LEN_LICENSE
+    MAX_LEN_LICENSE, open_held_parent_dir, safe_read_config_file,
+    safe_write_config_file, safe_unlink_config_file, MAX_CONFIG_BYTES
 )
 import secure_state
 import integration_manager
@@ -604,23 +605,16 @@ def perform_live_cursor_mutation(theme: str, size: int, expected_fingerprint: Op
 
 
 def _write_private_file(file_path: str, content: str, mode: int = 0o600) -> None:
-    parent_dir = os.path.dirname(file_path)
-    os.makedirs(parent_dir, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(file_path)}.tmp.", dir=parent_dir)
+    parent_fd = open_held_parent_dir(file_path, create=True, create_mode=0o755)
+    if parent_fd is None:
+        raise OSError(f"Cannot securely open or traverse parent directory for {file_path}")
     try:
-        os.fchmod(fd, mode)
-        with open(fd, "w", encoding="utf-8", closefd=False) as f:
-            f.write(content)
-            f.flush()
-            os.fsync(fd)
+        basename = os.path.basename(file_path)
+        ok = safe_write_config_file(parent_fd, basename, content, mode)
+        if not ok:
+            raise OSError(f"Failed to securely write configuration to {file_path}")
     finally:
-        os.close(fd)
-    try:
-        os.replace(tmp_path, file_path)
-    except Exception:
-        try: os.unlink(tmp_path)
-        except OSError: pass
-        raise
+        os.close(parent_fd)
 
 
 def sync_x11_and_gtk_cursor(xcursor: str, size: int) -> None:
@@ -630,8 +624,11 @@ def sync_x11_and_gtk_cursor(xcursor: str, size: int) -> None:
     data_home = os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local", "share"))
     config_home = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
 
+    valid_xcursor = bool(xcursor and xcursor != "-" and valid_name(xcursor))
+    valid_size = bool(isinstance(size, int) and size > 0 and size in secure_state.SUPPORTED_SIZES)
+
     # 1. Update X11 default/index.theme in ~/.icons and ~/.local/share/icons
-    if xcursor and xcursor != "-" and valid_name(xcursor):
+    if valid_xcursor:
         content = (
             "# Managed by sanjyay.cursor-theme-manager.\n"
             "[Icon Theme]\n"
@@ -649,65 +646,73 @@ def sync_x11_and_gtk_cursor(xcursor: str, size: int) -> None:
     # 2. Update GTK settings.ini in gtk-3.0 and gtk-4.0
     for gtk_dir in ["gtk-3.0", "gtk-4.0"]:
         settings_file = os.path.join(config_home, gtk_dir, "settings.ini")
-        if os.path.exists(settings_file):
-            try:
-                lines = []
-                with open(settings_file, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                new_lines = []
-                in_settings = False
-                theme_set = False
-                size_set = False
-                for line in lines:
-                    stripped = line.strip()
-                    if stripped.startswith("[") and stripped.endswith("]"):
-                        in_settings = (stripped.lower() == "[settings]")
-                    elif in_settings:
-                        if stripped.startswith("gtk-cursor-theme-name") and xcursor and xcursor != "-":
-                            new_lines.append(f"gtk-cursor-theme-name={xcursor}\n")
-                            theme_set = True
-                            continue
-                        elif stripped.startswith("gtk-cursor-theme-size") and size > 0:
-                            new_lines.append(f"gtk-cursor-theme-size={size}\n")
-                            size_set = True
-                            continue
-                    new_lines.append(line)
-                if not theme_set and xcursor and xcursor != "-":
-                    new_lines.append(f"gtk-cursor-theme-name={xcursor}\n")
-                if not size_set and size > 0:
-                    new_lines.append(f"gtk-cursor-theme-size={size}\n")
-                _write_private_file(settings_file, "".join(new_lines), 0o644)
-            except Exception as exc:
-                sys.stderr.write(f"cursorctl: notice: failed updating {settings_file}: {exc}\n")
-
-    # 2b. Update GTK2 ~/.gtkrc-2.0 if present
-    gtk2_file = os.path.join(home, ".gtkrc-2.0")
-    if os.path.exists(gtk2_file):
+        parent_fd = open_held_parent_dir(settings_file, create=False)
+        if parent_fd is None:
+            continue
         try:
-            lines = []
-            with open(gtk2_file, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+            content = safe_read_config_file(parent_fd, "settings.ini")
+            if content is None:
+                continue
+            lines = content.splitlines(keepends=True)
             new_lines = []
+            in_settings = False
             theme_set = False
             size_set = False
             for line in lines:
                 stripped = line.strip()
-                if stripped.startswith("gtk-cursor-theme-name") and xcursor and xcursor != "-":
-                    new_lines.append(f'gtk-cursor-theme-name="{xcursor}"\n')
-                    theme_set = True
-                    continue
-                elif stripped.startswith("gtk-cursor-theme-size") and size > 0:
-                    new_lines.append(f'gtk-cursor-theme-size={size}\n')
-                    size_set = True
-                    continue
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    in_settings = (stripped.lower() == "[settings]")
+                elif in_settings:
+                    if stripped.startswith("gtk-cursor-theme-name") and valid_xcursor:
+                        new_lines.append(f"gtk-cursor-theme-name={xcursor}\n")
+                        theme_set = True
+                        continue
+                    elif stripped.startswith("gtk-cursor-theme-size") and valid_size:
+                        new_lines.append(f"gtk-cursor-theme-size={size}\n")
+                        size_set = True
+                        continue
                 new_lines.append(line)
-            if not theme_set and xcursor and xcursor != "-":
-                new_lines.append(f'gtk-cursor-theme-name="{xcursor}"\n')
-            if not size_set and size > 0:
-                new_lines.append(f'gtk-cursor-theme-size={size}\n')
-            _write_private_file(gtk2_file, "".join(new_lines), 0o644)
+            if not theme_set and valid_xcursor:
+                new_lines.append(f"gtk-cursor-theme-name={xcursor}\n")
+            if not size_set and valid_size:
+                new_lines.append(f"gtk-cursor-theme-size={size}\n")
+            safe_write_config_file(parent_fd, "settings.ini", "".join(new_lines), 0o644)
+        except Exception as exc:
+            sys.stderr.write(f"cursorctl: notice: failed updating {settings_file}: {exc}\n")
+        finally:
+            os.close(parent_fd)
+
+    # 2b. Update GTK2 ~/.gtkrc-2.0 if present
+    gtk2_file = os.path.join(home, ".gtkrc-2.0")
+    parent_fd = open_held_parent_dir(gtk2_file, create=False)
+    if parent_fd is not None:
+        try:
+            content = safe_read_config_file(parent_fd, ".gtkrc-2.0")
+            if content is not None:
+                lines = content.splitlines(keepends=True)
+                new_lines = []
+                theme_set = False
+                size_set = False
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith("gtk-cursor-theme-name") and valid_xcursor:
+                        new_lines.append(f'gtk-cursor-theme-name="{xcursor}"\n')
+                        theme_set = True
+                        continue
+                    elif stripped.startswith("gtk-cursor-theme-size") and valid_size:
+                        new_lines.append(f'gtk-cursor-theme-size={size}\n')
+                        size_set = True
+                        continue
+                    new_lines.append(line)
+                if not theme_set and valid_xcursor:
+                    new_lines.append(f'gtk-cursor-theme-name="{xcursor}"\n')
+                if not size_set and valid_size:
+                    new_lines.append(f'gtk-cursor-theme-size={size}\n')
+                safe_write_config_file(parent_fd, ".gtkrc-2.0", "".join(new_lines), 0o644)
         except Exception as exc:
             sys.stderr.write(f"cursorctl: notice: failed updating {gtk2_file}: {exc}\n")
+        finally:
+            os.close(parent_fd)
 
     # 3. Update X11 RESOURCE_MANAGER on live display
     display = os.environ.get("DISPLAY")
@@ -738,9 +743,9 @@ def sync_x11_and_gtk_cursor(xcursor: str, size: int) -> None:
                     prop = x11.XInternAtom(dpy, b"RESOURCE_MANAGER", 0)
                     string_atom = x11.XInternAtom(dpy, b"STRING", 0)
                     res_parts = []
-                    if xcursor and xcursor != "-":
+                    if valid_xcursor:
                         res_parts.append(f"Xcursor.theme: {xcursor}\n")
-                    if size > 0:
+                    if valid_size:
                         res_parts.append(f"Xcursor.size: {size}\n")
                     data = "".join(res_parts).encode("utf-8")
                     x11.XChangeProperty(dpy, root, prop, string_atom, 8, 0, data, len(data))
