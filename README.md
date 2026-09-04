@@ -11,48 +11,8 @@ Cursor Theme Manager is a local-first cursor theme manager and previewer for Oma
 
 ---
 
-## Features
 
-- **Local Theme Discovery:** Scans standard system icon directories (`/usr/share/icons`, `/usr/local/share/icons`, `$XDG_DATA_DIRS/icons`) and user directories (`~/.local/share/icons`, `~/.icons`).
-- **Clear Theme Classification:** Accurately categorizes discovered themes into **System**, **User**, and **Imported** sources.
-- **Dynamic Role Previews:** Automatically extracts and renders preview cards for semantic cursor roles (`Default`, `Pointer`, `Text`, `Move`, `Resize`, `Wait`). If a theme does not define a role (e.g., static themes without an animated `Wait` cursor), the card is omitted gracefully and remaining previews automatically reflow and center.
-- **Accurate Hotspot Indicators:** Hovering any preview card displays a subtle indicator (`•`) at the exact hotspot coordinate defined by the Hyprcursor or XCursor metadata.
-- **Hover-to-Preview:** Browse themes in the sidebar to temporarily inspect preview cards and metadata without modifying active session settings. Clicking applies and commits the theme.
-- **Synchronized Size Control:** Stepper buttons (`−` / `+`) paired with a discrete slider track supporting standard scale snap points (16, 20, 24, 28, 32, 40, 48, 64, 80, 96, 128, 160, 192, 224, 256 px).
-- **In-App Native Importer:** Built-in modal file browser matching Omarchy design tokens for importing local directories or archives (`.tar.gz`, `.tar.xz`, `.zip`, etc.) chosen explicitly by the user.
-- **Automatic Hyprcursor Compilation:** Legacy XCursor themes are automatically converted to native Hyprcursor packages on-the-fly using `hyprcursor-util`.
-- **Safe Imported-Theme Management:** Rename, open directory, or safely remove themes imported through the plugin directly from the UI or CLI. Destructive actions are restricted strictly to plugin-owned imported themes.
-- **Compositor-Aware Persistence:** Instantly applies changes via `hyprctl setcursor` and `gsettings`, updating UWSM environment files (`~/.config/uwsm/env.d/90-omarchy-cursor-switcher`) and D-Bus activation environments for new applications.
-- **Consented Application & Removal Integration:** Optional user-level integration installing a desktop launcher (`cursor-theme-manager.desktop`), a minimal removal watcher (`cursor-theme-manager-cleanup.path`), and a cleanup helper (`~/.local/libexec/cursor-theme-manager/cleanup`). Automatic removal cleanly restores the original cursor configuration while preserving imported themes as user content.
-- **Hardened Subprocess Supervisor:** Bounded input/output handling, strict wall-clock deadlines, and process-group isolation limit helper resource use and prevent orphaned background processes.
-- **Descriptor-Held Private State:** Secure state directory (`$XDG_STATE_HOME/cursor-theme-manager/`, mode `0700`) with descriptor-held durable writes and schema validation.
-- **Zero Network Access:** Operates completely offline with zero runtime network requests, downloads, or background telemetry.
-- **Fully Responsive:** Fluid layouts designed for full-screen, split tiled (50/50), or compact floating windows.
-
----
-
-## Theme Discovery & Classification
-
-Cursor Theme Manager automatically scans local icon-theme directories on launch and rescan:
-
-- `~/.local/share/icons` (`$XDG_DATA_HOME/icons`)
-- `~/.icons`
-- `/usr/share/icons`
-- `/usr/local/share/icons`
-- `$XDG_DATA_DIRS/icons`
-
-> [!IMPORTANT]
-> No cursor themes are installed merely by installing or launching Cursor Theme Manager. The plugin operates exclusively on themes present in these local directories.
-
-### Theme Classification Model
-
-| Source | Description | Management Permissions |
-| :--- | :--- | :--- |
-| **System** | Themes installed system-wide in `/usr/share/icons`, `/usr/local/share/icons`, or `$XDG_DATA_DIRS/icons`. | Read-only. Preview and apply only. |
-| **User** | Themes present in `~/.local/share/icons` or `~/.icons` installed manually or via package managers outside this plugin. | Read-only. Preview and apply only. |
-| **Imported** | Themes explicitly imported through Cursor Theme Manager and stored in `~/.local/share/icons/CursorSwitcher-Imported-*` with a plugin metadata marker. | Full management (Preview, Apply, Open Folder, Rename, Remove). |
-
----
+https://github.com/user-attachments/assets/6bbe3356-60f8-4d80-8214-e79091741f7c
 
 ## Installation
 
@@ -73,39 +33,6 @@ git clone https://github.com/sanjyay/cursor-theme-manager.git ~/.config/omarchy/
 omarchy-shell shell rescanPlugins
 omarchy plugin enable sanjyay.cursor-theme-manager
 ```
-
----
-
-## Launching & Configuring
-
-Cursor Theme Manager integrates with standard Omarchy shell controls:
-
-- **Omarchy Shell IPC:**
-  ```bash
-  omarchy-shell shell summon sanjyay.cursor-theme-manager '{}'
-  omarchy-shell shell toggle sanjyay.cursor-theme-manager '{}'
-  omarchy-shell shell hide sanjyay.cursor-theme-manager
-  ```
-- **Application Launcher:** When enabled via **Add to Applications**, launch Cursor Theme Manager directly from your application launcher (Super + Space) or by running:
-  ```bash
-  omarchy-shell shell toggle sanjyay.cursor-theme-manager '{}'
-  ```
-
----
-
-## Keyboard Navigation
-
-| Key | Action |
-| :--- | :--- |
-| **Up / Down** (`k` / `j`) | Navigate theme list |
-| **Left / Right** (`h` / `l`) | Decrease / increase cursor size (when size focused) |
-| **Tab / Shift+Tab** | Switch focus between theme list and size stepper |
-| **Enter / Space** | Apply and commit focused theme / confirm dialog |
-| **Escape** | Close dialogs or close panel |
-| **r** | Refresh / rescan installed cursor themes |
-
----
-
 ## Getting Additional Cursor Themes
 
 Cursor Theme Manager does not download themes itself. To add new cursor themes:
@@ -378,6 +305,82 @@ Then in Cursor Theme Manager: `Import → Downloads → catppuccin-mocha-dark-cu
 </details>
 
 ---
+## Features
+
+- **Local Theme Discovery:** Scans standard system icon directories (`/usr/share/icons`, `/usr/local/share/icons`, `$XDG_DATA_DIRS/icons`) and user directories (`~/.local/share/icons`, `~/.icons`).
+- **Clear Theme Classification:** Accurately categorizes discovered themes into **System**, **User**, and **Imported** sources.
+- **Dynamic Role Previews:** Automatically extracts and renders preview cards for semantic cursor roles (`Default`, `Pointer`, `Text`, `Move`, `Resize`, `Wait`). If a theme does not define a role (e.g., static themes without an animated `Wait` cursor), the card is omitted gracefully and remaining previews automatically reflow and center.
+- **Accurate Hotspot Indicators:** Hovering any preview card displays a subtle indicator (`•`) at the exact hotspot coordinate defined by the Hyprcursor or XCursor metadata.
+- **Hover-to-Preview:** Browse themes in the sidebar to temporarily inspect preview cards and metadata without modifying active session settings. Clicking applies and commits the theme.
+- **Synchronized Size Control:** Stepper buttons (`−` / `+`) paired with a discrete slider track supporting standard scale snap points (16, 20, 24, 28, 32, 40, 48, 64, 80, 96, 128, 160, 192, 224, 256 px).
+- **In-App Native Importer:** Built-in modal file browser matching Omarchy design tokens for importing local directories or archives (`.tar.gz`, `.tar.xz`, `.zip`, etc.) chosen explicitly by the user.
+- **Automatic Hyprcursor Compilation:** Legacy XCursor themes are automatically converted to native Hyprcursor packages on-the-fly using `hyprcursor-util`.
+- **Safe Imported-Theme Management:** Rename, open directory, or safely remove themes imported through the plugin directly from the UI or CLI. Destructive actions are restricted strictly to plugin-owned imported themes.
+- **Compositor-Aware Persistence:** Instantly applies changes via `hyprctl setcursor` and `gsettings`, updating UWSM environment files (`~/.config/uwsm/env.d/90-omarchy-cursor-switcher`) and D-Bus activation environments for new applications.
+- **Consented Application & Removal Integration:** Optional user-level integration installing a desktop launcher (`cursor-theme-manager.desktop`), a minimal removal watcher (`cursor-theme-manager-cleanup.path`), and a cleanup helper (`~/.local/libexec/cursor-theme-manager/cleanup`). Automatic removal cleanly restores the original cursor configuration while preserving imported themes as user content.
+- **Hardened Subprocess Supervisor:** Bounded input/output handling, strict wall-clock deadlines, and process-group isolation limit helper resource use and prevent orphaned background processes.
+- **Descriptor-Held Private State:** Secure state directory (`$XDG_STATE_HOME/cursor-theme-manager/`, mode `0700`) with descriptor-held durable writes and schema validation.
+- **Zero Network Access:** Operates completely offline with zero runtime network requests, downloads, or background telemetry.
+- **Fully Responsive:** Fluid layouts designed for full-screen, split tiled (50/50), or compact floating windows.
+
+---
+
+## Theme Discovery & Classification
+
+Cursor Theme Manager automatically scans local icon-theme directories on launch and rescan:
+
+- `~/.local/share/icons` (`$XDG_DATA_HOME/icons`)
+- `~/.icons`
+- `/usr/share/icons`
+- `/usr/local/share/icons`
+- `$XDG_DATA_DIRS/icons`
+
+> [!IMPORTANT]
+> No cursor themes are installed merely by installing or launching Cursor Theme Manager. The plugin operates exclusively on themes present in these local directories.
+
+### Theme Classification Model
+
+| Source | Description | Management Permissions |
+| :--- | :--- | :--- |
+| **System** | Themes installed system-wide in `/usr/share/icons`, `/usr/local/share/icons`, or `$XDG_DATA_DIRS/icons`. | Read-only. Preview and apply only. |
+| **User** | Themes present in `~/.local/share/icons` or `~/.icons` installed manually or via package managers outside this plugin. | Read-only. Preview and apply only. |
+| **Imported** | Themes explicitly imported through Cursor Theme Manager and stored in `~/.local/share/icons/CursorSwitcher-Imported-*` with a plugin metadata marker. | Full management (Preview, Apply, Open Folder, Rename, Remove). |
+
+---
+
+---
+
+## Launching & Configuring
+
+Cursor Theme Manager integrates with standard Omarchy shell controls:
+
+- **Omarchy Shell IPC:**
+  ```bash
+  omarchy-shell shell summon sanjyay.cursor-theme-manager '{}'
+  omarchy-shell shell toggle sanjyay.cursor-theme-manager '{}'
+  omarchy-shell shell hide sanjyay.cursor-theme-manager
+  ```
+- **Application Launcher:** When enabled via **Add to Applications**, launch Cursor Theme Manager directly from your application launcher (Super + Space) or by running:
+  ```bash
+  omarchy-shell shell toggle sanjyay.cursor-theme-manager '{}'
+  ```
+
+---
+
+## Keyboard Navigation
+
+| Key | Action |
+| :--- | :--- |
+| **Up / Down** (`k` / `j`) | Navigate theme list |
+| **Left / Right** (`h` / `l`) | Decrease / increase cursor size (when size focused) |
+| **Tab / Shift+Tab** | Switch focus between theme list and size stepper |
+| **Enter / Space** | Apply and commit focused theme / confirm dialog |
+| **Escape** | Close dialogs or close panel |
+| **r** | Refresh / rescan installed cursor themes |
+
+---
+
+
 
 ## Managing Imported Themes & Ownership Safety
 
