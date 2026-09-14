@@ -1,8 +1,4 @@
-# Cursor Theme Manager
-
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](manifest.json)
-[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Hyprland%20%7C%20Omarchy-purple.svg)](https://omarchyplugins.com)
+# Cursor Theme Manager [![Built for Omarchy: Plugin](https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-plugin.svg)](https://github.com/tcballard/omarchy-badges)
 
 Cursor Theme Manager is a local-first cursor theme manager and previewer for Omarchy and Hyprland. It discovers themes already installed on your system, provides dynamic multi-role previews, cursor sizing, hover inspection, safe archive/folder importing, and management of themes imported through the plugin.
 
