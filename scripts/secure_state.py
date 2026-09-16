@@ -23,7 +23,8 @@ from runtime_safety import (
     sanitize_text,
     MAX_LEN_THEME_ID,
     MAX_LEN_DISPLAY_NAME,
-    MAX_LEN_PATH
+    MAX_LEN_PATH,
+    is_safe_parent_directory_component
 )
 
 STATE_DIR_NAME = "cursor-theme-manager"
@@ -124,17 +125,9 @@ def open_held_state_dir() -> Tuple[int, str]:
                 if mode != 0o700:
                     os.fchmod(next_fd, 0o700)
             else:
-                # Intermediate directory: must be owned by current user OR root (UID 0)
-                if st.st_uid != os.getuid() and st.st_uid != 0:
-                    raise SecurityError(f"Intermediate directory component '{comp}' is owned by untrusted UID {st.st_uid}")
-                mode = st.st_mode & 0o7777
-                if st.st_uid == os.getuid() and mode & 0o022:
-                    raise SecurityError(f"Intermediate directory component '{comp}' is group/world writable")
-                # Sticky root-owned shared directories (normally /tmp) are safe
-                # to traverse while the child descriptor is held. Other writable
-                # root-owned components are not trusted.
-                if st.st_uid == 0 and mode & 0o022 and not mode & stat.S_ISVTX:
-                    raise SecurityError(f"Intermediate root directory component '{comp}' is writable without sticky protection")
+                # Intermediate directory: must be safely owned and not writable by other users
+                if not is_safe_parent_directory_component(st):
+                    raise SecurityError(f"Intermediate directory component '{comp}' is untrusted or writable by others")
 
             # Advance descriptor
             os.close(current_fd)
@@ -694,11 +687,7 @@ def _try_legacy_migration(dir_fd: int) -> Optional[Dict[str, Any]]:
         for component in Path(parent_path).parts[1:]:
             next_fd = os.open(component, flags, dir_fd=parent_fd)
             st_dir = os.fstat(next_fd)
-            mode = st_dir.st_mode & 0o7777
-            trusted = stat.S_ISDIR(st_dir.st_mode) and st_dir.st_uid in (0, os.getuid())
-            trusted = trusted and not (st_dir.st_uid == os.getuid() and mode & 0o022)
-            trusted = trusted and not (st_dir.st_uid == 0 and mode & 0o022 and not mode & stat.S_ISVTX)
-            if not trusted:
+            if not is_safe_parent_directory_component(st_dir):
                 os.close(next_fd)
                 return None
             os.close(parent_fd)
