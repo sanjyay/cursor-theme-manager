@@ -643,7 +643,7 @@ Item {
 
             Text {
               width: parent.width
-              text: "To appear in Applications and clean up safely when removed, Cursor Theme Manager will install:\n\n• an application launcher entry\n• a small user-level cleanup helper\n• a user-level removal watcher\n\nNo sudo. No network access. No system-wide files.\n\nWhen Cursor Theme Manager is removed, it will:\n• restore the previous cursor configuration\n• remove its application launcher\n• remove its settings\n• preserve imported cursor themes"
+              text: "To appear in Applications and clean up safely when removed, Cursor Theme Manager will install:\n\n• an application launcher entry\n• a small user-level cleanup helper\n• a user-level removal watcher\n\nNo root privileges. No network access. No system-wide files.\n\nWhen Cursor Theme Manager is removed, it will:\n• restore the previous cursor configuration\n• remove its application launcher\n• remove its settings\n• preserve imported cursor themes"
               textFormat: Text.PlainText
               color: Color.popups.text
               font.family: Style.font.family
