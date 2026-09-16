@@ -20,15 +20,8 @@ omarchy plugin add https://github.com/sanjyay/cursor-theme-manager.git --enable
 
 > **Note:** Installing Cursor Theme Manager does not install any cursor themes. Existing themes on the system are discovered automatically.
 
-### Local Development
+---
 
-For local development or testing from source, symlink the repository directory into your Omarchy plugins directory:
-
-```bash
-ln -s "$(pwd)" ~/.config/omarchy/plugins/sanjyay.cursor-theme-manager
-omarchy-shell shell rescanPlugins
-omarchy plugin enable sanjyay.cursor-theme-manager
-```
 ## Getting Additional Cursor Themes
 
 Cursor Theme Manager does not download themes itself. To add new cursor themes:

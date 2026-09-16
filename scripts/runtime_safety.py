@@ -16,6 +16,8 @@ import subprocess
 import threading
 import re
 import secrets
+import grp
+import getpass
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any, Sequence
 
@@ -604,13 +606,46 @@ def valid_name(name: str) -> bool:
     return bool(NAME_RE.match(name))
 
 
+def is_user_private_group(gid: int, uid: int) -> bool:
+    """Return True if gid represents a private group for the given uid."""
+    if gid == uid:
+        return True
+    if gid == os.getgid():
+        try:
+            entry = grp.getgrgid(gid)
+            user = getpass.getuser()
+            return all(m == user for m in entry.gr_mem)
+        except Exception:
+            return False
+    return False
+
+
+def is_safe_parent_directory_component(st: os.stat_result) -> bool:
+    """Return True if a directory component is safely owned and not writable by other users."""
+    if not stat.S_ISDIR(st.st_mode):
+        return False
+    mode = st.st_mode & 0o7777
+    if st.st_uid == os.getuid():
+        if mode & stat.S_IWOTH:
+            return False
+        if mode & stat.S_IWGRP:
+            return is_user_private_group(st.st_gid, st.st_uid)
+        return True
+    if st.st_uid == 0:
+        if (mode & 0o022) and not (mode & stat.S_ISVTX):
+            return False
+        return True
+    return False
+
+
 def open_held_parent_dir(path: str, create: bool = False, create_mode: int = 0o755) -> Optional[int]:
     """
     Safely opens and holds a directory file descriptor for the parent directory of `path`.
     Walks from root '/' component-by-component with O_NOFOLLOW | O_DIRECTORY.
     Validates ownership and permissions of each component:
     - Root or current-user ownership
-    - No group/world-writable components (unless root-owned with sticky bit, e.g. /tmp)
+    - No group/world-writable components (unless root-owned with sticky bit, e.g. /tmp,
+      or user-owned with private group membership)
     - Final parent directory must be owned by the current user.
     Never follows symlinks. Returns the held directory fd, or None on failure.
     """
@@ -630,7 +665,7 @@ def open_held_parent_dir(path: str, create: bool = False, create_mode: int = 0o7
         current_fd = os.open("/", flags)
         try:
             st = os.fstat(current_fd)
-            if not stat.S_ISDIR(st.st_mode) or st.st_uid not in (0, os.getuid()):
+            if not is_safe_parent_directory_component(st):
                 os.close(current_fd)
                 return None
         except Exception:
@@ -663,22 +698,7 @@ def open_held_parent_dir(path: str, create: bool = False, create_mode: int = 0o7
                     return None
 
                 st = os.fstat(next_fd)
-                if not stat.S_ISDIR(st.st_mode):
-                    os.close(next_fd)
-                    os.close(current_fd)
-                    return None
-
-                if st.st_uid not in (0, os.getuid()):
-                    os.close(next_fd)
-                    os.close(current_fd)
-                    return None
-
-                mode = st.st_mode & 0o7777
-                if st.st_uid == os.getuid() and (mode & 0o022):
-                    os.close(next_fd)
-                    os.close(current_fd)
-                    return None
-                if st.st_uid == 0 and (mode & 0o022) and not (mode & stat.S_ISVTX):
+                if not is_safe_parent_directory_component(st):
                     os.close(next_fd)
                     os.close(current_fd)
                     return None

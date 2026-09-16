@@ -1505,6 +1505,62 @@ class TestGtkAndConfigSyncSecurity(IsolatedTestCase):
 
         self.assertIn("Inherits=OldTheme", theme_file.read_text(encoding="utf-8"))
 
+    def test_user_private_group_writable_parent_directory_accepted(self):
+        test_dir = self.iso.xdg_config / "uwsm" / "env.d"
+        test_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.iso.xdg_config / "uwsm", 0o775)
+        os.chmod(test_dir, 0o775)
+        test_file = test_dir / "90-omarchy-cursor-switcher"
+        test_file.write_text("# Managed by sanjyay.cursor-theme-manager\nexport XCURSOR_SIZE=32\n", encoding="utf-8")
+
+        fd = runtime_safety.open_held_parent_dir(str(test_file), create=False)
+        self.assertIsNotNone(fd)
+        os.close(fd)
+
+        fd_cleanup = cleanup_helper.open_held_parent_dir(str(test_file), create=False)
+        self.assertIsNotNone(fd_cleanup)
+        os.close(fd_cleanup)
+
+    def test_shared_group_writable_parent_directory_rejected(self):
+        test_dir = self.iso.xdg_config / "shared_group_test"
+        test_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(test_dir, 0o775)
+        test_file = test_dir / "file.txt"
+        test_file.write_text("data", encoding="utf-8")
+
+        with mock.patch("runtime_safety.is_user_private_group", return_value=False):
+            fd = runtime_safety.open_held_parent_dir(str(test_file), create=False)
+            self.assertIsNone(fd)
+
+        with mock.patch("cleanup_helper.is_user_private_group", return_value=False):
+            fd_cleanup = cleanup_helper.open_held_parent_dir(str(test_file), create=False)
+            self.assertIsNone(fd_cleanup)
+
+    def test_uwsm_restore_succeeds_with_group_writable_parent(self):
+        uwsm_dir = self.iso.xdg_config / "uwsm" / "env.d"
+        uwsm_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.iso.xdg_config / "uwsm", 0o775)
+        os.chmod(uwsm_dir, 0o775)
+        uwsm_file = uwsm_dir / "90-omarchy-cursor-switcher"
+        uwsm_file.write_text("# Managed by sanjyay.cursor-theme-manager\nexport XCURSOR_SIZE=64\n", encoding="utf-8")
+
+        with mock.patch.object(cleanup_helper, "run_cmd", return_value=cleanup_helper.CommandResult(ok=True, exit_code=0)), \
+             mock.patch.object(cleanup_helper, "find_hyprland_instance", return_value="sig"), \
+             mock.patch.object(cleanup_helper, "resolve_system_executable", return_value="/usr/bin/hyprctl"), \
+             mock.patch.object(cleanup_helper, "has_cursor_data", return_value=True):
+            res = cleanup_helper.restore_cursor({
+                "captured": True,
+                "gtkThemeSet": True,
+                "gtkTheme": "Adwaita",
+                "gtkSizeSet": True,
+                "gtkSize": 24,
+                "liveRestoreTheme": "Adwaita",
+                "liveRestoreSize": 24
+            })
+            self.assertTrue(res)
+
+        self.assertFalse(uwsm_file.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
