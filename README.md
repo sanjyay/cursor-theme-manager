@@ -16,20 +16,20 @@ https://github.com/user-attachments/assets/6bbe3356-60f8-4d80-8214-e79091741f7c
 
 ## Installation
 
-### Via Omarchy CLI
+Install directly through the Omarchy CLI or via [omarchyplugins.com](https://omarchyplugins.com/plugin.html?id=sanjyay.cursor-theme-manager):
 
 ```bash
-omarchy plugin add https://github.com/sanjyay/cursor-theme-manager --enable
+omarchy plugin add https://github.com/sanjyay/cursor-theme-manager.git --enable
 ```
 
 > **Note:** Installing Cursor Theme Manager does not install any cursor themes. Existing themes on the system are discovered automatically.
 
-### Manual / Local Development
+### Local Development
 
-Clone or symlink the repository into your Omarchy plugins directory:
+For local development or testing from source, symlink the repository directory into your Omarchy plugins directory:
 
 ```bash
-git clone https://github.com/sanjyay/cursor-theme-manager.git ~/.config/omarchy/plugins/sanjyay.cursor-theme-manager
+ln -s "$(pwd)" ~/.config/omarchy/plugins/sanjyay.cursor-theme-manager
 omarchy-shell shell rescanPlugins
 omarchy plugin enable sanjyay.cursor-theme-manager
 ```
@@ -57,252 +57,18 @@ The following popular open-source cursor themes are compatible with Cursor Theme
 > [!NOTE]
 > These projects are independent third-party themes. Cursor Theme Manager does not bundle, maintain, or automatically install these themes. Review the upstream projects and releases before downloading.
 
-| Theme | Author / Project | License | Upstream Project |
+| Theme | Author / Project | License | Upstream Project & Releases |
 | :--- | :--- | :--- | :--- |
-| **Banana** | Abdulkaiz Khatri (`ful1e5`) | GPL-3.0 | [ful1e5/banana-cursor](https://github.com/ful1e5/banana-cursor) |
-| **Phinger** | Philipp Schaffrath (`phisch`) | CC-BY-SA-4.0 | [phisch/phinger-cursors](https://github.com/phisch/phinger-cursors) |
-| **Oreo** | Alexey Varfolomeev (`varlesh`) | GPL-2.0 | [varlesh/oreo-cursors](https://github.com/varlesh/oreo-cursors) |
-| **Volantes** | Alexey Varfolomeev (`varlesh`) | GPL-2.0 | [varlesh/volantes-cursors](https://github.com/varlesh/volantes-cursors) |
-| **Nordzy** | Guillaume Boehm (`gboehm`) | GPL-3.0 | [guillaumeboehm/Nordzy-cursors](https://github.com/guillaumeboehm/Nordzy-cursors) |
-| **Capitaine** | Keefer Rourke (`keeferrourke`) | LGPL-3.0 | [keeferrourke/capitaine-cursors](https://github.com/keeferrourke/capitaine-cursors) |
-| **Bibata** | Abdulkaiz Khatri (`ful1e5`) | GPL-3.0 | [ful1e5/Bibata_Cursor](https://github.com/ful1e5/Bibata_Cursor) |
-| **Catppuccin** | Catppuccin Community | GPL-3.0 | [catppuccin/cursors](https://github.com/catppuccin/cursors) |
-
-### Installing Recommended Themes
-
-Cursor Theme Manager does not download these themes automatically. The commands below are optional convenience instructions using each project's upstream distribution method. Review the upstream project before installing or downloading a theme.
-
-<details>
-<summary><strong>Banana</strong> — ful1e5</summary>
-
-**Upstream:** [ful1e5/banana-cursor](https://github.com/ful1e5/banana-cursor) • **Version:** v2.0.0
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S banana-cursor-bin
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Official Release Archive**
-
-```bash
-curl -fL \
-  -o ~/Downloads/Banana.tar.xz \
-  'https://github.com/ful1e5/banana-cursor/releases/download/v2.0.0/Banana.tar.xz'
-```
-
-*Optional integrity check:*
-```bash
-echo "9d2c4003315b3fc39b47c52dbfd6211d499db154b0fbb1c3c4dd9c0023561bf0  $HOME/Downloads/Banana.tar.xz" | sha256sum -c -
-```
-
-Then in Cursor Theme Manager: `Import → Downloads → Banana.tar.xz`
-
-</details>
-
-<details>
-<summary><strong>Phinger</strong> — phisch</summary>
-
-**Upstream:** [phisch/phinger-cursors](https://github.com/phisch/phinger-cursors) • **Version:** v2.1
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S phinger-cursors
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Official Release Archive**
-
-```bash
-curl -fL \
-  -o ~/Downloads/phinger-cursors-variants.tar.bz2 \
-  'https://github.com/phisch/phinger-cursors/releases/download/v2.1/phinger-cursors-variants.tar.bz2'
-```
-
-*Optional integrity check:*
-```bash
-echo "ddb7310c62bf8e0e2798a24f8a867e4af7b17a39757ba45c85e13f3988f646fc  $HOME/Downloads/phinger-cursors-variants.tar.bz2" | sha256sum -c -
-```
-
-Then in Cursor Theme Manager: `Import → Downloads → phinger-cursors-variants.tar.bz2`
-
-</details>
-
-<details>
-<summary><strong>Oreo</strong> — varlesh</summary>
-
-**Upstream:** [varlesh/oreo-cursors](https://github.com/varlesh/oreo-cursors)
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S oreo-cursors-bin
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Upstream Release Download**
-
-Upstream distributes pre-built packages through Pling / OpenDesktop:
-
-1. Download the desired color variant from the upstream [Oreo Cursors Pling Page](https://www.pling.com/p/1360254/).
-2. In Cursor Theme Manager, choose `Import` and select the downloaded archive.
-
-</details>
-
-<details>
-<summary><strong>Volantes</strong> — varlesh</summary>
-
-**Upstream:** [varlesh/volantes-cursors](https://github.com/varlesh/volantes-cursors)
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S volantes-cursors
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Upstream Release Download**
-
-Upstream distributes pre-built archives through Pling / OpenDesktop:
-
-1. Download the desired variant archive from the upstream [Volantes Cursors Pling Page](https://www.pling.com/p/1356095/).
-2. In Cursor Theme Manager, choose `Import` and select the downloaded archive.
-
-</details>
-
-<details>
-<summary><strong>Nordzy</strong> — gboehm</summary>
-
-**Upstream:** [guillaumeboehm/Nordzy-cursors](https://github.com/guillaumeboehm/Nordzy-cursors) • **Version:** v2.4.0
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S nordzy-cursors
-# or for native hyprcursors:
-yay -S nordzy-hyprcursors
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Official Release Archive**
-
-For XCursor:
-```bash
-curl -fL \
-  -o ~/Downloads/Nordzy-cursors.tar.gz \
-  'https://github.com/guillaumeboehm/Nordzy-cursors/releases/download/v2.4.0/Nordzy-cursors.tar.gz'
-```
-
-*Optional integrity check:*
-```bash
-echo "3451c1221d58562a5eb647c45f3f7b5e2bbfe0aacf10d9cbc899bc36e5239e5a  $HOME/Downloads/Nordzy-cursors.tar.gz" | sha256sum -c -
-```
-
-For native Hyprcursor:
-```bash
-curl -fL \
-  -o ~/Downloads/Nordzy-hyprcursors.tar.gz \
-  'https://github.com/guillaumeboehm/Nordzy-cursors/releases/download/v2.4.0/Nordzy-hyprcursors.tar.gz'
-```
-
-*Optional integrity check:*
-```bash
-echo "d13767cd6d4757ddc3722e407d7a5f3422a4e4cce231495b7cf4d1be3e7a8b35  $HOME/Downloads/Nordzy-hyprcursors.tar.gz" | sha256sum -c -
-```
-
-Then in Cursor Theme Manager: `Import → Downloads → Nordzy-*.tar.gz`
-
-</details>
-
-<details>
-<summary><strong>Capitaine</strong> — keeferrourke</summary>
-
-**Upstream:** [keeferrourke/capitaine-cursors](https://github.com/keeferrourke/capitaine-cursors) • **Arch Package:** `extra/capitaine-cursors` (v4-3)
-
-**Option 1 — Official Arch Repository (Recommended)**
-
-```bash
-sudo pacman -S capitaine-cursors
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Upstream Release Download**
-
-1. Download pre-compiled variant packages from the upstream [Capitaine Cursors Pling Page](https://www.pling.com/p/1148692/).
-2. In Cursor Theme Manager, choose `Import` and select the downloaded archive.
-
-</details>
-
-<details>
-<summary><strong>Bibata</strong> — ful1e5</summary>
-
-**Upstream:** [ful1e5/Bibata_Cursor](https://github.com/ful1e5/Bibata_Cursor) • **Version:** v2.0.7
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S bibata-cursor-theme-bin
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Official Release Archive**
-
-```bash
-curl -fL \
-  -o ~/Downloads/Bibata-Modern-Classic.tar.xz \
-  'https://github.com/ful1e5/Bibata_Cursor/releases/download/v2.0.7/Bibata-Modern-Classic.tar.xz'
-```
-
-*Optional integrity check:*
-```bash
-echo "7d3495864e5bbef02f5e77de760b2905903b63c71495a78ef6306d19a3b556d8  $HOME/Downloads/Bibata-Modern-Classic.tar.xz" | sha256sum -c -
-```
-
-Then in Cursor Theme Manager: `Import → Downloads → Bibata-Modern-Classic.tar.xz`
-
-*(All variants archive: `Bibata.tar.xz`)*
-
-</details>
-
-<details>
-<summary><strong>Catppuccin</strong> — Catppuccin</summary>
-
-**Upstream:** [catppuccin/cursors](https://github.com/catppuccin/cursors) • **Version:** v2.0.0
-
-**Option 1 — Arch/AUR**
-
-```bash
-yay -S catppuccin-cursors-mocha
-# or: yay -S catppuccin-cursors-latte catppuccin-cursors-frappe catppuccin-cursors-macchiato
-```
-
-Reopen or refresh Cursor Theme Manager. The theme will be discovered automatically.
-
-**Option 2 — Official Release Archive**
-
-```bash
-curl -fL \
-  -o ~/Downloads/catppuccin-mocha-dark-cursors.zip \
-  'https://github.com/catppuccin/cursors/releases/download/v2.0.0/catppuccin-mocha-dark-cursors.zip'
-```
-
-*Optional integrity check:*
-```bash
-echo "a4d976491bdb1b1311b2de88327cad3f1c66c2d9da896e0c56362a660c802585  $HOME/Downloads/catppuccin-mocha-dark-cursors.zip" | sha256sum -c -
-```
-
-Then in Cursor Theme Manager: `Import → Downloads → catppuccin-mocha-dark-cursors.zip`
-
-</details>
+| **Banana** | Abdulkaiz Khatri (`ful1e5`) | GPL-3.0 | [ful1e5/banana-cursor](https://github.com/ful1e5/banana-cursor) • [Releases](https://github.com/ful1e5/banana-cursor/releases) |
+| **Phinger** | Philipp Schaffrath (`phisch`) | CC-BY-SA-4.0 | [phisch/phinger-cursors](https://github.com/phisch/phinger-cursors) • [Releases](https://github.com/phisch/phinger-cursors/releases) |
+| **Oreo** | Alexey Varfolomeev (`varlesh`) | GPL-2.0 | [varlesh/oreo-cursors](https://github.com/varlesh/oreo-cursors) • [Pling Page](https://www.pling.com/p/1360254/) |
+| **Volantes** | Alexey Varfolomeev (`varlesh`) | GPL-2.0 | [varlesh/volantes-cursors](https://github.com/varlesh/volantes-cursors) • [Pling Page](https://www.pling.com/p/1356095/) |
+| **Nordzy** | Guillaume Boehm (`gboehm`) | GPL-3.0 | [guillaumeboehm/Nordzy-cursors](https://github.com/guillaumeboehm/Nordzy-cursors) • [Releases](https://github.com/guillaumeboehm/Nordzy-cursors/releases) |
+| **Capitaine** | Keefer Rourke (`keeferrourke`) | LGPL-3.0 | [keeferrourke/capitaine-cursors](https://github.com/keeferrourke/capitaine-cursors) • [Releases](https://github.com/keeferrourke/capitaine-cursors/releases) |
+| **Bibata** | Abdulkaiz Khatri (`ful1e5`) | GPL-3.0 | [ful1e5/Bibata_Cursor](https://github.com/ful1e5/Bibata_Cursor) • [Releases](https://github.com/ful1e5/Bibata_Cursor/releases) |
+| **Catppuccin** | Catppuccin Community | GPL-3.0 | [catppuccin/cursors](https://github.com/catppuccin/cursors) • [Releases](https://github.com/catppuccin/cursors/releases) |
+
+To add any theme to Cursor Theme Manager, download the release archive or extracted folder from the upstream project, open **Cursor Theme Manager**, click **Import** in the header, and select the downloaded file or directory. If a theme is already installed system-wide or user-wide, Cursor Theme Manager discovers it automatically.
 
 ---
 ## Features
@@ -426,7 +192,7 @@ Compositor-Aware Application (hyprctl setcursor, gsettings, UWSM env, D-Bus)
 Cursor Theme Manager adheres strictly to defensive security standards:
 
 - **Zero Runtime Network Access:** No automatic downloads, curl/wget execution, or remote dependencies.
-- **Centralized Bounded Process Supervision:** All external subprocesses (`hyprcursor-util`, `xcur2png`, `gsettings`, `systemctl`, `hyprctl`, `xdg-open`) are resolved from fixed root-owned system directories, receive a minimal allowlisted environment, and run in isolated process groups under `runtime_safety.run_bounded` with hard stream-size and wall-clock limits. Exceeding byte limits immediately terminates the process group.
+- **Centralized Bounded Process Supervision:** All external subprocesses (`hyprcursor-util`, `xcur2png`, `gsettings`, system management tools, `hyprctl`, `xdg-open`) are resolved from fixed root-owned system directories, receive a minimal allowlisted environment, and run in isolated process groups under `runtime_safety.run_bounded` with hard stream-size and wall-clock limits. Exceeding byte limits immediately terminates the process group.
 - **Private Descriptor-Held State:** State is stored in a private directory (`$XDG_STATE_HOME/cursor-theme-manager/`, mode `0700`) and written relative to an open directory descriptor (`dir_fd`) with `fsync`, preventing symlink race attacks.
 - **Minimal User-Level Removal Watcher & Helper:**
   When integration is explicitly enabled by the user, installs:
@@ -435,7 +201,7 @@ Cursor Theme Manager adheres strictly to defensive security standards:
   • `~/.config/systemd/user/cursor-theme-manager-cleanup.path`
   • `~/.config/systemd/user/cursor-theme-manager-cleanup.service`
   • `~/.local/state/cursor-theme-manager/`
-  All operations are purely user-level (no sudo, no system-wide files, no background polling daemons).
+  All operations are purely user-level (no elevated privileges, no system-wide files, no background polling daemons).
 - **Non-Destructive Restoration:** Restoration strictly limits scope to allowlisted cursor variables and never executes arbitrary resets if snapshot data is missing or invalid.
 - **Strict Plain-Text UI:** Every dynamic user-interface text sink explicitly enforces `textFormat: Text.PlainText`.
 - **Decompression Bomb Protection:**
@@ -464,15 +230,12 @@ omarchy plugin remove sanjyay.cursor-theme-manager
    - **Preserves all imported cursor themes** in `~/.local/share/icons/` as user content.
 
 ### Manual Cleanup Recovery
-If systemd user services were disabled or unavailable, you can manually remove all integration artifacts with:
+If user integration was enabled and you wish to manually remove all integration artifacts:
 
 ```bash
 rm -f ~/.local/share/applications/cursor-theme-manager.desktop
 rm -rf ~/.local/libexec/cursor-theme-manager
-systemctl --user stop cursor-theme-manager-cleanup.path 2>/dev/null || true
-systemctl --user disable cursor-theme-manager-cleanup.path 2>/dev/null || true
 rm -f ~/.config/systemd/user/cursor-theme-manager-cleanup.path ~/.config/systemd/user/cursor-theme-manager-cleanup.service
-systemctl --user daemon-reload 2>/dev/null || true
 rm -rf ~/.local/state/cursor-theme-manager
 ```
 
