@@ -14,6 +14,7 @@ import hashlib
 import tempfile
 import stat
 import argparse
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -657,6 +658,29 @@ def perform_live_cursor_mutation(theme: str, size: int, expected_fingerprint: Op
     return {"ok": True, "preCtmCursor": baseline, "cursorModifiedByCtm": True}
 
 
+def wait_for_startup_cursor(timeout: float = 20.0) -> None:
+    """Let Omarchy finish revealing its startup cursor before restoring CTM's."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("Omarchy is still restoring its startup cursor; restart the shell to retry")
+        result = run_bounded(
+            ["hyprctl", "repl", "omarchy_startup_cursor_pending == true"],
+            timeout=min(1.5, remaining), stdout_limit=4096,
+        )
+        answer = result.stdout.strip()
+        if result.ok and answer == "false":
+            return
+        # Older compositors without Lua cannot run Omarchy's Lua startup reveal.
+        if (not result.timed_out and not result.limit_exceeded and
+                answer.lower() in ("unknown request", "unknown command")):
+            return
+        if not result.ok or answer != "true":
+            raise RuntimeError("Could not check whether Omarchy finished restoring its startup cursor")
+        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+
+
 def _write_private_file(file_path: str, content: str, mode: int = 0o600) -> None:
     parent_fd = open_held_parent_dir(file_path, create=True, create_mode=0o755)
     if parent_fd is None:
@@ -1069,7 +1093,7 @@ def main():
     }
     expected_fingerprint = option_value("--plugin-fingerprint")
     _REQUEST_PLUGIN_FINGERPRINT = expected_fingerprint
-    if cmd in mutating_commands:
+    if cmd in mutating_commands or (cmd == "state-read" and "--restore-live" in sys.argv[2:]):
         current_fingerprint = integration_manager.get_plugin_installation_fingerprint()
         trace_mutation_barrier("current-installation-identity-read", expected_fingerprint, {
             "integrationPluginFingerprint": current_fingerprint
@@ -1093,7 +1117,7 @@ def main():
                 "ok": False,
                 "error": "This request belongs to a removed Cursor Theme Manager installation. Reopen CTM and try again."
             }, exit_code=1)
-        if expected_fingerprint and cmd != "recovery-reconcile":
+        if expected_fingerprint and cmd not in ("recovery-reconcile", "state-read"):
             lifecycle_status = integration_manager.get_status()
             trace_mutation_barrier("recovery-state-classification", expected_fingerprint, secure_state.read_state())
             if lifecycle_status.get("recoveryPending"):
@@ -1274,6 +1298,19 @@ def main():
             st["recoveryOrphaned"] = bool(int_status.get("recoveryOrphaned"))
         elif restore_live and st.get("cursorModifiedByCtm") and not st.get("recoveryPending"):
             try:
+                # The startup reveal may still hold size 24 even though UWSM
+                # loaded CTM's saved size. Applying before it finishes loses
+                # the user's selection to the later setcursor call.
+                wait_for_startup_cursor()
+                current_status = integration_manager.get_status()
+                st = secure_state.read_state()
+                if (current_status.get("recoveryPending") or
+                        current_status.get("pluginFingerprint") != int_status.get("pluginFingerprint") or
+                        not st.get("cursorModifiedByCtm")):
+                    raise RuntimeError("Cursor installation state changed during startup restoration")
+                baseline = st.get("preCtmCursor") or st.get("originalCursor") or {}
+                if not baseline.get("captured"):
+                    raise RuntimeError("The original cursor baseline is unavailable; saved cursor was not restored")
                 theme_dict = st.get("theme") or {}
                 size = st.get("size")
                 if size in secure_state.SUPPORTED_SIZES and isinstance(theme_dict, dict):
@@ -1305,6 +1342,7 @@ def main():
                         # Sync X11 default index.theme, GTK settings.ini, and X11 RESOURCE_MANAGER
                         sync_x11_and_gtk_cursor(xcursor, size)
             except Exception as exc:
+                st["restoreError"] = sanitize_text(str(exc), 512)
                 sys.stderr.write(f"cursorctl: notice: restore-live during state-read failed: {exc}\n")
         st["integrationEnabled"] = int_status["enabled"]
         st["integrationPromptSeen"] = int_status["promptSeen"]

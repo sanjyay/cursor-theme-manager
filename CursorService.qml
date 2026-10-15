@@ -187,7 +187,10 @@ Item {
   function requestStateRead(source) {
     if (_destroying || stateReadProcess.running) return
     var args = [helperPath, "state-read"]
-    if (source === "startup") args.push("--restore-live")
+    if (source === "startup") {
+      args.push("--restore-live")
+      args = mutationCommand(args)
+    }
     stateReadProcess.command = args
     traceLifecycle("state-read-requested", source || "startup")
     stateReadProcess.running = true
@@ -429,6 +432,7 @@ Item {
     } else if (_loadedState.reason === "corrupt" || _loadedState.reason === "invalid") {
       lastError = "The saved cursor settings were invalid; using a safe fallback"
     }
+    if (_loadedState.restoreError) lastError = _loadedState.restoreError
 
     // Startup is strictly read-only. Even a valid same-installation managed
     // selection is displayed but never replayed into the compositor.
@@ -829,7 +833,8 @@ Item {
   // 1. State Read Process
   Timer {
     id: stateReadWatchdog
-    interval: 6000
+    // Startup reveal (up to 20 s), setcursor, and bounded environment sync.
+    interval: 45000
     repeat: false
     onTriggered: {
       if (stateReadProcess.running) {
