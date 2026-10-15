@@ -7,6 +7,12 @@ const sandbox = { module: { exports: {} }, console }
 vm.runInNewContext(source, sandbox, { filename: "CursorModel.js" })
 const Model = sandbox.module.exports
 
+// A failed boot restore keeps the saved size and exposes a bounded error.
+const failedRestore = Model.parseState(JSON.stringify({ size: 64, restoreError: "Startup cursor is still pending" }))
+assert.strictEqual(failedRestore.size, 64)
+assert.strictEqual(failedRestore.restoreError, "Startup cursor is still pending")
+assert.strictEqual(Model.parseState(JSON.stringify({ restoreError: "x".repeat(600) })).restoreError.length, 512)
+
 // Supported sizes and default fallback
 const expectedSizes = [16, 20, 24, 28, 32, 40, 48, 64, 80, 96, 128, 160, 192, 224, 256]
 assert.deepStrictEqual(Array.from(Model.SupportedSizes), expectedSizes)

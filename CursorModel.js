@@ -272,6 +272,7 @@ function parseState(text) {
       cursorModifiedByCtm: cursorModifiedByCtm,
       recoveryPending: recoveryPending,
       recoveryOrphaned: recoveryOrphaned,
+      restoreError: sanitizeString(raw.restoreError || "", 512),
       preCtmCursor: originalCursor,
       originalCursor: originalCursor,
       trustedTools: (raw.trustedTools && typeof raw.trustedTools === "object") ? raw.trustedTools : {}
